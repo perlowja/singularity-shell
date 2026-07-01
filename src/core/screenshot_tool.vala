@@ -389,23 +389,35 @@ namespace Singularity {
             } else if (action == "show") {
                 try {
                     var file = File.new_for_path(path);
-                    var parent = file.get_parent();
-                    if (parent != null)
-                        AppInfo.launch_default_for_uri(parent.get_uri(), null);
-                    try {
-                        var bus = Bus.get_sync(BusType.SESSION);
-                        bus.call_sync("org.freedesktop.FileManager1",
-                            "/org/freedesktop/FileManager1",
-                            "org.freedesktop.FileManager1",
-                            "ShowItems",
-                            new Variant("(ass)", new string[]{file.get_uri()}, ""),
-                            null, DBusCallFlags.NONE, -1, null);
-                    } catch {}
+                    if (!_show_item_in_files(file)) {
+                        var parent = file.get_parent();
+                        if (parent != null)
+                            AppInfo.launch_default_for_uri(parent.get_uri(), null);
+                    }
                 } catch (Error e) {
                     warning("[ScreenshotTool] Failed to show in files: %s", e.message);
                 }
             }
             _screenshot_notification_actions.remove(id);
+        }
+
+        private bool _show_item_in_files(File file) {
+            try {
+                var uris = new VariantBuilder(new VariantType("as"));
+                uris.add("s", file.get_uri());
+
+                var bus = Bus.get_sync(BusType.SESSION);
+                bus.call_sync("org.freedesktop.FileManager1",
+                    "/org/freedesktop/FileManager1",
+                    "org.freedesktop.FileManager1",
+                    "ShowItems",
+                    new Variant("(ass)", uris, ""),
+                    null, DBusCallFlags.NONE, -1, null);
+                return true;
+            } catch (Error e) {
+                warning("[ScreenshotTool] Failed to reveal screenshot in files: %s", e.message);
+                return false;
+            }
         }
 
         private void dispatch_capture() {
