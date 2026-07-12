@@ -564,12 +564,21 @@ namespace Singularity {
         }
 
         private void update_menu_model(string app_id) {
-            menu_generation++;
-            int gen = menu_generation;
             string safe_id = clean_string(app_id);
-            // Wayland app_id often has .desktop suffix – strip it for DBus lookup
+            // Wayland app_id often has a .desktop suffix, strip it for the DBus lookup
             if (safe_id.has_suffix(".desktop"))
                 safe_id = safe_id[0:safe_id.length - 8];
+
+            // Cache per app: focus-change fires update_menu_model repeatedly for the
+            // same app (multiple focus events per window switch, alt-tab back and forth).
+            // Skip the full teardown + DBus menu setup when the focused app is unchanged
+            // and a menu is already built for it. Done before bumping menu_generation so
+            // the live items_changed handlers from the first build keep matching (they
+            // gate on gen), keeping menu updates flowing for the still-focused app.
+            if (safe_id == current_menu_app_id && current_action_group != null) return;
+
+            menu_generation++;
+            int gen = menu_generation;
 
             current_action_group = null;
             current_app_action_group = null;
