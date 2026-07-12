@@ -159,8 +159,18 @@ namespace Singularity {
             if (FileUtils.test("/run/.containerenv", FileTest.EXISTS) || FileUtils.test("/.dockerenv", FileTest.EXISTS)) {
                 is_container = true;
             }
-            Idle.add(() => {
+            // Defer the startup app scan and AT-SPI init to low-priority idles so the
+            // first frame paints before AppInfo.get_all() (parsing every .desktop) and
+            // the AT-SPI bring-up run. Split into two idles so the main loop can service
+            // input and frames between them instead of stalling on one long callback.
+            // (A worker thread would be faster still, but scan_apps has a documented
+            // ownership hazard, see the note near installed_apps_map, so keep it on the
+            // main thread and just move it off the first-frame path.)
+            Idle.add_full(Priority.LOW, () => {
                 scan_apps();
+                return Source.REMOVE;
+            });
+            Idle.add_full(Priority.LOW, () => {
                 enable_atspi_if_needed();
                 return Source.REMOVE;
             });
