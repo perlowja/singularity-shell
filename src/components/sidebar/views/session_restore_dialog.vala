@@ -101,12 +101,12 @@ namespace Singularity {
             // toplevel the compositor labelled "Unknown-1"), fall back to the live window title
             // so the row is recognisable instead of showing a placeholder.
             string dn = e.name;
-            if (dn == "" || dn == e.app_id) dn = (e.title != "" ? e.title : e.app_id);
+            if (dn == "" || dn == e.app_id) dn = (e.title != "" && !e.title.has_prefix("Unknown") ? e.title : e.app_id);
             var name = new Label(dn);
             name.halign = Align.START;
             name.add_css_class("body");
             col.append(name);
-            string loc = (e.monitor != "" ? e.monitor : "screen");
+            string loc = (e.monitor != "" && !e.monitor.has_prefix("Unknown")) ? e.monitor : "screen";
             if (e.maximized) loc += " (maximized)";
             else if (e.w > 0) loc += " (%dx%d)".printf(e.w, e.h);
             var meta = new Label(loc);
