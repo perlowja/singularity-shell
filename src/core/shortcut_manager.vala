@@ -95,12 +95,20 @@ namespace Singularity {
                     apply_gtk_decoration_layout();
                 });
             }
-            try {
-                var conn = Bus.get_sync(BusType.SESSION);
-                conn.register_object("/dev/sinty/desktop/Shortcuts", this);
-            } catch (Error e) {
-                warning("Failed to register shortcuts: %s", e.message);
-            }
+            Bus.own_name(
+                BusType.SESSION,
+                "dev.sinty.desktop",
+                BusNameOwnerFlags.ALLOW_REPLACEMENT | BusNameOwnerFlags.REPLACE,
+                (conn) => {
+                    try {
+                        conn.register_object("/dev/sinty/desktop/Shortcuts", this);
+                    } catch (Error e) {
+                        warning("Failed to register shortcuts: %s", e.message);
+                    }
+                },
+                null,
+                () => warning("ShortcutManager: lost dev.sinty.desktop name")
+            );
             setup_capslock_monitor();
             setup_numlock_monitor();
         }
