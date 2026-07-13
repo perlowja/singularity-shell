@@ -190,10 +190,14 @@ namespace Singularity {
         // ask labwc to reconfigure so the new keybinds take effect immediately.
 
         public void write_labwc_rc_xml() {
-            uint uid = (uint)Posix.getuid();
-            // labwc Execute uses execvp (no shell); use `env VAR=val cmd` to
-            // pass the bus address without a shell interpreter.
-            string dbus_shorts = "env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%u/bus gdbus call --session --dest dev.sinty.desktop --object-path /dev/sinty/desktop/Shortcuts --method dev.sinty.desktop.Shortcuts.ExecuteAction".printf(uid);
+            // Pin the session bus we actually own the name on: the session runs
+            // under dbus-run-session (ephemeral address), not a fixed /run/user path.
+            // labwc Execute uses execvp (no shell), so pass it via `env VAR=val cmd`.
+            string bus = GLib.Environment.get_variable("DBUS_SESSION_BUS_ADDRESS");
+            string call = "gdbus call --session --dest dev.sinty.desktop --object-path /dev/sinty/desktop/Shortcuts --method dev.sinty.desktop.Shortcuts.ExecuteAction";
+            string dbus_shorts = (bus != null && bus != "")
+                ? "env DBUS_SESSION_BUS_ADDRESS=%s %s".printf(bus, call)
+                : call;
 
             // Keyboard layout (xkb)
             string xkb_layout = settings.get_string("xkb-layout");
