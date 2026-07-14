@@ -204,7 +204,14 @@ namespace Singularity {
                 }
             });
 
-            _sig_apps_changed = app_system.apps_changed.connect(schedule_refresh);
+            _sig_apps_changed = app_system.apps_changed.connect(() => {
+                // The app list is populated by a deferred idle scan, so a pin/run item
+                // built before the scan resolved with a null AppInfo (raw id, no launch)
+                // and the cache froze it. Drop the app-backed entries so the refresh
+                // rebuilds them once the apps resolve (#81).
+                invalidate_app_items();
+                schedule_refresh();
+            });
             _sig_running_apps_changed = app_system.running_apps_changed.connect(schedule_refresh);
             _sig_app_focused = app_system.app_focused.connect(update_active_app);
             _sig_window_focused = app_system.window_focused.connect((handle) => {
@@ -1025,6 +1032,17 @@ namespace Singularity {
                     else child.remove_css_class("active");
                 }
                 child = child.get_next_sibling();
+            }
+        }
+
+        private void invalidate_app_items() {
+            var drop = new ArrayList<string>();
+            foreach (var k in _item_cache.keys)
+                if (k.has_prefix("pin:") || k.has_prefix("run:")) drop.add(k);
+            foreach (var k in drop) {
+                var w = _item_cache[k];
+                if (w != null) dock_box.remove(w);
+                _item_cache.unset(k);
             }
         }
 
