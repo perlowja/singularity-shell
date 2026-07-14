@@ -39,11 +39,9 @@ namespace Singularity.SidebarPages {
         }
 
         private void load_sources() {
-            var srcs = InputSourceUtil.list();
-            foreach (var s in srcs) {
+            foreach (var s in InputSourceUtil.list()) {
                 all_sources.append(new InputSourceInfo(s.id, s.name, s.description));
             }
-            inputsrc_dbg("load_sources: list()=%u all_sources=%u".printf(srcs.length, all_sources.length()));
             populate_list();
         }
 
@@ -76,14 +74,6 @@ namespace Singularity.SidebarPages {
                     if (count > 50) break;
                 }
             }
-            inputsrc_dbg("filter_list: query='%s' all=%u rows=%d".printf(query, all_sources.length(), count));
-        }
-
-        private void inputsrc_dbg(string msg) {
-            string dir = Path.build_filename(Environment.get_user_state_dir(), "singularity");
-            DirUtils.create_with_parents(dir, 0755);
-            var f = FileStream.open(Path.build_filename(dir, "inputsrc.log"), "a");
-            if (f != null) f.printf("%s\n", msg);
         }
     }
 }
