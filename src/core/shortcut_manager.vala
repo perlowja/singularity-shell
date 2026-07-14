@@ -223,6 +223,14 @@ namespace Singularity {
             } catch (Error e) {
                 // GNOME input sources are optional; keep Singularity's own xkb keys.
             }
+            if (xkb_layout == "") {
+                // No layout chosen in Settings: honour the OOBE keymap that the
+                // session exports as XKB_DEFAULT_LAYOUT (from vconsole.conf) instead
+                // of forcing a default that would override it in rc.xml (#80).
+                xkb_layout = Environment.get_variable("XKB_DEFAULT_LAYOUT") ?? "";
+                if (xkb_layout != "")
+                    xkb_variant = Environment.get_variable("XKB_DEFAULT_VARIANT") ?? "";
+            }
             if (xkb_layout == "") xkb_layout = "it"; // Default to Italian
 
 
