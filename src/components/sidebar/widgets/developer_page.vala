@@ -4,10 +4,12 @@ using Singularity.Widgets;
 
 namespace Singularity {
 
-    [DBus (name = "io.github.mirkobrombin.ush.Broker1")]
+    [DBus (name = "io.github.singularityos_lab.ush.Broker1")]
     interface UshBroker : Object {
         public abstract async void dev_shell_status (out string policy, out bool enabled) throws GLib.Error;
         public abstract async void set_dev_shell_enabled (bool enabled) throws GLib.Error;
+        public abstract async void arm_bootloader_unlock (bool armed, string pin, out bool ok, out string message) throws GLib.Error;
+        public abstract async void bootloader_lock_state (out bool locked, out bool unlock_armed, out int32 unlock_count) throws GLib.Error;
     }
 
     public class DeveloperPage : SettingsPage {
@@ -49,6 +51,8 @@ namespace Singularity {
         private GLib.Settings _tiling_settings;
 
         private PreferencesGroup dsh_group;
+        private PreferencesGroup bl_group;
+        private bool _bl_armed = false;
 
         public DeveloperPage (SettingsView view) {
             base(_("Developer"));
@@ -56,7 +60,12 @@ namespace Singularity {
             dsh_group = new PreferencesGroup (_("Developer Shell"));
             dsh_group.visible = false;
             add_group (dsh_group);
-            setup_dev_shell.begin ();
+
+            bl_group = new PreferencesGroup (_("Bootloader unlock"));
+            bl_group.visible = false;
+            add_group (bl_group);
+
+            setup_broker_features.begin ();
 
             var dbg = DebugManager.get_default ();
             _tiling_settings = new GLib.Settings ("dev.sinty.desktop");
@@ -704,17 +713,100 @@ namespace Singularity {
             base.dispose ();
         }
 
-        private async void setup_dev_shell () {
+        private async void setup_broker_features () {
+            UshBroker broker;
             try {
-                UshBroker broker = yield Bus.get_proxy (BusType.SESSION,
-                    "io.github.mirkobrombin.ush.Broker",
-                    "/io/github/mirkobrombin/ush/Broker");
+                broker = yield Bus.get_proxy (BusType.SESSION,
+                    "io.github.singularityos_lab.ush.Broker",
+                    "/io/github/singularityos_lab/ush/Broker");
+            } catch (GLib.Error e) {
+                return; // no broker on the bus: no developer or bootloader controls
+            }
+
+            try {
                 string policy;
                 bool enabled;
                 yield broker.dev_shell_status (out policy, out enabled);
                 build_dsh_ui (broker, policy, enabled);
                 dsh_group.visible = true;
             } catch (GLib.Error e) {
+            }
+
+            try {
+                bool locked;
+                bool armed;
+                int32 count;
+                yield broker.bootloader_lock_state (out locked, out armed, out count);
+                build_bootloader_ui (broker, locked, armed);
+                bl_group.visible = true;
+            } catch (GLib.Error e) {
+            }
+        }
+
+        private string bootloader_state_text (bool locked, bool armed) {
+            if (!locked) {
+                return _("Unlocked");
+            }
+            if (armed) {
+                return _("Locked, unlock armed (reboot into recovery to finish)");
+            }
+            return _("Locked");
+        }
+
+        private void build_bootloader_ui (UshBroker broker, bool locked, bool armed) {
+            _bl_armed = armed;
+
+            var state = new ActionRow (_("Bootloader status"),
+                bootloader_state_text (locked, armed), "channel-secure-symbolic");
+            bl_group.add_row (state);
+
+            var pin = new PasswordRow (_("PIN"));
+            bl_group.add_row (pin);
+
+            var arm = new ActionRow (_("Allow bootloader unlock"),
+                _("Unlocking wipes all data and turns off verified boot; it is confirmed in recovery. Strongly discouraged."),
+                "channel-insecure-symbolic");
+            var arm_btn = new Button.with_label (armed ? _("Cancel") : _("Allow"));
+            arm_btn.valign = Gtk.Align.CENTER;
+            arm_btn.add_css_class (armed ? "flat" : "destructive-action");
+            arm.add_suffix (arm_btn);
+            arm_btn.clicked.connect (() => {
+                apply_bootloader_arm.begin (broker, pin, state, arm_btn);
+            });
+            bl_group.add_row (arm);
+
+            var hint = new ActionRow (_("Finish in recovery"),
+                _("After allowing unlock, reboot into recovery and confirm to wipe and unlock."),
+                "system-reboot-symbolic");
+            bl_group.add_row (hint);
+        }
+
+        private async void apply_bootloader_arm (UshBroker broker, PasswordRow pin, ActionRow state, Button arm_btn) {
+            bool want = !_bl_armed;
+            try {
+                bool ok;
+                string message;
+                yield broker.arm_bootloader_unlock (want, want ? pin.text : "", out ok, out message);
+                if (!ok) {
+                    warning ("arm_bootloader_unlock refused: %s", message);
+                    return;
+                }
+                _bl_armed = want;
+                arm_btn.label = want ? _("Cancel") : _("Allow");
+                if (want) {
+                    arm_btn.remove_css_class ("destructive-action");
+                    arm_btn.add_css_class ("flat");
+                } else {
+                    arm_btn.remove_css_class ("flat");
+                    arm_btn.add_css_class ("destructive-action");
+                }
+                bool locked2;
+                bool armed2;
+                int32 count2;
+                yield broker.bootloader_lock_state (out locked2, out armed2, out count2);
+                state.subtitle = bootloader_state_text (locked2, armed2);
+            } catch (GLib.Error e) {
+                warning ("bootloader arm: %s", e.message);
             }
         }
 
