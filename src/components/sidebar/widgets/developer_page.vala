@@ -67,6 +67,10 @@ namespace Singularity {
 
             setup_broker_features.begin ();
 
+            if (Singularity.Runtime.is_sinty_os ()) {
+                add_widget (new SdbSettings ());
+            }
+
             var dbg = DebugManager.get_default ();
             _tiling_settings = new GLib.Settings ("dev.sinty.desktop");
 

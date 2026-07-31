@@ -532,6 +532,10 @@ namespace Singularity {
 
                 end_area.append(sys_box);
 
+                if (Singularity.Runtime.is_sinty_os()) {
+                    end_area.append(new UpdateIndicator());
+                }
+
                 var clock_box = new Box(Orientation.HORIZONTAL, 4);
                 clock_box.add_css_class("dock-clock-box");
                 clock_label = new Label("00:00");
