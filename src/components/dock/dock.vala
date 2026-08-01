@@ -548,6 +548,8 @@ namespace Singularity {
                     system_clicked();
                 });
                 sys_box.add_controller(gesture);
+            } else if (Singularity.Runtime.is_sinty_os()) {
+                end_area.append(new UpdateIndicator());
             }
         }
 
