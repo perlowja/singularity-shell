@@ -16,4 +16,10 @@ void main() {
     assert(Singularity.UpdateIndicator.poll_interval(false, "idle") == 1);
     assert(Singularity.UpdateIndicator.poll_interval(true, "downloading") == 1);
     assert(Singularity.UpdateIndicator.poll_interval(true, "idle") == 5);
+
+    assert(Singularity.UpdateIndicator.valid_consent_token(
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
+    assert(!Singularity.UpdateIndicator.valid_consent_token(
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeF"));
+    assert(!Singularity.UpdateIndicator.valid_consent_token("short"));
 }

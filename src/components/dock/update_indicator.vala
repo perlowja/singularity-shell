@@ -13,6 +13,7 @@ namespace Singularity {
         private string product_name = "";
         private string product_version = "";
         private string product_build = "";
+        private string consent_token = "";
         private int percent = 0;
         private bool agent_available = false;
         private bool polling = false;
@@ -145,6 +146,8 @@ namespace Singularity {
                 product_name = o.get_string_member_with_default("product_name", "");
                 product_version = o.get_string_member_with_default("product_version", "");
                 product_build = o.get_string_member_with_default("product_build", "");
+                string token = o.get_string_member_with_default("consent_token", "");
+                consent_token = valid_consent_token(token) ? token : "";
                 percent = (int) o.get_int_member_with_default("percent", 0);
             } catch (Error e) {
                 agent_available = false;
@@ -206,6 +209,15 @@ namespace Singularity {
             return label != "" ? label : _("system update");
         }
 
+        internal static bool valid_consent_token(string token) {
+            if (token.length != 64) return false;
+            for (int i = 0; i < token.length; i++) {
+                char c = token[i];
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+            }
+            return true;
+        }
+
         private void on_clicked() {
             switch (state) {
                 case "available":
@@ -220,11 +232,16 @@ namespace Singularity {
         }
 
         private async void start_download() {
+            string token = consent_token;
+            if (!valid_consent_token(token)) {
+                poll();
+                return;
+            }
             state = "downloading";
             percent = 0;
             render();
             adjust_interval();
-            yield request("POST", "/download");
+            yield request("POST", "/download?token=" + token);
             poll();
             arm(RETRY_SECONDS);
         }
