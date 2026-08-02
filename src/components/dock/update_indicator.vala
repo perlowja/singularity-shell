@@ -7,12 +7,12 @@ namespace Singularity {
         private const uint POLL_SECONDS = 5;
         private const uint RETRY_SECONDS = 1;
 
-        private Gtk.Image icon;
         private string state = "idle";
         private string latest = "";
         private string product_name = "";
         private string product_version = "";
         private string product_build = "";
+        private string error = "";
         private string consent_token = "";
         private int percent = 0;
         private bool agent_available = false;
@@ -20,11 +20,26 @@ namespace Singularity {
         private uint poll_id = 0;
         private uint interval = 0;
 
-        public UpdateIndicator() {
+        public signal void restart_requested(string version);
+
+        public UpdateIndicator(int icon_size) {
             add_css_class("dock-update-indicator");
+            add_css_class("dock-item");
             add_css_class("flat");
-            icon = new Gtk.Image();
-            set_child(icon);
+            has_frame = false;
+            set_size_request(icon_size + 4, icon_size + 4);
+
+            var overlay = new Gtk.Overlay();
+            var logo = new Gtk.Image.from_icon_name("sinty");
+            logo.pixel_size = icon_size;
+            overlay.set_child(logo);
+
+            var badge = new Gtk.Image.from_icon_name("dev.sinty.installer");
+            badge.pixel_size = int.max(14, (icon_size * 11) / 24);
+            badge.halign = Align.END;
+            badge.valign = Align.END;
+            overlay.add_overlay(badge);
+            set_child(overlay);
             ((Gtk.Widget) this).visible = false;
             clicked.connect(on_clicked);
 
@@ -146,6 +161,7 @@ namespace Singularity {
                 product_name = o.get_string_member_with_default("product_name", "");
                 product_version = o.get_string_member_with_default("product_version", "");
                 product_build = o.get_string_member_with_default("product_build", "");
+                error = o.get_string_member_with_default("error", "");
                 string token = o.get_string_member_with_default("consent_token", "");
                 consent_token = valid_consent_token(token) ? token : "";
                 percent = (int) o.get_int_member_with_default("percent", 0);
@@ -164,23 +180,23 @@ namespace Singularity {
             string version = display_version();
             switch (state) {
                 case "available":
-                    icon.icon_name = "folder-download-symbolic";
                     set_tooltip_text(_("Download %s").printf(version));
                     ((Gtk.Widget) this).visible = true;
                     break;
                 case "downloading":
-                    icon.icon_name = "folder-download-symbolic";
                     set_tooltip_text(_("Downloading %s: %d%%").printf(version, percent));
                     ((Gtk.Widget) this).visible = true;
                     break;
                 case "ready":
-                    icon.icon_name = "emblem-ok-symbolic";
                     set_tooltip_text(_("Update ready: restart to apply %s").printf(version));
                     ((Gtk.Widget) this).visible = true;
                     break;
                 case "error":
-                    icon.icon_name = "dialog-error-symbolic";
-                    set_tooltip_text(_("Update failed"));
+                    set_tooltip_text(format_error(error));
+                    ((Gtk.Widget) this).visible = true;
+                    break;
+                case "checking":
+                    set_tooltip_text(_("Checking for updates"));
                     ((Gtk.Widget) this).visible = true;
                     break;
                 default:
@@ -218,13 +234,22 @@ namespace Singularity {
             return true;
         }
 
+        internal static string format_error(string error) {
+            string detail = error.strip();
+            return detail == "" ? _("Update failed. Click to try again.")
+                : _("Update failed: %s. Click to try again.").printf(detail);
+        }
+
         private void on_clicked() {
             switch (state) {
                 case "available":
                     start_download.begin();
                     break;
                 case "ready":
-                    confirm_restart();
+                    restart_requested(display_version());
+                    break;
+                case "error":
+                    retry_check.begin();
                     break;
                 default:
                     break;
@@ -246,19 +271,15 @@ namespace Singularity {
             arm(RETRY_SECONDS);
         }
 
-        private void confirm_restart() {
-            var dialog = new Gtk.AlertDialog(_("Restart to apply %s?").printf(display_version()));
-            dialog.set_detail(_("The update was downloaded and verified. Your session will close."));
-            dialog.set_buttons({ _("Later"), _("Restart now") });
-            dialog.set_cancel_button(0);
-            dialog.set_default_button(1);
-            dialog.choose.begin((Gtk.Window?) this.get_root(), null, (obj, res) => {
-                try {
-                    if (dialog.choose.end(res) == 1) {
-                        request.begin("POST", "/reboot");
-                    }
-                } catch (Error e) {}
-            });
+        private async void retry_check() {
+            state = "checking";
+            render();
+            yield request("GET", "/check");
+            poll();
+        }
+
+        public void apply_update() {
+            if (state == "ready") request.begin("POST", "/reboot");
         }
     }
 }

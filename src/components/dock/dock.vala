@@ -532,10 +532,6 @@ namespace Singularity {
 
                 end_area.append(sys_box);
 
-                if (Singularity.Runtime.is_sinty_os()) {
-                    end_area.append(new UpdateIndicator());
-                }
-
                 var clock_box = new Box(Orientation.HORIZONTAL, 4);
                 clock_box.add_css_class("dock-clock-box");
                 clock_label = new Label("00:00");
@@ -548,8 +544,6 @@ namespace Singularity {
                     system_clicked();
                 });
                 sys_box.add_controller(gesture);
-            } else if (Singularity.Runtime.is_sinty_os()) {
-                end_area.append(new UpdateIndicator());
             }
         }
 
@@ -1320,6 +1314,9 @@ namespace Singularity {
                 }
             }
 
+            if (is_primary && Singularity.Runtime.is_sinty_os())
+                desired_keys.add("__update__");
+
             // Remove stale cached items
             var desired_set = new HashSet<string>();
             foreach (var k in desired_keys) desired_set.add(k);
@@ -1620,6 +1617,29 @@ namespace Singularity {
         }
 
         private Gtk.Widget? create_item_for_key(string key, string[] pinned, int icon_size) {
+            if (key == "__update__") {
+                Gtk.Box wrapper, pill;
+                build_shell_geometry(out wrapper, out pill, icon_size);
+                var indicator = new UpdateIndicator(icon_size);
+                indicator.restart_requested.connect((version) => {
+                    var app = (Gtk.Application) GLib.Application.get_default();
+                    var dialog = new PowerConfirmDialog(
+                        app,
+                        version,
+                        "sinty",
+                        _("The update was downloaded and verified. Restart to apply it. Your session will close."),
+                        _("Restart now"),
+                        () => indicator.apply_update()
+                    );
+                    dialog.open_dialog();
+                });
+                pill.append(indicator);
+                wrapper.visible = indicator.visible;
+                indicator.notify["visible"].connect(() => {
+                    wrapper.visible = indicator.visible;
+                });
+                return wrapper;
+            }
             if (key == "__activities__") {
                 Gtk.Box wrapper, pill;
                 build_shell_geometry(out wrapper, out pill, icon_size);

@@ -17,6 +17,11 @@ void main() {
     assert(Singularity.UpdateIndicator.poll_interval(true, "downloading") == 1);
     assert(Singularity.UpdateIndicator.poll_interval(true, "idle") == 5);
 
+    assert(Singularity.UpdateIndicator.format_error("") ==
+        "Update failed. Click to try again.");
+    assert(Singularity.UpdateIndicator.format_error("staging failed") ==
+        "Update failed: staging failed. Click to try again.");
+
     assert(Singularity.UpdateIndicator.valid_consent_token(
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"));
     assert(!Singularity.UpdateIndicator.valid_consent_token(
