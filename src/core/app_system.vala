@@ -265,9 +265,6 @@ namespace Singularity {
                             && handle == self.current_focused_window_handle) {
                         self.notify_desktop_focused();
                     }
-                    if (was_maximized != win.is_maximized || was_fullscreen != win.is_fullscreen) {
-                        PreviewCache.get_default().invalidate(handle);
-                    }
                     // A maximized window that gets minimized stops covering the
                     // panel/dock, so re-evaluate maximize-driven state too.
                     if (was_maximized != win.is_maximized || was_minimized != win.is_minimized) {
@@ -1124,7 +1121,6 @@ namespace Singularity {
             }
             if (found != null) {
                 string app_id = found.app_id;
-                PreviewCache.get_default().invalidate(handle);
                 windows.remove(found);
                 if (mru_windows.find(found) != null) mru_windows.remove(found);
                 app_closed(handle);
