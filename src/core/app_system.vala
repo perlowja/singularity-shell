@@ -861,37 +861,8 @@ namespace Singularity {
             return false;
         }
 
-        private static string get_os_pretty_name() {
-            try {
-                string content;
-                FileUtils.get_contents("/etc/os-release", out content);
-                string? os_name = null;
-                string? codename = null;
-                foreach (string line in content.split("\n")) {
-                    string strip = line.strip();
-                    if (strip.has_prefix("NAME=")) {
-                        os_name = strip.substring("NAME=".length).strip();
-                        if (os_name.has_prefix("\"") && os_name.has_suffix("\""))
-                            os_name = os_name[1:os_name.length - 1];
-                    } else if (strip.has_prefix("VERSION_CODENAME=")) {
-                        codename = strip.substring("VERSION_CODENAME=".length).strip();
-                        if (codename.has_prefix("\"") && codename.has_suffix("\""))
-                            codename = codename[1:codename.length - 1];
-                        // Capitalise first letter
-                        if (codename.length > 0)
-                            codename = codename[0:1].up() + codename[1:codename.length];
-                    }
-                }
-                if (os_name != null && codename != null && codename.length > 0)
-                    return "%s %s".printf(os_name, codename);
-                if (os_name != null)
-                    return os_name;
-            } catch {}
-            return "Linux";
-        }
-
         private void build_desktop_os_menu(GLib.Menu final_menu, SimpleActionGroup group) {
-            string os_name = get_os_pretty_name();
+            string os_name = OsIdentity.load().menu_label();
             var os_menu = new GLib.Menu();
 
             // Section 1: About + System Preferences
