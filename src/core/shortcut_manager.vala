@@ -42,6 +42,7 @@ namespace Singularity {
             register_shortcut("Volume Up", "Increase volume", "", "volume_up");
             register_shortcut("Volume Down", "Decrease volume", "", "volume_down");
             register_shortcut("Mute", "Toggle mute", "<Super>m", "volume_mute");
+            register_shortcut("Mute Microphone", "Toggle microphone mute", "", "mic_mute");
             register_shortcut("Brightness Up", "Increase brightness", "", "brightness_up");
             register_shortcut("Brightness Down", "Decrease brightness", "", "brightness_down");
             register_shortcut("Snap Window Left", "Snap the focused window to the left half", "<Super>Left", "snap_left");
@@ -309,6 +310,7 @@ namespace Singularity {
             xml.append_printf("    <keybind key=\"XF86AudioRaiseVolume\"><action name=\"Execute\"><command>%s volume_up</command></action></keybind>\n", dbus_shorts);
             xml.append_printf("    <keybind key=\"XF86AudioLowerVolume\"><action name=\"Execute\"><command>%s volume_down</command></action></keybind>\n", dbus_shorts);
             xml.append_printf("    <keybind key=\"XF86AudioMute\"><action name=\"Execute\"><command>%s volume_mute</command></action></keybind>\n", dbus_shorts);
+            xml.append_printf("    <keybind key=\"XF86AudioMicMute\"><action name=\"Execute\"><command>%s mic_mute</command></action></keybind>\n", dbus_shorts);
             xml.append_printf("    <keybind key=\"XF86MonBrightnessUp\"><action name=\"Execute\"><command>%s brightness_up</command></action></keybind>\n", dbus_shorts);
             xml.append_printf("    <keybind key=\"XF86MonBrightnessDown\"><action name=\"Execute\"><command>%s brightness_down</command></action></keybind>\n", dbus_shorts);
             xml.append("  </keyboard>\n</labwc_config>\n");
@@ -496,6 +498,7 @@ namespace Singularity {
                     case "volume_up":    volume_up(); break;
                     case "volume_down":  volume_down(); break;
                     case "volume_mute":  volume_mute(); break;
+                    case "mic_mute":     mic_mute(); break;
                     case "brightness_up":   brightness_up(); break;
                     case "brightness_down": brightness_down(); break;
                     case "kbd_brightness_up":   kbd_brightness_up(); break;
@@ -570,6 +573,15 @@ namespace Singularity {
             Singularity.Shell.OsdOverlay.get_default().show_osd(
                 audio.icon_name,
                 audio.is_muted ? -1 : audio.volume
+            );
+        }
+
+        public void mic_mute() throws Error {
+            var audio = SystemMonitor.get_default().audio;
+            audio.toggle_input_mute();
+            Singularity.Shell.OsdOverlay.get_default().show_osd(
+                audio.input_muted ? "microphone-disabled-symbolic" : "audio-input-microphone-symbolic",
+                audio.input_muted ? -1 : audio.input_volume
             );
         }
 
