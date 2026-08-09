@@ -254,6 +254,9 @@ endif
 
 singularity_core_sources = files(
     'src/components/panel/panel.vala',
+    'src/core/bar_layout.vala',
+    'src/core/bar_layout_edit_controller.vala',
+    'src/core/bar_layout_edit_overlay.vala',
     'src/core/dbus_menu_adapter.vala',
     'src/core/atspi_menu_provider.vala',
     'src/core/gtk_actions_menu_provider.vala',
@@ -410,3 +413,9 @@ update_indicator_test = executable('update-indicator-test',
   dependencies: core_deps + [json_dep],
 )
 test('update-indicator', update_indicator_test)
+
+bar_layout_test = executable('bar-layout-test',
+  sources: ['src/core/bar_layout.vala', 'tests/bar_layout_test.vala'],
+  dependencies: [dependency('gobject-2.0'), gee_dep],
+)
+test('bar-layout', bar_layout_test)

@@ -19,6 +19,7 @@ namespace Singularity {
             set_content(settings_view);
 
             close_request.connect(() => {
+                new GLib.Settings("dev.sinty.desktop").set_boolean("bar-layout-edit-mode", false);
                 hide();
                 return true;
             });

@@ -25,6 +25,12 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     public SingularityApp() {
         base("dev.sinty.desktop", ApplicationFlags.FLAGS_NONE);
     }
+
+    protected override void startup() {
+        base.startup();
+        new GLib.Settings("dev.sinty.desktop").set_boolean("bar-layout-edit-mode", false);
+    }
+
     private GLib.Settings settings;
     private List<Singularity.Background> backgrounds = new List<Singularity.Background>();
     private Singularity.Overview? overview = null;
@@ -47,6 +53,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     private Singularity.RunDialog? run_dialog = null;
     private Singularity.EmojiPicker? emoji_picker = null;
     private Singularity.SettingsWindow? settings_window = null;
+    private Singularity.BarLayoutEditOverlay? bar_layout_edit_overlay = null;
     private Singularity.AppSwitcher? app_switcher = null;
     private bool icon_theme_probe_done = false;
     public Singularity.DesktopIcons? desktop_icons = null;
@@ -71,6 +78,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         // shell only needs to load its style here.
         Singularity.Style.StyleManager.get_default().load_theme();
         settings = new GLib.Settings("dev.sinty.desktop");
+        settings.changed["bar-layout-edit-mode"].connect(sync_bar_layout_edit_mode);
 
         // Qt exports its global menu through the X11 registrar path.
         if (settings.get_boolean("global-menu-enabled")) {
@@ -712,6 +720,23 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     private void ensure_settings_window() {
         if (settings_window == null) {
             settings_window = new Singularity.SettingsWindow(this);
+        }
+    }
+
+    private void sync_bar_layout_edit_mode() {
+        if (settings.get_boolean("bar-layout-edit-mode")) {
+            sidebar?.hide();
+            settings_window?.hide();
+            if (bar_layout_edit_overlay == null) {
+                bar_layout_edit_overlay = new Singularity.BarLayoutEditOverlay(this);
+            }
+            bar_layout_edit_overlay.present();
+            return;
+        }
+
+        if (bar_layout_edit_overlay != null) {
+            bar_layout_edit_overlay.destroy();
+            bar_layout_edit_overlay = null;
         }
     }
     // Opens overview anchored to the given panel (for secondary monitors)

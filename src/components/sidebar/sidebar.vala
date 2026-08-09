@@ -96,8 +96,10 @@ namespace Singularity {
             var key_controller = new Gtk.EventControllerKey();
             key_controller.key_pressed.connect((keyval, keycode, state) => {
                 if (keyval == Gdk.Key.Escape) {
-                    if (!Singularity.DebugManager.get_default().sidebar_pinned)
+                    if (!Singularity.DebugManager.get_default().sidebar_pinned) {
+                        desktop_settings.set_boolean("bar-layout-edit-mode", false);
                         hide();
+                    }
                     return true;
                 }
                 return false;
@@ -112,6 +114,7 @@ namespace Singularity {
                 if (!is_active && visible && _can_close_on_focus_loss) {
                     GLib.Idle.add(() => {
                         if (!is_active && visible && _can_close_on_focus_loss
+                            && !desktop_settings.get_boolean("bar-layout-edit-mode")
                             && !Singularity.DebugManager.get_default().sidebar_pinned) {
                             animated_close();
                         }
