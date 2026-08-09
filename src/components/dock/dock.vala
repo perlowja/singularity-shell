@@ -1823,6 +1823,15 @@ namespace Singularity {
             }
             if (wins.size < 2) return;
 
+            Graphene.Rect anchor_bounds;
+            if (!anchor.compute_bounds(main_container, out anchor_bounds)) return;
+            var pointing_to = Gdk.Rectangle() {
+                x = (int)Math.floor(anchor_bounds.origin.x),
+                y = (int)Math.floor(anchor_bounds.origin.y),
+                width = (int)Math.ceil(anchor_bounds.size.width),
+                height = (int)Math.ceil(anchor_bounds.size.height)
+            };
+
             dismiss_window_previews();
 
             var pop = new Gtk.Popover();
@@ -1853,7 +1862,8 @@ namespace Singularity {
             pm.leave.connect(() => schedule_preview_dismiss());
             ((Gtk.Widget) pop).add_controller(pm);
 
-            pop.set_parent(anchor);
+            pop.set_parent(main_container);
+            pop.set_pointing_to(pointing_to);
             _preview_popover = pop;
             _preview_open = true;
             _preview_app_id = app_id;
