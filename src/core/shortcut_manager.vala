@@ -296,8 +296,8 @@ namespace Singularity {
             xml.append_printf("    <keybind key=\"A-Tab\"><action name=\"Execute\"><command>%s switch_windows_next</command></action></keybind>\n", dbus_shorts);
             xml.append_printf("    <keybind key=\"A-S-Tab\"><action name=\"Execute\"><command>%s switch_windows_prev</command></action></keybind>\n", dbus_shorts);
             // Super_L/R on release, launcher
-            xml.append_printf("    <keybind key=\"Super_L\" onRelease=\"yes\"><action name=\"Execute\"><command>%s toggle_launcher</command></action></keybind>\n", dbus_shorts);
-            xml.append_printf("    <keybind key=\"Super_R\" onRelease=\"yes\"><action name=\"Execute\"><command>%s toggle_launcher</command></action></keybind>\n", dbus_shorts);
+            xml.append_printf("    <keybind key=\"Super_L\" onRelease=\"yes\" overrideInhibition=\"yes\"><action name=\"Execute\"><command>%s toggle_launcher</command></action></keybind>\n", dbus_shorts);
+            xml.append_printf("    <keybind key=\"Super_R\" onRelease=\"yes\" overrideInhibition=\"yes\"><action name=\"Execute\"><command>%s toggle_launcher</command></action></keybind>\n", dbus_shorts);
             xml.append("    <!-- Singularity Desktop shortcuts -->\n");
             // Dynamic shortcuts from the shortcut registry
             foreach (var s in shortcuts) {
