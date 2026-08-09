@@ -289,7 +289,7 @@ namespace Singularity {
 
         private void configure_layout() {
             int columns = _list_mode ? 1 : grid_columns();
-            items_box.min_children_per_line = 1;
+            items_box.min_children_per_line = columns;
             items_box.max_children_per_line = columns;
         }
 
