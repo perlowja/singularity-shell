@@ -3005,6 +3005,21 @@ namespace Singularity {
 
             var region = new Cairo.Region();
             if (_hidden) {
+                var edge = _dock_edge();
+                if (edge == GtkLayerShell.Edge.BOTTOM) {
+                    region.union_rectangle(Cairo.RectangleInt() {
+                        x = 0, y = 0, width = get_width(), height = int.min(4, get_height())
+                    });
+                } else if (edge == GtkLayerShell.Edge.LEFT) {
+                    region.union_rectangle(Cairo.RectangleInt() {
+                        x = int.max(0, get_width() - 4), y = 0,
+                        width = int.min(4, get_width()), height = get_height()
+                    });
+                } else {
+                    region.union_rectangle(Cairo.RectangleInt() {
+                        x = 0, y = 0, width = int.min(4, get_width()), height = get_height()
+                    });
+                }
                 surface.set_input_region(region);
                 return;
             }
