@@ -42,7 +42,8 @@ namespace Singularity {
         public string shell_monitor_name { get; set; default = ""; }
         public signal void monitors_changed();
         private uint32 serial;
-        private bool _first_serial = true;
+        private bool _topology_changed = true;
+        private uint _restore_timeout_id = 0;
 
         public static DisplayManager get_default() {
             if (_instance == null) {
@@ -58,6 +59,7 @@ namespace Singularity {
         public void handle_add_head(void* head_handle) {
             var monitor = new Monitor(head_handle);
             monitors.append(monitor);
+            _topology_changed = true;
             monitors_changed();
         }
         [CCode (cname = "singularity_display_manager_add_head")]
@@ -147,6 +149,7 @@ namespace Singularity {
             }
             if (found != null) {
                 monitors.remove(found);
+                _topology_changed = true;
                 monitors_changed();
             }
         }
@@ -172,14 +175,16 @@ namespace Singularity {
 
         public void handle_set_serial(uint32 s) {
             this.serial = s;
-            if (_first_serial) {
-                _first_serial = false;
-                // Delay slightly so all modes/heads are fully populated
-                Timeout.add(200, () => {
-                    load_and_apply_saved();
-                    return false;
-                });
-            }
+            if (!_topology_changed) return;
+            _topology_changed = false;
+            if (_restore_timeout_id != 0) Source.remove(_restore_timeout_id);
+            // output_manager.done arrives before the head data is copied into
+            // DisplayManager, so wait until the full topology is available.
+            _restore_timeout_id = Timeout.add(200, () => {
+                _restore_timeout_id = 0;
+                load_and_apply_saved();
+                return Source.REMOVE;
+            });
         }
         [CCode (cname = "singularity_display_manager_set_serial")]
         public static void set_serial_c(uint32 s) {
