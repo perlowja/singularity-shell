@@ -840,7 +840,7 @@ namespace Singularity {
             add_group(launcher_group);
 
             var desktop_group = new PreferencesGroup(_("Desktop Icons"));
-            var icons_row = new SwitchRow(_("Show Desktop Icons"), _("Display files from ~/Desktop on screen"), settings.get_boolean("show-desktop-icons"));
+            var icons_row = new SwitchRow(_("Show Desktop Icons"), _("Display files from your desktop folder on screen"), settings.get_boolean("show-desktop-icons"));
             icons_row.switch_btn.notify["active"].connect(() => {
                 settings.set_boolean("show-desktop-icons", icons_row.switch_btn.active);
             });

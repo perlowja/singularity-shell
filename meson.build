@@ -257,6 +257,7 @@ singularity_core_sources = files(
     'src/core/dbus_menu_adapter.vala',
     'src/core/atspi_menu_provider.vala',
     'src/core/gtk_actions_menu_provider.vala',
+    'src/core/xdg_user_dirs.vala',
     'src/core/app_system.vala',
     'src/core/os_identity.vala',
     'src/core/compositor_backend.vala',

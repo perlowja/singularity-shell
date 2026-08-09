@@ -7,7 +7,7 @@ namespace Singularity {
         private GLib.Settings settings;
         private Fixed icon_container;
         private FileMonitor? monitor;
-        private string desktop_path;
+        private string? desktop_path;
         private HashTable<string, IconPosition?> icon_positions;
         private string positions_file;
         private HashTable<string, Gdk.Pixbuf> _icon_pixbuf_cache;
@@ -35,7 +35,7 @@ namespace Singularity {
         public DesktopIcons(Gtk.Application app, Gdk.Monitor? monitor = null) {
             Object(application: app);
             settings = new GLib.Settings("dev.sinty.desktop");
-            desktop_path = Environment.get_home_dir() + "/Desktop";
+            desktop_path = XdgUserDirs.desktop_dir();
             positions_file = Environment.get_home_dir() + "/.config/singularity/desktop-icons.txt";
             icon_positions = new HashTable<string, IconPosition?>(str_hash, str_equal);
             _icon_pixbuf_cache = new HashTable<string, Gdk.Pixbuf>(str_hash, str_equal);
@@ -249,8 +249,10 @@ namespace Singularity {
         }
 
         private void setup_file_monitor() {
+            string? path = desktop_path;
+            if (path == null) return;
             try {
-                var desktop = File.new_for_path(desktop_path);
+                var desktop = File.new_for_path(path);
                 if (!desktop.query_exists()) {
                     desktop.make_directory_with_parents();
                 }
@@ -288,8 +290,10 @@ namespace Singularity {
                 icon_container.remove(child);
                 child = next;
             }
+            string? path = desktop_path;
+            if (path == null) return;
             try {
-                var desktop = File.new_for_path(desktop_path);
+                var desktop = File.new_for_path(path);
                 if (!desktop.query_exists()) return;
                 var enumerator = desktop.enumerate_children("standard::*,time::modified", FileQueryInfoFlags.NONE);
                 // Rebuild placement from scratch onto the shared lattice so any
@@ -345,8 +349,10 @@ namespace Singularity {
         // and re-decodes every icon on each event, which is the hot path).
         private void update_single_icon(string name) {
             if (name.has_prefix(".")) return;
+            string? path = desktop_path;
+            if (path == null) return;
             try {
-                var desktop = File.new_for_path(desktop_path);
+                var desktop = File.new_for_path(path);
                 var file = desktop.get_child(name);
                 if (!file.query_exists()) { remove_single_icon(name); return; }
                 var info = file.query_info("standard::*,time::modified", FileQueryInfoFlags.NONE);
@@ -662,9 +668,11 @@ namespace Singularity {
         }
 
         private void sort_icons_by_type() {
+            string? path = desktop_path;
+            if (path == null) return;
             var files = new GLib.List<FileEntry>();
             try {
-                var desktop = File.new_for_path(desktop_path);
+                var desktop = File.new_for_path(path);
                 var enumerator = desktop.enumerate_children("standard::*", FileQueryInfoFlags.NONE);
                 FileInfo? info;
                 while ((info = enumerator.next_file()) != null) {
