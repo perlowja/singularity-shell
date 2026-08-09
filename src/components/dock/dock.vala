@@ -271,6 +271,7 @@ namespace Singularity {
             // Attach to the window widget so the hot-strip at the screen edge
             // (visible when dock is hidden) reliably fires enter/leave.
             ((Gtk.Widget) this).add_controller(motion);
+            map.connect_after(() => update_input_region());
 
             _sig_app_title_changed = app_system.app_title_changed.connect((win) => {
                 Widget? child = dock_box.get_first_child();
@@ -799,6 +800,10 @@ namespace Singularity {
             _fade_timer_id = GLib.Timeout.add(32, () => {
                 dock_box.remove_css_class("dock-reveal-offset");
                 _fade_timer_id = 0;
+                GLib.Timeout.add(260, () => {
+                    update_input_region();
+                    return GLib.Source.REMOVE;
+                });
                 return GLib.Source.REMOVE;
             });
         }
@@ -2713,6 +2718,44 @@ namespace Singularity {
             return null;
         }
 
+        private bool has_visible_child(Widget widget) {
+            Widget? child = widget.get_first_child();
+            while (child != null) {
+                if (child.get_visible()) return true;
+                child = child.get_next_sibling();
+            }
+            return false;
+        }
+
+        private void add_input_bounds(Cairo.Region region, Widget widget) {
+            Graphene.Rect bounds;
+            if (!widget.compute_bounds(this, out bounds)) return;
+            if (bounds.size.width < 1 || bounds.size.height < 1) return;
+            region.union_rectangle(Cairo.RectangleInt() {
+                x = (int)Math.floor(bounds.origin.x),
+                y = (int)Math.floor(bounds.origin.y),
+                width = (int)Math.ceil(bounds.size.width),
+                height = (int)Math.ceil(bounds.size.height)
+            });
+        }
+
+        private void update_input_region() {
+            var surface = get_surface();
+            if (surface == null || get_width() < 1 || get_height() < 1) return;
+
+            var region = new Cairo.Region();
+            if (dock_style == "panel") {
+                region.union_rectangle(Cairo.RectangleInt() {
+                    x = 0, y = 0, width = get_width(), height = get_height()
+                });
+            } else {
+                add_input_bounds(region, dock_box);
+                if (has_visible_child(start_area)) add_input_bounds(region, start_area);
+                if (has_visible_child(end_area)) add_input_bounds(region, end_area);
+            }
+            surface.set_input_region(region);
+        }
+
         // Override size_allocate to set exclusive zone = height - shadow margin,
         // so windows snap to the visual dock top, not the shadow's bottom edge.
         private const int SHADOW_BOTTOM_PX = 4;
@@ -2731,6 +2774,7 @@ namespace Singularity {
             }
 
             update_dock_reservation();
+            update_input_region();
         }
 
         private Widget create_corner_hint(string corner_class) {
