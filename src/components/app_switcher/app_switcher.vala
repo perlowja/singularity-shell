@@ -118,7 +118,7 @@ namespace Singularity {
 
     public class AppSwitcher : Singularity.Shell.ShellDialog {
         private Box outer_box;
-        private Box items_box;
+        private FlowBox items_box;
         private ScrolledWindow scroll;
         private List<AppSystem.Window> windows;
         private int selected_index = 0;
@@ -139,7 +139,7 @@ namespace Singularity {
             _list_mode = settings.get_string("switcher-style") != "grid";
             settings.changed["switcher-style"].connect(() => {
                 _list_mode = settings.get_string("switcher-style") != "grid";
-                items_box.orientation = _list_mode ? Orientation.VERTICAL : Orientation.HORIZONTAL;
+                configure_layout();
                 rebuild_ui();
             });
 
@@ -185,12 +185,17 @@ namespace Singularity {
             scroll.max_content_height = 500;
             scroll.max_content_width = 900;
 
-            items_box = new Box(_list_mode ? Orientation.VERTICAL : Orientation.HORIZONTAL, 0);
+            items_box = new FlowBox();
+            items_box.selection_mode = SelectionMode.NONE;
+            items_box.homogeneous = true;
+            items_box.row_spacing = 0;
+            items_box.column_spacing = 0;
             items_box.add_css_class("app-switcher-items");
             items_box.margin_top = 8;
             items_box.margin_bottom = 8;
             items_box.margin_start = 8;
             items_box.margin_end = 8;
+            configure_layout();
 
             scroll.set_child(items_box);
             outer_box.append(scroll);
@@ -270,10 +275,22 @@ namespace Singularity {
                 var c = new GestureClick();
                 c.pressed.connect((n, x, y) => { selected_index = idx; activate_selected(); });
                 item.add_controller(c);
-                items_box.append(item);
+                var child = new FlowBoxChild();
+                child.set_child(item);
+                items_box.append(child);
                 i++;
             }
             update_viewport_size();
+        }
+
+        private int grid_columns() {
+            return int.max(1, default_width / 332);
+        }
+
+        private void configure_layout() {
+            int columns = _list_mode ? 1 : grid_columns();
+            items_box.min_children_per_line = 1;
+            items_box.max_children_per_line = columns;
         }
 
         private void update_viewport_size() {
@@ -281,7 +298,9 @@ namespace Singularity {
             if (_list_mode) {
                 scroll.set_size_request(360, int.min(500, count * 48 + 16));
             } else {
-                scroll.set_size_request(int.min(900, count * 332 + 16), 260);
+                int columns = int.min(count, grid_columns());
+                int rows = (count + columns - 1) / columns;
+                scroll.set_size_request(columns * 332 + 16, int.min(default_height, rows * 260));
             }
         }
 
@@ -365,9 +384,10 @@ namespace Singularity {
             var child = items_box.get_first_child();
             int i = 0;
             while (child != null) {
-                if (i == old_idx) child.remove_css_class("selected");
+                var item = ((FlowBoxChild)child).get_child();
+                if (i == old_idx) item.remove_css_class("selected");
                 if (i == new_idx) {
-                    child.add_css_class("selected");
+                    item.add_css_class("selected");
                     scroll_selected_into_view(child);
                 }
                 child = child.get_next_sibling();
@@ -376,11 +396,13 @@ namespace Singularity {
         }
 
         private void scroll_selected_into_view(Gtk.Widget item) {
-            var adj = _list_mode ? scroll.vadjustment : scroll.hadjustment;
             Gtk.Allocation alloc;
             item.get_allocation(out alloc);
-            int item_start = _list_mode ? alloc.y : alloc.x;
-            int item_size = _list_mode ? alloc.height : alloc.width;
+            scroll_axis_into_view(scroll.hadjustment, alloc.x, alloc.width);
+            scroll_axis_into_view(scroll.vadjustment, alloc.y, alloc.height);
+        }
+
+        private void scroll_axis_into_view(Gtk.Adjustment adj, int item_start, int item_size) {
             int item_end = item_start + item_size;
             int viewport_size = (int)adj.page_size;
             if (item_start < (int)adj.value) {
@@ -458,6 +480,7 @@ namespace Singularity {
                 default_height = int.min(500, max_h);
                 scroll.max_content_width = default_width;
                 scroll.max_content_height = default_height;
+                if (items_box != null) configure_layout();
             }
         }
     }
