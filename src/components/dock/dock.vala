@@ -840,6 +840,7 @@ namespace Singularity {
                 _hidden = should_hide;
                 animate_dock(_hidden);
                 dock_visibility_changed(_hidden);
+                update_input_region();
             } else if (!_hidden) {
                 update_dock_reservation();
             }
@@ -3003,6 +3004,10 @@ namespace Singularity {
             if (surface == null || get_width() < 1 || get_height() < 1) return;
 
             var region = new Cairo.Region();
+            if (_hidden) {
+                surface.set_input_region(region);
+                return;
+            }
             if (dock_style == "panel") {
                 region.union_rectangle(Cairo.RectangleInt() {
                     x = 0, y = 0, width = get_width(), height = get_height()
