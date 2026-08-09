@@ -457,8 +457,7 @@ namespace Singularity {
             bool fs = is_any_window_fullscreen_on_my_monitor();
             if (_settings.get_boolean("bar-layout-edit-mode")) {
                 _hidden_for_fullscreen = fs;
-                set_layer(this, GtkLayerShell.Layer.OVERLAY);
-                present();
+                update_visibility();
                 return;
             }
             if (fs == _hidden_for_fullscreen) return;
@@ -545,7 +544,7 @@ namespace Singularity {
             if (_hidden_for_fullscreen && !editing) {
                 set_exclusive_zone(this, 0);
                 set_layer(this, GtkLayerShell.Layer.BACKGROUND);
-            } else if (fusion && !is_greeter_mode && !editing) {
+            } else if (fusion && !is_greeter_mode) {
                 set_exclusive_zone(this, 0);
                 set_layer(this, GtkLayerShell.Layer.BACKGROUND);
                 set_anchor(this, GtkLayerShell.Edge.TOP, false);
