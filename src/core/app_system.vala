@@ -343,8 +343,8 @@ namespace Singularity {
             var entry = app as DesktopAppInfo;
             string? src = (entry != null) ? entry.get_filename() : null;
             if (src == null) return false;
-            string desktop_dir = Environment.get_user_special_dir(UserDirectory.DESKTOP)
-                ?? Path.build_filename(Environment.get_home_dir(), "Desktop");
+            string? desktop_dir = XdgUserDirs.desktop_dir();
+            if (desktop_dir == null) return false;
             try {
                 var dir = File.new_for_path(desktop_dir);
                 if (!dir.query_exists()) dir.make_directory_with_parents();

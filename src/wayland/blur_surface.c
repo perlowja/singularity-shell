@@ -30,6 +30,22 @@
 /* Per-display cache of the blur manager proxy */
 static struct zsingularity_blur_manager_v1 *cached_blur_manager = NULL;
 static struct wl_display *cached_wl_display = NULL;
+static const char *blur_data_key = "singularity-surface-blur";
+static const char *blur_signal_key = "singularity-surface-blur-signal";
+
+static void
+destroy_surface_blur(GtkWidget *widget, gpointer user_data)
+{
+	(void)user_data;
+	struct zsingularity_blur_v1 *blur =
+		g_object_get_data(G_OBJECT(widget), blur_data_key);
+	if (!blur) {
+		return;
+	}
+
+	zsingularity_blur_v1_destroy(blur);
+	g_object_set_data(G_OBJECT(widget), blur_data_key, NULL);
+}
 
 static void
 registry_global(void *data, struct wl_registry *registry, uint32_t name,
@@ -111,11 +127,20 @@ singularity_request_surface_blur(GtkWidget *widget, uint32_t radius)
 	}
 
 	struct zsingularity_blur_v1 *blur =
-		zsingularity_blur_manager_v1_get_blur(manager, wl_surface);
+		g_object_get_data(G_OBJECT(widget), blur_data_key);
+	if (!blur) {
+		blur = zsingularity_blur_manager_v1_get_blur(manager, wl_surface);
+		g_object_set_data(G_OBJECT(widget), blur_data_key, blur);
+		if (!g_object_get_data(G_OBJECT(widget), blur_signal_key)) {
+			g_signal_connect(widget, "unrealize",
+				G_CALLBACK(destroy_surface_blur), NULL);
+			g_object_set_data(G_OBJECT(widget), blur_signal_key,
+				GINT_TO_POINTER(1));
+		}
+	}
 	zsingularity_blur_v1_set_radius(blur, radius);
 	zsingularity_blur_v1_set_noise(blur, 0);
 	zsingularity_blur_v1_commit(blur);
-	/* Keep blur object alive for the lifetime of the surface */
 
 #else
 	(void)widget;

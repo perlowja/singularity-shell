@@ -34,6 +34,7 @@ namespace Singularity {
             GtkLayerShell.set_exclusive_zone(this, -1);
             decorated = false;
             add_css_class("folder-overlay-window");
+            add_css_class("folder-overlay-dimmer");
             add_css_class("singularity");
 
             // Dim background - close only when the press lands outside the card.
@@ -250,6 +251,7 @@ namespace Singularity {
             opacity = 0;
             visible = true;
             present();
+            Singularity.request_surface_blur(this, 28);
             // Remove auto-focus from entry (GTK4 focuses first focusable widget on present)
             set_focus(null);
             name_entry.focusable = false;
