@@ -60,9 +60,6 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     private bool _goa_initialized = false;
 
     protected override void activate() {
-        // Ensure Qt apps use the Wayland backend instead of XCB
-        Environment.set_variable("QT_QPA_PLATFORM", "wayland", false);
-
         // SIGUSR1 = restart: exit cleanly so the wrapper script restarts us
         GLib.Unix.signal_add(Posix.Signal.USR1, () => {
             Process.exit(0);
@@ -74,6 +71,14 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         // shell only needs to load its style here.
         Singularity.Style.StyleManager.get_default().load_theme();
         settings = new GLib.Settings("dev.sinty.desktop");
+
+        // Qt exports its global menu through the X11 registrar path.
+        if (settings.get_boolean("global-menu-enabled")) {
+            Environment.set_variable("QT_QPA_PLATFORM", "xcb", true);
+        } else {
+            Environment.set_variable("QT_QPA_PLATFORM", "wayland", false);
+        }
+
         settings.changed["accent-color"].connect(() => {
             update_accent_color();
         });
