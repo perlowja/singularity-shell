@@ -973,6 +973,54 @@ namespace Singularity {
             });
             dock_group.add_row(pos_row);
             add_group(dock_group);
+
+            bool has_dock_layout = settings.get_user_value("dock-layout-left") != null
+                || settings.get_user_value("dock-layout-center") != null
+                || settings.get_user_value("dock-layout-right") != null;
+            if (!has_dock_layout) {
+                string legacy_alignment = settings.get_string("dock-alignment");
+                if (legacy_alignment == "start") {
+                    settings.set_strv("dock-layout-left", { "overview", "applications" });
+                    settings.set_strv("dock-layout-center", {});
+                    settings.set_strv("dock-layout-right", { "system", "clock" });
+                } else if (legacy_alignment == "end") {
+                    settings.set_strv("dock-layout-left", { "overview" });
+                    settings.set_strv("dock-layout-center", {});
+                    settings.set_strv("dock-layout-right", { "applications", "system", "clock" });
+                }
+            }
+
+            var layout_group = new PreferencesGroup(_("Panel and Dock"));
+            var layout_row = new ActionRow(
+                _("Layout"),
+                _("Arrange items directly on the desktop")
+            );
+            var layout_button = new Button.with_label(_("Customize"));
+            layout_button.add_css_class("pill");
+            layout_button.valign = Align.CENTER;
+            void update_layout_button() {
+                bool editing = settings.get_boolean("bar-layout-edit-mode");
+                layout_button.label = editing ? _("Done") : _("Customize");
+                if (editing) {
+                    layout_button.add_css_class("suggested-action");
+                } else {
+                    layout_button.remove_css_class("suggested-action");
+                }
+            }
+            layout_button.clicked.connect(() => {
+                bool editing = !settings.get_boolean("bar-layout-edit-mode");
+                settings.set_boolean("bar-layout-edit-mode", editing);
+                if (editing) {
+                    var window = get_root() as Gtk.Window;
+                    window?.hide();
+                }
+            });
+            settings.changed["bar-layout-edit-mode"].connect(() => update_layout_button());
+            update_layout_button();
+            layout_row.add_suffix(layout_button);
+            layout_group.add_row(layout_row);
+            add_group(layout_group);
+
             var adv_dock_group = new PreferencesGroup(_("Advanced Dock"));
             string current_style = settings.get_string("dock-style");
             var style_row = new SelectionRow("Style", {"Floating", "Panel"}, current_style == "panel" ? "Panel" : "Floating");
@@ -994,15 +1042,6 @@ namespace Singularity {
                 settings.set_boolean("dock-window-previews", previews_row.switch_btn.active);
             });
             adv_dock_group.add_row(previews_row);
-            string current_align = settings.get_string("dock-alignment");
-            string align_label = "Center";
-            if (current_align == "start") align_label = "Start";
-            else if (current_align == "end") align_label = "End";
-            var align_row = new SelectionRow(_("Alignment"), {_("Start"), _("Center"), _("End")}, align_label);
-            align_row.selected.connect((item) => {
-                settings.set_string("dock-alignment", item.down());
-            });
-            adv_dock_group.add_row(align_row);
             var fusion_row = new SwitchRow(_("Panel Fusion"), _("Merge top panel into dock"), settings.get_boolean("panel-fusion"));
             fusion_row.switch_btn.notify["active"].connect(() => {
                 bool active = fusion_row.switch_btn.active;

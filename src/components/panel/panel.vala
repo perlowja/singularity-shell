@@ -1,16 +1,21 @@
 using Gtk;
 using GtkLayerShell;
+using Gee;
 
 namespace Singularity {
 
     public class Panel : Gtk.Window {
         private Label clock_label;
         private Label app_title_label;
-        private Box main_box;
+        private CenterBox main_box;
         private Box left_box;
         private Box center_box;
         private Box right_box;
         private Box clock_suffix_box;
+        private HashMap<string, Gtk.Widget> layout_items = new HashMap<string, Gtk.Widget>();
+        private BarLayout? bar_layout;
+        private BarLayoutEditController? layout_editor;
+        private bool saving_bar_layout = false;
         private Singularity.Shell.GlobalMenuBar menu_bar;
         private GLib.Settings _settings;
         private string _clock_format_str = "%b %e  %H:%M";
@@ -74,7 +79,8 @@ namespace Singularity {
             var overlay = new Overlay();
             overlay.overflow = Overflow.VISIBLE;
             set_child(overlay);
-            main_box = new Box(Orientation.HORIZONTAL, 10);
+            main_box = new CenterBox();
+            main_box.orientation = Orientation.HORIZONTAL;
             main_box.add_css_class("panel");
             main_box.overflow = Overflow.VISIBLE;
             overlay.set_child(main_box);
@@ -92,6 +98,11 @@ namespace Singularity {
             _corner_tr.valign = Align.START;
             overlay.add_overlay(_corner_tr);
             left_box = new Box(Orientation.HORIZONTAL, 5);
+            center_box = new Box(Orientation.HORIZONTAL, 5);
+            right_box = new Box(Orientation.HORIZONTAL, 5);
+            main_box.set_start_widget(left_box);
+            main_box.set_center_widget(center_box);
+            main_box.set_end_widget(right_box);
 
             if (!is_greeter_mode) {
                 var activities_btn = new Button();
@@ -122,7 +133,7 @@ namespace Singularity {
                 activities_btn.clicked.connect(() => {
                     activities_clicked();
                 });
-                left_box.append(activities_btn);
+                layout_items["overview"] = activities_btn;
             }
 
             workspace_btn = new Button();
@@ -134,22 +145,20 @@ namespace Singularity {
             workspace_btn.clicked.connect(() => {
                 workspace_clicked();
             });
-            left_box.append(workspace_btn);
+            layout_items["workspaces"] = workspace_btn;
 
             app_title_label = new Label("");
             app_title_label.add_css_class("app-title");
             app_title_label.valign = Align.CENTER;
             app_title_label.margin_start = 5;
             app_title_label.margin_end = 5;
-            if (!is_greeter_mode) left_box.append(app_title_label);
-
-            main_box.append(left_box);
+            if (!is_greeter_mode) layout_items["app-title"] = app_title_label;
 
             if (!is_greeter_mode && _settings.get_boolean("global-menu-enabled")) {
                 menu_bar = new Singularity.Shell.GlobalMenuBar();
                 menu_bar.valign = Align.CENTER;
                 menu_bar.visible = false;
-                main_box.append(menu_bar);
+                layout_items["global-menu"] = menu_bar;
 
                 _sig_menu_model_changed = app_system.menu_model_changed.connect((model) => {
                     menu_bar.register_action_group("dbusmenu", app_system.current_action_group);
@@ -185,11 +194,6 @@ namespace Singularity {
                     app_title_label.visible = true;
                 });
             }
-            var spacer = new Box(Orientation.HORIZONTAL, 0);
-            spacer.hexpand = true;
-            main_box.append(spacer);
-            right_box = new Box(Orientation.HORIZONTAL, 5);
-
             var sys_btn = new Button();
             sys_btn.has_frame = false;
             sys_btn.add_css_class("system-pill-button");
@@ -285,7 +289,7 @@ namespace Singularity {
                 update_battery_label();
             });
             _settings.changed["show-battery-percentage"].connect(() => update_battery_label());
-            right_box.append(sys_btn);
+            layout_items["system"] = sys_btn;
 
             var notif_btn = new Button();
             notif_btn.has_frame = false;
@@ -327,7 +331,7 @@ namespace Singularity {
             sys_btn.visible = is_primary;
             notif_btn.visible = is_primary;
 
-            right_box.append(notif_btn);
+            layout_items["notifications"] = notif_btn;
 
             var clock_btn = new Button();
             clock_btn.has_frame = false;
@@ -338,13 +342,38 @@ namespace Singularity {
             clock_btn.clicked.connect(() => {
                 if (!is_greeter_mode) clock_clicked();
             });
-            right_box.append(clock_btn);
-
             clock_suffix_box = new Box(Orientation.HORIZONTAL, 4);
             clock_suffix_box.valign = Align.CENTER;
-            right_box.append(clock_suffix_box);
-
-            main_box.append(right_box);
+            var clock_box = new Box(Orientation.HORIZONTAL, 4);
+            clock_box.append(clock_btn);
+            clock_box.append(clock_suffix_box);
+            layout_items["clock"] = clock_box;
+            reload_bar_layout();
+            _settings.changed["panel-layout-left"].connect(() => {
+                if (!saving_bar_layout) reload_bar_layout();
+            });
+            _settings.changed["panel-layout-center"].connect(() => {
+                if (!saving_bar_layout) reload_bar_layout();
+            });
+            _settings.changed["panel-layout-right"].connect(() => {
+                if (!saving_bar_layout) reload_bar_layout();
+            });
+            if (!is_greeter_mode) {
+                layout_editor = new BarLayoutEditController(
+                    _settings,
+                    "panel",
+                    left_box,
+                    center_box,
+                    right_box,
+                    layout_items,
+                    { "overview", "workspaces", "app-title", "global-menu", "system", "notifications", "clock" },
+                    { _("Overview"), _("Workspaces"), _("App Title"), _("Global Menu"), _("System Status"), _("Notifications"), _("Clock") }
+                );
+                layout_editor.move_requested.connect((item_id, section, index) => {
+                    if (bar_layout != null && bar_layout.move(item_id, section, index)) save_bar_layout();
+                });
+                layout_editor.edit_mode_changed.connect(() => update_visibility());
+            }
 
             // Clock format from our own settings
             _clock_format_str = _settings.get_boolean("clock-use-12h")
@@ -426,6 +455,12 @@ namespace Singularity {
         private void update_fullscreen_mode() {
             if (is_greeter_mode) return;
             bool fs = is_any_window_fullscreen_on_my_monitor();
+            if (_settings.get_boolean("bar-layout-edit-mode")) {
+                _hidden_for_fullscreen = fs;
+                set_layer(this, GtkLayerShell.Layer.OVERLAY);
+                present();
+                return;
+            }
             if (fs == _hidden_for_fullscreen) return;
             _hidden_for_fullscreen = fs;
             if (fs) {
@@ -506,7 +541,11 @@ namespace Singularity {
 
         private void update_visibility() {
             bool fusion = _settings.get_boolean("panel-fusion");
-            if (fusion && !is_greeter_mode) {
+            bool editing = !is_greeter_mode && _settings.get_boolean("bar-layout-edit-mode");
+            if (_hidden_for_fullscreen && !editing) {
+                set_exclusive_zone(this, 0);
+                set_layer(this, GtkLayerShell.Layer.BACKGROUND);
+            } else if (fusion && !is_greeter_mode && !editing) {
                 set_exclusive_zone(this, 0);
                 set_layer(this, GtkLayerShell.Layer.BACKGROUND);
                 set_anchor(this, GtkLayerShell.Edge.TOP, false);
@@ -553,6 +592,66 @@ namespace Singularity {
                 main_box.remove_css_class("overview-mode");
             }
         }
+
+        private void reload_bar_layout() {
+            string[] item_ids = {
+                "overview", "workspaces", "app-title", "global-menu",
+                "system", "notifications", "clock"
+            };
+            bar_layout = new BarLayout(
+                item_ids,
+                { "overview", "workspaces", "app-title", "global-menu" },
+                {},
+                { "system", "notifications", "clock" },
+                _settings.get_strv("panel-layout-left"),
+                _settings.get_strv("panel-layout-center"),
+                _settings.get_strv("panel-layout-right")
+            );
+            apply_bar_layout();
+        }
+
+        private void apply_bar_layout() {
+            if (bar_layout == null) return;
+            layout_editor?.detach_controls();
+            foreach (Gtk.Widget widget in layout_items.values) detach_layout_item(widget);
+            append_section(left_box, bar_layout.get_items(BarSection.LEFT));
+            append_section(center_box, bar_layout.get_items(BarSection.CENTER));
+            append_section(right_box, bar_layout.get_items(BarSection.RIGHT));
+            layout_editor?.sync();
+        }
+
+        private void save_bar_layout() {
+            if (bar_layout == null) return;
+            saving_bar_layout = true;
+            _settings.delay();
+            _settings.set_value(
+                "panel-layout-left",
+                new GLib.Variant.strv(bar_layout.get_items(BarSection.LEFT))
+            );
+            _settings.set_value(
+                "panel-layout-center",
+                new GLib.Variant.strv(bar_layout.get_items(BarSection.CENTER))
+            );
+            _settings.set_value(
+                "panel-layout-right",
+                new GLib.Variant.strv(bar_layout.get_items(BarSection.RIGHT))
+            );
+            _settings.apply();
+            saving_bar_layout = false;
+            apply_bar_layout();
+        }
+
+        private void append_section(Box section, string[] item_ids) {
+            foreach (string item_id in item_ids) {
+                Gtk.Widget? widget = layout_items[item_id];
+                if (widget != null) section.append(widget);
+            }
+        }
+
+        private void detach_layout_item(Gtk.Widget widget) {
+            if (widget.parent is Box) ((Box) widget.parent).remove(widget);
+        }
+
         /**
          * Adds a widget to the panel for plugins.
          */
@@ -563,7 +662,7 @@ namespace Singularity {
             } else if (alignment == Align.END) {
                 right_box.prepend(widget);
             } else {
-                left_box.append(widget);
+                center_box.append(widget);
             }
         }
 
@@ -573,9 +672,9 @@ namespace Singularity {
 
         public void remove_widget(Widget widget) {
              if (widget.parent == left_box) left_box.remove(widget);
+             else if (widget.parent == center_box) center_box.remove(widget);
              else if (widget.parent == right_box) right_box.remove(widget);
              else if (widget.parent == clock_suffix_box) clock_suffix_box.remove(widget);
-             else if (widget.parent == main_box) main_box.remove(widget);
         }
 
         public void set_workspace_btn_visible(bool visible) {

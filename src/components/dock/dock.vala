@@ -6,11 +6,19 @@ namespace Singularity {
 
     public class Dock : Gtk.Window, Singularity.DebugInspectable {
         private Box dock_box;
-        private Box main_container;
+        private Overlay main_container;
+        private Box layout_surface;
         private Box start_area;
+        private ScrolledWindow start_viewport;
         private Box end_area;
+        private ScrolledWindow center_viewport;
+        private ScrolledWindow end_viewport;
         private DockResourcesArea resources_area;
         private Box center_wrapper;
+        private HashMap<string, Gtk.Widget> layout_items = new HashMap<string, Gtk.Widget>();
+        private BarLayout? bar_layout;
+        private BarLayoutEditController? layout_editor;
+        private bool saving_bar_layout = false;
         private AppSystem app_system;
         private string visibility_mode;
         private string dock_style;
@@ -18,6 +26,7 @@ namespace Singularity {
         private bool panel_fusion;
         private Label clock_label;
         private uint _refresh_timeout_id = 0;
+        private bool _app_items_dirty = false;
         private HashMap<string, Gtk.Widget> _item_cache = new HashMap<string, Gtk.Widget>();
         private int _cached_icon_size = -1;
         private bool _cached_extended = false;
@@ -110,10 +119,16 @@ namespace Singularity {
             var dock_overlay = new Overlay();
             dock_overlay.overflow = Overflow.VISIBLE;
             set_child(dock_overlay);
-            main_container = new Box(Orientation.HORIZONTAL, 0);
+            main_container = new Overlay();
             main_container.add_css_class("dock-container");
             main_container.overflow = Overflow.VISIBLE;
             dock_overlay.set_child(main_container);
+
+            layout_surface = new Box(Orientation.HORIZONTAL, 0);
+            layout_surface.hexpand = true;
+            layout_surface.vexpand = true;
+            layout_surface.can_target = false;
+            main_container.set_child(layout_surface);
 
             _corner_bl = create_corner_hint("corner-hint-bl");
             _corner_bl.can_target = false;
@@ -136,17 +151,22 @@ namespace Singularity {
             if (is_primary) main_container.opacity = 0;
 
             start_area = new Box(Orientation.HORIZONTAL, 5);
-            start_area.add_css_class("dock-start-area");
-            main_container.append(start_area);
+            start_viewport = create_layout_viewport(start_area, "dock-start-area");
+            start_viewport.add_css_class("dock-layout-start");
+            start_viewport.halign = Align.START;
+            start_viewport.valign = Align.CENTER;
+            main_container.add_overlay(start_viewport);
 
-            center_wrapper = new Box(Orientation.HORIZONTAL, 0);
-            center_wrapper.hexpand = true;
-            main_container.append(center_wrapper);
+            center_wrapper = new Box(Orientation.HORIZONTAL, 5);
+            center_viewport = create_layout_viewport(center_wrapper, "dock-layout-center");
+            center_viewport.halign = Align.CENTER;
+            center_viewport.valign = Align.CENTER;
+            main_container.add_overlay(center_viewport);
 
             dock_box = new Box(Orientation.HORIZONTAL, 5);
-            dock_box.add_css_class("dock-box");
             dock_box.halign = Align.CENTER;
             center_wrapper.append(dock_box);
+            layout_items["applications"] = dock_box;
 
             // Resources (files / folders / links dropped on the
             // dock) are rendered as ordinary dock items inside dock_box via
@@ -155,8 +175,48 @@ namespace Singularity {
             resources_area.changed.connect(schedule_refresh);
 
             end_area = new Box(Orientation.HORIZONTAL, 5);
-            end_area.add_css_class("dock-end-area");
-            main_container.append(end_area);
+            end_viewport = create_layout_viewport(end_area, "dock-end-area");
+            end_viewport.add_css_class("dock-layout-end");
+            end_viewport.halign = Align.END;
+            end_viewport.valign = Align.CENTER;
+            main_container.add_overlay(end_viewport);
+
+            start_viewport.hadjustment.changed.connect(align_layout_viewports);
+            start_viewport.vadjustment.changed.connect(align_layout_viewports);
+            start_viewport.hadjustment.value_changed.connect(align_layout_viewports);
+            start_viewport.vadjustment.value_changed.connect(align_layout_viewports);
+            center_viewport.hadjustment.changed.connect(align_layout_viewports);
+            center_viewport.vadjustment.changed.connect(align_layout_viewports);
+            center_viewport.hadjustment.value_changed.connect(align_layout_viewports);
+            center_viewport.vadjustment.value_changed.connect(align_layout_viewports);
+            end_viewport.hadjustment.changed.connect(align_layout_viewports);
+            end_viewport.vadjustment.changed.connect(align_layout_viewports);
+            end_viewport.hadjustment.value_changed.connect(align_layout_viewports);
+            end_viewport.vadjustment.value_changed.connect(align_layout_viewports);
+
+            layout_editor = new BarLayoutEditController(
+                _settings,
+                "dock",
+                start_area,
+                center_wrapper,
+                end_area,
+                layout_items,
+                { "overview", "applications", "system", "clock" },
+                { _("Overview"), _("Applications"), _("System Status"), _("Clock") }
+            );
+            layout_editor.move_requested.connect((item_id, section, index) => {
+                if (bar_layout != null && bar_layout.move(item_id, section, index)) save_bar_layout();
+            });
+            layout_editor.edit_mode_changed.connect(() => {
+                update_layout_viewports();
+                update_visibility_mode();
+                update_autohide_state();
+                if (!_settings.get_boolean("bar-layout-edit-mode") && _hidden_for_fullscreen) {
+                    set_layer(this, GtkLayerShell.Layer.BACKGROUND);
+                }
+                update_input_region();
+            });
+            update_layout_viewports();
 
             add_css_class("dock-window");
 
@@ -164,6 +224,7 @@ namespace Singularity {
                 if (key == "pinned-apps" || key == "dock-extended-mode" || key == "dock-icon-size") {
                     schedule_refresh();
                     if (panel_fusion) update_fusion();
+                    if (key == "dock-icon-size") update_layout_surface_size();
                 }
                 if (key == "dock-visibility-mode") update_visibility_mode();
                 if (key == "dock-position") {
@@ -175,6 +236,9 @@ namespace Singularity {
                 }
                 if (key == "dock-style") { update_style(); update_fusion(); schedule_refresh(); }
                 if (key == "dock-alignment") update_alignment();
+                if (key == "dock-layout-left" || key == "dock-layout-center" || key == "dock-layout-right") {
+                    if (!saving_bar_layout) reload_bar_layout();
+                }
                 if (key == "panel-fusion") {
                     update_fusion();
                     ((Gtk.Widget) this).hide();
@@ -205,11 +269,7 @@ namespace Singularity {
             });
 
             _sig_apps_changed = app_system.apps_changed.connect(() => {
-                // The app list is populated by a deferred idle scan, so a pin/run item
-                // built before the scan resolved with a null AppInfo (raw id, no launch)
-                // and the cache froze it. Drop the app-backed entries so the refresh
-                // rebuilds them once the apps resolve (#81).
-                invalidate_app_items();
+                _app_items_dirty = true;
                 schedule_refresh();
             });
             _sig_running_apps_changed = app_system.running_apps_changed.connect(schedule_refresh);
@@ -386,7 +446,15 @@ namespace Singularity {
             set_anchor(this, GtkLayerShell.Edge.TOP, false);
 
             dock_box.orientation = Orientation.HORIZONTAL;
-            main_container.orientation = Orientation.HORIZONTAL;
+            start_area.orientation = Orientation.HORIZONTAL;
+            start_viewport.halign = Align.START;
+            start_viewport.valign = Align.CENTER;
+            center_wrapper.orientation = Orientation.HORIZONTAL;
+            center_viewport.halign = Align.CENTER;
+            center_viewport.valign = Align.CENTER;
+            end_area.orientation = Orientation.HORIZONTAL;
+            end_viewport.halign = Align.END;
+            end_viewport.valign = Align.CENTER;
 
             // Always anchor along the perpendicular axis as well, even in
             // floating mode. With a single-edge anchor labwc keeps the
@@ -401,17 +469,112 @@ namespace Singularity {
                 set_anchor(this, GtkLayerShell.Edge.TOP, true);
                 set_anchor(this, GtkLayerShell.Edge.BOTTOM, true);
                 dock_box.orientation = Orientation.VERTICAL;
-                main_container.orientation = Orientation.VERTICAL;
+                start_area.orientation = Orientation.VERTICAL;
+                start_viewport.halign = Align.CENTER;
+                start_viewport.valign = Align.START;
+                center_wrapper.orientation = Orientation.VERTICAL;
+                center_viewport.halign = Align.CENTER;
+                center_viewport.valign = Align.CENTER;
+                end_area.orientation = Orientation.VERTICAL;
+                end_viewport.halign = Align.CENTER;
+                end_viewport.valign = Align.END;
             } else if (pos == "right") {
                 set_anchor(this, GtkLayerShell.Edge.RIGHT, true);
                 set_anchor(this, GtkLayerShell.Edge.TOP, true);
                 set_anchor(this, GtkLayerShell.Edge.BOTTOM, true);
                 dock_box.orientation = Orientation.VERTICAL;
-                main_container.orientation = Orientation.VERTICAL;
+                start_area.orientation = Orientation.VERTICAL;
+                start_viewport.halign = Align.CENTER;
+                start_viewport.valign = Align.START;
+                center_wrapper.orientation = Orientation.VERTICAL;
+                center_viewport.halign = Align.CENTER;
+                center_viewport.valign = Align.CENTER;
+                end_area.orientation = Orientation.VERTICAL;
+                end_viewport.halign = Align.CENTER;
+                end_viewport.valign = Align.END;
             } else {
                 set_anchor(this, GtkLayerShell.Edge.BOTTOM, true);
                 set_anchor(this, GtkLayerShell.Edge.LEFT, true);
                 set_anchor(this, GtkLayerShell.Edge.RIGHT, true);
+            }
+            update_layout_surface_size();
+            update_layout_viewports();
+        }
+
+        private void update_layout_surface_size() {
+            int body_extent = _settings.get_int("dock-icon-size") + 20;
+            if (is_dock_vertical()) {
+                layout_surface.set_size_request(body_extent, -1);
+            } else {
+                layout_surface.set_size_request(-1, body_extent);
+            }
+        }
+
+        private ScrolledWindow create_layout_viewport(Box section, string css_class) {
+            var viewport = new ScrolledWindow();
+            viewport.add_css_class("dock-layout-viewport");
+            viewport.add_css_class("dock-box");
+            viewport.add_css_class(css_class);
+            viewport.focusable = false;
+            viewport.has_frame = false;
+            viewport.set_policy(PolicyType.NEVER, PolicyType.NEVER);
+            viewport.kinetic_scrolling = false;
+            viewport.overlay_scrolling = false;
+            viewport.propagate_natural_width = true;
+            viewport.propagate_natural_height = true;
+            viewport.set_child(section);
+            return viewport;
+        }
+
+        private void update_layout_viewports() {
+            bool editing = _settings.get_boolean("bar-layout-edit-mode");
+            bool vertical = is_dock_vertical();
+            int span = 0;
+            var monitor = get_target_monitor() ?? find_shell_monitor();
+            if (monitor != null) {
+                var geometry = monitor.get_geometry();
+                span = vertical ? geometry.height : geometry.width;
+            }
+            if (span < 1) span = vertical ? get_height() : get_width();
+
+            int limit = editing && span > 0 ? int.max(48, span / 3 - 24) : -1;
+            ScrolledWindow[] viewports = { start_viewport, center_viewport, end_viewport };
+            foreach (ScrolledWindow viewport in viewports) {
+                viewport.max_content_width = vertical ? -1 : limit;
+                viewport.max_content_height = vertical ? limit : -1;
+                if (editing) viewport.add_css_class("editing");
+                else viewport.remove_css_class("editing");
+            }
+
+            start_viewport.visible = start_area.visible;
+            center_viewport.visible = center_wrapper.visible;
+            end_viewport.visible = end_area.visible;
+            align_layout_viewports();
+        }
+
+        private void align_layout_viewports() {
+            bool editing = _settings.get_boolean("bar-layout-edit-mode");
+            bool vertical = is_dock_vertical();
+            Gtk.Adjustment start_adjustment = vertical
+                ? start_viewport.vadjustment : start_viewport.hadjustment;
+            Gtk.Adjustment center_adjustment = vertical
+                ? center_viewport.vadjustment : center_viewport.hadjustment;
+            Gtk.Adjustment end_adjustment = vertical
+                ? end_viewport.vadjustment : end_viewport.hadjustment;
+
+            start_adjustment.value = start_adjustment.lower;
+            if (editing) {
+                center_adjustment.value = double.max(
+                    center_adjustment.lower,
+                    center_adjustment.upper - center_adjustment.page_size
+                );
+                end_adjustment.value = double.max(
+                    end_adjustment.lower,
+                    end_adjustment.upper - end_adjustment.page_size
+                );
+            } else {
+                center_adjustment.value = center_adjustment.lower;
+                end_adjustment.value = end_adjustment.lower;
             }
         }
 
@@ -428,12 +591,8 @@ namespace Singularity {
                 add_css_class("dock-floating-mode");
                 remove_css_class("dock-panel-mode");
             }
-            // In both modes the surface spans the full perpendicular axis
-            // (set in update_position()) and center_wrapper expands to fill,
-            // so dock_box stays centered via halign. Setting hexpand=false
-            // in floating mode left dock_box packed to the start edge - the
-            // famous "dock stuck on the left" bug.
-            center_wrapper.hexpand = true;
+            center_viewport.halign = Align.CENTER;
+            center_viewport.valign = Align.CENTER;
             update_position();
             update_gap();
             this.set_size_request(-1, -1);
@@ -442,57 +601,136 @@ namespace Singularity {
 
         private void update_alignment() {
             dock_alignment = _settings.get_string("dock-alignment");
+            reload_bar_layout();
+        }
 
-            if (dock_alignment == "start") {
-                dock_box.halign = Align.START;
-                center_wrapper.halign = Align.START;
-            } else if (dock_alignment == "end") {
-                dock_box.halign = Align.END;
-                center_wrapper.halign = Align.END;
-            } else {
-                dock_box.halign = Align.CENTER;
-                center_wrapper.halign = Align.CENTER;
+        private bool has_custom_bar_layout() {
+            return _settings.get_user_value("dock-layout-left") != null
+                || _settings.get_user_value("dock-layout-center") != null
+                || _settings.get_user_value("dock-layout-right") != null;
+        }
+
+        private void reload_bar_layout() {
+            string[] left = _settings.get_strv("dock-layout-left");
+            string[] center = _settings.get_strv("dock-layout-center");
+            string[] right = _settings.get_strv("dock-layout-right");
+
+            if (!has_custom_bar_layout()) {
+                if (dock_alignment == "start") {
+                    left = { "overview", "applications" };
+                    center = {};
+                    right = { "system", "clock" };
+                } else if (dock_alignment == "end") {
+                    left = { "overview" };
+                    center = {};
+                    right = { "applications", "system", "clock" };
+                }
+            }
+
+            bar_layout = new BarLayout(
+                { "overview", "applications", "system", "clock" },
+                { "overview" },
+                { "applications" },
+                { "system", "clock" },
+                left,
+                center,
+                right
+            );
+            apply_bar_layout();
+        }
+
+        private void apply_bar_layout() {
+            if (bar_layout == null) return;
+            layout_editor?.detach_controls();
+            foreach (Gtk.Widget widget in layout_items.values) detach_layout_item(widget);
+            append_layout_section(start_area, bar_layout.get_items(BarSection.LEFT));
+            append_layout_section(center_wrapper, bar_layout.get_items(BarSection.CENTER));
+            append_layout_section(end_area, bar_layout.get_items(BarSection.RIGHT));
+            layout_editor?.sync();
+            update_layout_viewports();
+            queue_resize();
+        }
+
+        private void save_bar_layout() {
+            if (bar_layout == null) return;
+            saving_bar_layout = true;
+            _settings.delay();
+            _settings.set_value(
+                "dock-layout-left",
+                new GLib.Variant.strv(bar_layout.get_items(BarSection.LEFT))
+            );
+            _settings.set_value(
+                "dock-layout-center",
+                new GLib.Variant.strv(bar_layout.get_items(BarSection.CENTER))
+            );
+            _settings.set_value(
+                "dock-layout-right",
+                new GLib.Variant.strv(bar_layout.get_items(BarSection.RIGHT))
+            );
+            _settings.apply();
+            saving_bar_layout = false;
+            apply_bar_layout();
+        }
+
+        private void append_layout_section(Box section, string[] item_ids) {
+            foreach (string item_id in item_ids) {
+                Gtk.Widget? widget = layout_items[item_id];
+                if (widget != null) section.append(widget);
             }
         }
 
-        // When a media/suffix widget expands, freeze the dock_box leading edge
+        private void detach_layout_item(Gtk.Widget widget) {
+            if (widget.parent is Box) ((Box) widget.parent).remove(widget);
+        }
+
+        private void set_body_class(string css_class, bool enabled) {
+            Gtk.Widget[] bodies = { start_viewport, center_viewport, end_viewport };
+            foreach (Gtk.Widget body in bodies) {
+                if (enabled) body.add_css_class(css_class);
+                else body.remove_css_class(css_class);
+            }
+        }
+
+        private void remove_dynamic_layout_item(string item_id) {
+            Gtk.Widget? widget = layout_items[item_id];
+            if (widget == null) return;
+            detach_layout_item(widget);
+            layout_items.unset(item_id);
+        }
+
+        private bool applications_centered() {
+            return bar_layout != null
+                && bar_layout.get_section("applications") == BarSection.CENTER;
+        }
+
+        // When a media/suffix widget expands, freeze the center body leading edge
         // so the hovered icon stays put instead of the whole centered dock
         // sliding sideways (issue #113). Only the bottom dock recenters along
         // the horizontal axis via halign; side docks are left untouched.
         private void pin_expansion() {
             _expanded_count++;
-            if (_dock_pinned || is_dock_vertical() || dock_alignment != "center") return;
+            if (_dock_pinned || is_dock_vertical() || !applications_centered()) return;
             Gtk.Allocation alloc;
-            dock_box.get_allocation(out alloc);
+            center_viewport.get_allocation(out alloc);
             if (alloc.x <= 0) return;
-            dock_box.margin_start = alloc.x;
-            dock_box.halign = Align.START;
+            center_viewport.margin_start = alloc.x;
+            center_viewport.halign = Align.START;
             _dock_pinned = true;
         }
 
         private void unpin_expansion() {
             if (_expanded_count > 0) _expanded_count--;
             if (_expanded_count > 0 || !_dock_pinned) return;
-            dock_box.margin_start = 0;
-            dock_box.halign = Align.CENTER;
+            center_viewport.margin_start = 0;
+            center_viewport.halign = Align.CENTER;
             _dock_pinned = false;
         }
 
         private void update_fusion() {
             panel_fusion = _settings.get_boolean("panel-fusion");
-
-            Widget? child = start_area.get_first_child();
-            while (child != null) {
-                Widget next = child.get_next_sibling();
-                start_area.remove(child);
-                child = next;
-            }
-            child = end_area.get_first_child();
-            while (child != null) {
-                Widget next = child.get_next_sibling();
-                end_area.remove(child);
-                child = next;
-            }
+            remove_dynamic_layout_item("overview");
+            remove_dynamic_layout_item("system");
+            remove_dynamic_layout_item("clock");
 
             if (panel_fusion) {
                 var start_btn = new Button();
@@ -512,7 +750,7 @@ namespace Singularity {
                 start_btn.clicked.connect(() => {
                     activities_clicked();
                 });
-                start_area.append(start_btn);
+                layout_items["overview"] = start_btn;
 
                 int sys_icon_size = icon_size > 22 ? 22 : icon_size;
 
@@ -538,14 +776,14 @@ namespace Singularity {
                 audio.state_changed.connect(() => { audio_icon.icon_name = audio.icon_name; });
                 power.state_changed.connect(() => { bat_icon.icon_name = power.icon_name; });
 
-                end_area.append(sys_box);
+                layout_items["system"] = sys_box;
 
                 var clock_box = new Box(Orientation.HORIZONTAL, 4);
                 clock_box.add_css_class("dock-clock-box");
                 clock_label = new Label("00:00");
                 clock_label.add_css_class("dock-clock");
                 clock_box.append(clock_label);
-                end_area.append(clock_box);
+                layout_items["clock"] = clock_box;
 
                 var gesture = new GestureClick();
                 gesture.released.connect(() => {
@@ -553,6 +791,7 @@ namespace Singularity {
                 });
                 sys_box.add_controller(gesture);
             }
+            reload_bar_layout();
         }
 
         public signal void activities_clicked();
@@ -573,6 +812,15 @@ namespace Singularity {
         }
 
         private void update_autohide_state() {
+            if (_settings.get_boolean("bar-layout-edit-mode")) {
+                if (_hidden) {
+                    _hidden = false;
+                    animate_dock(false);
+                }
+                present();
+                _set_reveal_barrier_active(false);
+                return;
+            }
             if (!_enabled) return;
             if (visibility_mode == "overview-only" && !_overview_active) return;
             if (_last_dimension <= 10) return;
@@ -748,10 +996,10 @@ namespace Singularity {
             int off = -(_last_dimension - 4);
 
             if (hide) {
-                dock_box.remove_css_class("dock-reveal-offset");
+                set_body_class("dock-reveal-offset", false);
                 update_dock_reservation();
                 if (edge == GtkLayerShell.Edge.BOTTOM) {
-                    dock_box.add_css_class("dock-hiding");
+                    set_body_class("dock-hiding", true);
                     _fade_timer_id = GLib.Timeout.add(260, () => {
                         _current_margin = off;
                         set_margin(this, edge, off);
@@ -762,7 +1010,7 @@ namespace Singularity {
                     start_slide(edge, _current_margin, off);
                 }
             } else {
-                dock_box.remove_css_class("dock-hiding");
+                set_body_class("dock-hiding", false);
                 // Revealing means we are not fullscreen-hidden; make sure the
                 // surface is back on the OVERLAY layer. After leaving a
                 // fullscreen video the dock could be left on BACKGROUND and
@@ -786,7 +1034,7 @@ namespace Singularity {
                 // CSS transform transition animates it into view. The frame clock
                 // is live right after the remap (and we pulse it), so the content
                 // transform is presented reliably without moving the surface.
-                dock_box.add_css_class("dock-reveal-offset");
+                set_body_class("dock-reveal-offset", true);
                 ((Gtk.Widget) this).hide();
                 present();
                 start_content_slide();
@@ -798,7 +1046,7 @@ namespace Singularity {
             // Drop the offset a couple of frames after the remap so the transform
             // transition has an applied start state to animate from.
             _fade_timer_id = GLib.Timeout.add(32, () => {
-                dock_box.remove_css_class("dock-reveal-offset");
+                set_body_class("dock-reveal-offset", false);
                 _fade_timer_id = 0;
                 GLib.Timeout.add(260, () => {
                     update_input_region();
@@ -884,6 +1132,12 @@ namespace Singularity {
         }
 
         private void update_visibility_mode() {
+            if (_settings.get_boolean("bar-layout-edit-mode")) {
+                set_layer(this, GtkLayerShell.Layer.OVERLAY);
+                present();
+                queue_resize();
+                return;
+            }
             if (!_enabled) {
                 ((Gtk.Widget) this).hide();
                 set_exclusive_zone(this, 0);
@@ -935,6 +1189,12 @@ namespace Singularity {
 
         private void update_fullscreen_mode() {
             bool fs = is_any_window_fullscreen_on_my_monitor();
+            if (_settings.get_boolean("bar-layout-edit-mode")) {
+                _hidden_for_fullscreen = fs;
+                set_layer(this, GtkLayerShell.Layer.OVERLAY);
+                present();
+                return;
+            }
             if (fs == _hidden_for_fullscreen) return;
             _hidden_for_fullscreen = fs;
             if (fs) {
@@ -955,11 +1215,7 @@ namespace Singularity {
 
         public void set_overview_mode(bool visible) {
             _overview_active = visible;
-            if (visible) {
-                dock_box.add_css_class("transparent");
-            } else {
-                dock_box.remove_css_class("transparent");
-            }
+            set_body_class("transparent", visible);
 
             if (visibility_mode == "overview-only") {
                 if (visible) present();
@@ -1252,6 +1508,11 @@ namespace Singularity {
             int icon_size = _settings.get_int("dock-icon-size");
             bool extended = _settings.get_boolean("dock-extended-mode") && (dock_style == "panel");
 
+            if (_app_items_dirty) {
+                _app_items_dirty = false;
+                invalidate_app_items();
+            }
+
             // Full cache reset when structure-affecting _settings change
             if (icon_size != _cached_icon_size || extended != _cached_extended) {
                 _cached_icon_size = icon_size;
@@ -1265,8 +1526,8 @@ namespace Singularity {
                 }
                 _expanded_count = 0;
                 if (_dock_pinned) {
-                    dock_box.margin_start = 0;
-                    dock_box.halign = Align.CENTER;
+                    center_viewport.margin_start = 0;
+                    center_viewport.halign = Align.CENTER;
                     _dock_pinned = false;
                 }
             }
@@ -2518,6 +2779,13 @@ namespace Singularity {
 
             drop_target.drop.connect((value, x, y) => {
                 string app_id = (string)value;
+                if (app_id.has_prefix("dock:")) {
+                    if (placeholder != null) {
+                        dock_box.remove(placeholder);
+                        placeholder = null;
+                    }
+                    return false;
+                }
                 int uni_index = unified_index_at_placeholder();
 
                 // Reordering an existing resource item.
@@ -2718,15 +2986,6 @@ namespace Singularity {
             return null;
         }
 
-        private bool has_visible_child(Widget widget) {
-            Widget? child = widget.get_first_child();
-            while (child != null) {
-                if (child.get_visible()) return true;
-                child = child.get_next_sibling();
-            }
-            return false;
-        }
-
         private void add_input_bounds(Cairo.Region region, Widget widget) {
             Graphene.Rect bounds;
             if (!widget.compute_bounds(this, out bounds)) return;
@@ -2749,9 +3008,15 @@ namespace Singularity {
                     x = 0, y = 0, width = get_width(), height = get_height()
                 });
             } else {
-                add_input_bounds(region, dock_box);
-                if (has_visible_child(start_area)) add_input_bounds(region, start_area);
-                if (has_visible_child(end_area)) add_input_bounds(region, end_area);
+                if (_settings.get_boolean("bar-layout-edit-mode")) {
+                    add_input_bounds(region, start_viewport);
+                    add_input_bounds(region, center_viewport);
+                    add_input_bounds(region, end_viewport);
+                } else {
+                    foreach (Gtk.Widget widget in layout_items.values) {
+                        if (widget.visible) add_input_bounds(region, widget);
+                    }
+                }
             }
             surface.set_input_region(region);
         }
