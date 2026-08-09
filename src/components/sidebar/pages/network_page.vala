@@ -14,7 +14,9 @@ namespace Singularity {
             var wifi_group = new PreferencesGroup(_("Wi-Fi"));
             var toggle_row = new SwitchRow(_("Wi-Fi"), null, network.wifi_enabled);
             toggle_row.switch_btn.notify["active"].connect(() => {
-                network.toggle_wifi();
+                if (toggle_row.switch_btn.active != network.wifi_enabled) {
+                    network.toggle_wifi();
+                }
             });
             wifi_group.add_row(toggle_row);
             var network_rows = new List<Widget>();
