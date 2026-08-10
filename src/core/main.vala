@@ -32,6 +32,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     }
 
     private GLib.Settings settings;
+    private GLib.Settings? interface_settings = null;
     private List<Singularity.Background> backgrounds = new List<Singularity.Background>();
     private Singularity.Overview? overview = null;
     private Singularity.AppMenu? app_menu = null;
@@ -79,6 +80,21 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         Singularity.Style.StyleManager.get_default().load_theme();
         settings = new GLib.Settings("dev.sinty.desktop");
         settings.changed["bar-layout-edit-mode"].connect(sync_bar_layout_edit_mode);
+        var settings_source = GLib.SettingsSchemaSource.get_default();
+        if (settings_source != null
+                && settings_source.lookup("org.gnome.desktop.interface", true) != null) {
+            interface_settings = new GLib.Settings("org.gnome.desktop.interface");
+            interface_settings.changed.connect((key) => {
+                if (key == "cursor-size") {
+                    apply_cursor_theme();
+                    apply_x_font_settings();
+                } else if (key == "font-antialiasing" || key == "font-hinting"
+                        || key == "font-rgba-order" || key == "font-name"
+                        || key == "text-scaling-factor") {
+                    apply_x_font_settings();
+                }
+            });
+        }
 
         // Qt exports its global menu through the X11 registrar path.
         if (settings.get_boolean("global-menu-enabled")) {
@@ -146,9 +162,12 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
 
         apply_icon_theme();
         settings.changed["icon-theme"].connect(apply_icon_theme);
-        apply_cursor_theme();
-        settings.changed["cursor-theme"].connect(apply_cursor_theme);
         apply_x_font_settings();
+        apply_cursor_theme();
+        settings.changed["cursor-theme"].connect(() => {
+            apply_cursor_theme();
+            apply_x_font_settings();
+        });
         Singularity.AppSystem.get_default();
         // Launch the user's autostart entries once the session has settled
         // (bus, portals); nothing else in the shell did this before (#170).
@@ -1382,18 +1401,134 @@ window.inactive.shadow.color: %s
     }
 
     private void apply_x_font_settings() {
-        if (GLib.Environment.get_variable("DISPLAY") == null) return;
-        string res = "Xft.antialias:\t1\n"
-            + "Xft.hinting:\t1\n"
-            + "Xft.hintstyle:\thintslight\n"
-            + "Xft.rgba:\trgb\n"
-            + "Xft.lcdfilter:\tlcddefault\n";
+        string antialias = "grayscale";
+        string hinting = "slight";
+        string rgba_order = "rgb";
+        string font_name = "Sans 10";
+        double text_scale = 1.0;
+        int cursor_size = 24;
+
+        var src = GLib.SettingsSchemaSource.get_default();
+        if (src != null && src.lookup("org.gnome.desktop.interface", true) != null) {
+            var iface = new GLib.Settings("org.gnome.desktop.interface");
+            var schema = iface.settings_schema;
+            if (schema.has_key("font-antialiasing"))
+                antialias = iface.get_string("font-antialiasing");
+            if (schema.has_key("font-hinting"))
+                hinting = iface.get_string("font-hinting");
+            if (schema.has_key("font-rgba-order"))
+                rgba_order = iface.get_string("font-rgba-order");
+            if (schema.has_key("font-name"))
+                font_name = iface.get_string("font-name");
+            if (schema.has_key("text-scaling-factor"))
+                text_scale = iface.get_double("text-scaling-factor");
+            if (schema.has_key("cursor-size"))
+                cursor_size = iface.get_int("cursor-size");
+        }
+
+        if (text_scale <= 0.0) text_scale = 1.0;
+        int antialias_value = antialias == "none" ? 0 : 1;
+        int hinting_value = hinting == "none" ? 0 : 1;
+        string hintstyle = "hint" + hinting;
+        if (rgba_order == "rgba") rgba_order = "rgb";
+        string rgba = antialias == "rgba" ? rgba_order : "none";
+        int dpi = (int) (96.0 * text_scale + 0.5);
+        int xsettings_dpi = dpi * 1024;
+
+        string res = "Xft.antialias:\t%d\n".printf(antialias_value)
+            + "Xft.hinting:\t%d\n".printf(hinting_value)
+            + "Xft.hintstyle:\t%s\n".printf(hintstyle)
+            + "Xft.rgba:\t%s\n".printf(rgba)
+            + "Xft.lcdfilter:\tlcddefault\n"
+            + "Xft.dpi:\t%d\n".printf(dpi);
+
+        write_xwayland_xinitrc(res, settings.get_string("cursor-theme"), cursor_size);
+
+        if (GLib.Environment.get_variable("DISPLAY") != null) {
+            try {
+                var xrdb = new GLib.Subprocess(GLib.SubprocessFlags.STDIN_PIPE
+                    | GLib.SubprocessFlags.STDERR_SILENCE, "xrdb", "-merge");
+                xrdb.communicate_utf8_async(res, null, null);
+            } catch (GLib.Error e) {
+                warning("x font settings: xrdb merge failed: %s", e.message);
+            }
+        }
+
         try {
-            var xrdb = new GLib.Subprocess(GLib.SubprocessFlags.STDIN_PIPE
-                | GLib.SubprocessFlags.STDERR_SILENCE, "xrdb", "-merge");
-            xrdb.communicate_utf8_async(res, null, null);
+            string path = GLib.Path.build_filename(GLib.Environment.get_home_dir(), ".xsettingsd");
+            string body = "";
+            string existing = "";
+            if (GLib.FileUtils.test(path, FileTest.EXISTS)
+                    && GLib.FileUtils.get_contents(path, out existing)) {
+                foreach (string line in existing.split("\n")) {
+                    string clean = line.strip();
+                    if (clean == "" || clean.has_prefix("Gtk/FontName")
+                            || clean.has_prefix("Xft/Antialias")
+                            || clean.has_prefix("Xft/Hinting")
+                            || clean.has_prefix("Xft/HintStyle")
+                            || clean.has_prefix("Xft/RGBA")
+                            || clean.has_prefix("Xft/Lcdfilter")
+                            || clean.has_prefix("Xft/DPI")) continue;
+                    body += line + "\n";
+                }
+            }
+            string escaped_font = font_name.replace("\\", "\\\\").replace("\"", "\\\"");
+            body += "Gtk/FontName \"%s\"\n".printf(escaped_font);
+            body += "Xft/Antialias %d\n".printf(antialias_value);
+            body += "Xft/Hinting %d\n".printf(hinting_value);
+            body += "Xft/HintStyle \"%s\"\n".printf(hintstyle);
+            body += "Xft/RGBA \"%s\"\n".printf(rgba);
+            body += "Xft/Lcdfilter \"lcddefault\"\n";
+            body += "Xft/DPI %d\n".printf(xsettings_dpi);
+            GLib.FileUtils.set_contents(path, body);
+            Process.spawn_command_line_async("/bin/sh -c 'pkill -HUP xsettingsd || xsettingsd'");
         } catch (GLib.Error e) {
-            warning("x font settings: xrdb merge failed: %s", e.message);
+            warning("x font settings: failed to update xsettingsd: %s", e.message);
+        }
+    }
+
+    private void write_xwayland_xinitrc(string font_resources, string cursor_theme, int cursor_size) {
+        const string marker_start = "# BEGIN SINGULARITY XRESOURCES";
+        const string marker_end = "# END SINGULARITY XRESOURCES";
+        try {
+            string dir = GLib.Path.build_filename(GLib.Environment.get_user_config_dir(), "labwc");
+            GLib.DirUtils.create_with_parents(dir, 0700);
+            string path = GLib.Path.build_filename(dir, "xinitrc");
+            string existing = "";
+            string body = "";
+            bool skip = false;
+            if (GLib.FileUtils.test(path, FileTest.EXISTS))
+                GLib.FileUtils.get_contents(path, out existing);
+            if (existing != "") {
+                string[] lines = existing.split("\n");
+                for (int i = 0; i < lines.length; i++) {
+                    string line = lines[i];
+                    if (line == marker_start) {
+                        skip = true;
+                        continue;
+                    }
+                    if (skip) {
+                        if (line == marker_end) skip = false;
+                        continue;
+                    }
+                    if (i + 1 < lines.length || line != "") body += line + "\n";
+                }
+            }
+            if (body.strip() == "") body = "#!/bin/sh\n";
+            string theme = cursor_theme.replace("\n", "").replace("\r", "");
+            body += marker_start;
+            body += "\n";
+            body += "xrdb -merge <<'SINGULARITY_XRESOURCES'\n";
+            body += font_resources;
+            body += "Xcursor.theme:\t%s\n".printf(theme);
+            body += "Xcursor.size:\t%d\n".printf(cursor_size);
+            body += "SINGULARITY_XRESOURCES\n";
+            body += marker_end;
+            body += "\n";
+            GLib.FileUtils.set_contents(path, body);
+            Posix.chmod(path, 0700);
+        } catch (GLib.Error e) {
+            warning("x font settings: failed to update labwc xinitrc: %s", e.message);
         }
     }
 
