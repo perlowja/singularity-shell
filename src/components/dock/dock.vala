@@ -1868,11 +1868,8 @@ namespace Singularity {
             _preview_open = true;
             _preview_app_id = app_id;
             update_autohide_state();
+            revealer.reveal_child = true;
             pop.popup();
-            GLib.Idle.add(() => {
-                if (_preview_popover == pop) revealer.reveal_child = true;
-                return GLib.Source.REMOVE;
-            });
         }
 
         /** True when the dock is on the left or right edge (vertical layout). */
@@ -2152,11 +2149,9 @@ namespace Singularity {
             string display_name = app_info != null ? app_info.get_display_name() : app_id;
             var menu = new Singularity.Widgets.ContextMenu(parent);
             menu.position = Gtk.PositionType.TOP;
-            menu.notify["visible"].connect(() => {
-                if (!menu.visible) {
-                    _menu_open = false;
-                    update_autohide_state();
-                }
+            menu.unmap.connect(() => {
+                _menu_open = false;
+                update_autohide_state();
             });
             _menu_open = true;
             update_autohide_state();
