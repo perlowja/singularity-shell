@@ -1528,7 +1528,41 @@ window.inactive.shadow.color: %s
         }
     }
 
+    private static bool appmenu_module_in_dir(string dir) {
+        string module = "libappmenu-gtk-module.so";
+        return FileUtils.test(GLib.Path.build_filename(dir, module), FileTest.EXISTS)
+            || FileUtils.test(GLib.Path.build_filename(dir, "modules", module), FileTest.EXISTS)
+            || FileUtils.test(GLib.Path.build_filename(dir, "gtk-3.0", "modules", module), FileTest.EXISTS);
+    }
+
+    private static bool appmenu_gtk_module_available() {
+        string gtk_path = GLib.Environment.get_variable("GTK_PATH") ?? "";
+        foreach (string dir in gtk_path.split(":")) {
+            if (dir != "" && appmenu_module_in_dir(dir)) return true;
+        }
+
+        string[] roots = {
+            "/usr/lib", "/usr/lib64", "/usr/local/lib", "/usr/local/lib64",
+            "/opt/local/lib", "/opt/local/lib64", "/app/lib", "/app/lib64",
+            "/run/host/usr/lib", "/run/host/usr/lib64"
+        };
+        foreach (string root in roots) {
+            if (appmenu_module_in_dir(root)) return true;
+            try {
+                var dir = GLib.Dir.open(root);
+                string? name;
+                while ((name = dir.read_name()) != null) {
+                    if (appmenu_module_in_dir(GLib.Path.build_filename(root, name))) return true;
+                }
+            } catch (GLib.FileError e) { }
+        }
+        return false;
+    }
+
     private void ensure_global_menu_support() {
+        bool gtk_menu_enabled = settings.get_boolean("global-menu-enabled")
+            && appmenu_gtk_module_available();
+
         // 1. GSettings: Tell GTK that the shell shows the menubar
         try {
             var gtk_settings = new GLib.Settings("org.gnome.desktop.interface");
@@ -1538,7 +1572,7 @@ window.inactive.shadow.color: %s
                 if (key == "gtk-shell-shows-menubar") { has_key = true; break; }
             }
             if (has_key) {
-                gtk_settings.set_boolean("gtk-shell-shows-menubar", true);
+                gtk_settings.set_boolean("gtk-shell-shows-menubar", gtk_menu_enabled);
             }
         } catch (GLib.Error e) {
             warning("Could not set GSettings for global menu: %s", e.message);
@@ -1546,17 +1580,18 @@ window.inactive.shadow.color: %s
 
         // 2. XSettings: Support for XWayland and older apps
         string xsettings_conf = GLib.Path.build_filename(GLib.Environment.get_home_dir(), ".xsettingsd");
-        string content = "Gtk/ShellShowsMenubar 1\n";
+        string content = "Gtk/ShellShowsMenubar %d\n".printf(gtk_menu_enabled ? 1 : 0);
         try {
+            string body = "";
             if (FileUtils.test(xsettings_conf, FileTest.EXISTS)) {
                 string current_content;
                 FileUtils.get_contents(xsettings_conf, out current_content);
-                if (!current_content.contains("Gtk/ShellShowsMenubar")) {
-                    FileUtils.set_contents(xsettings_conf, current_content + content);
+                foreach (string line in current_content.split("\n")) {
+                    if (line.strip() == "" || line.has_prefix("Gtk/ShellShowsMenubar")) continue;
+                    body += line + "\n";
                 }
-            } else {
-                FileUtils.set_contents(xsettings_conf, content);
             }
+            FileUtils.set_contents(xsettings_conf, body + content);
 
             Process.spawn_command_line_async("/bin/sh -c 'pkill -HUP xsettingsd || xsettingsd'");
         } catch (GLib.Error e) {
@@ -1564,13 +1599,20 @@ window.inactive.shadow.color: %s
         }
 
         // 3. Environment variables: Force apps to use the menu proxy
-        GLib.Environment.set_variable("UBUNTU_MENUPROXY", "1", true);
+        if (gtk_menu_enabled) GLib.Environment.set_variable("UBUNTU_MENUPROXY", "1", true);
+        else GLib.Environment.unset_variable("UBUNTU_MENUPROXY");
 
         string current_modules = GLib.Environment.get_variable("GTK_MODULES") ?? "";
-        if (!current_modules.contains("appmenu-gtk-module")) {
-            string new_modules = (current_modules == "") ? "appmenu-gtk-module" : current_modules + ":appmenu-gtk-module";
-            GLib.Environment.set_variable("GTK_MODULES", new_modules, true);
+        string new_modules = "";
+        foreach (string module in current_modules.split(":")) {
+            string name = module.strip();
+            if (name == "" || name == "appmenu-gtk-module") continue;
+            new_modules += (new_modules == "" ? "" : ":") + name;
         }
+        if (gtk_menu_enabled)
+            new_modules += (new_modules == "" ? "" : ":") + "appmenu-gtk-module";
+        if (new_modules == "") GLib.Environment.unset_variable("GTK_MODULES");
+        else GLib.Environment.set_variable("GTK_MODULES", new_modules, true);
     }
 
     public static int main(string[] args) {
