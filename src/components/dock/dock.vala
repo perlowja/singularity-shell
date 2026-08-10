@@ -242,6 +242,10 @@ namespace Singularity {
                 if (key == "panel-fusion") {
                     update_fusion();
                     ((Gtk.Widget) this).hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     update_visibility_mode();
                     pulse_frame_clock();
                 }
@@ -258,6 +262,10 @@ namespace Singularity {
                     _enabled = _settings.get_boolean("dock-enabled");
                     if (!_enabled) {
                         ((Gtk.Widget) this).hide();
+                        // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                        // Cast required: GtkWindow implements GtkNative, so a bare
+                        // unrealize() binds to gtk_native_unrealize, not the widget one.
+                        ((Gtk.Widget) this).unrealize();
                         set_exclusive_zone(this, 0);
                         app_system.shell_dock_height = 0;
                         _set_reveal_barrier_active(false);
@@ -928,6 +936,10 @@ namespace Singularity {
                     break;
                 case "remap":
                     hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     present();
                     queue_draw();
                     break;
@@ -1037,6 +1049,10 @@ namespace Singularity {
                 // transform is presented reliably without moving the surface.
                 set_body_class("dock-reveal-offset", true);
                 ((Gtk.Widget) this).hide();
+                // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                // Cast required: GtkWindow implements GtkNative, so a bare
+                // unrealize() binds to gtk_native_unrealize, not the widget one.
+                ((Gtk.Widget) this).unrealize();
                 present();
                 start_content_slide();
             }
@@ -1141,6 +1157,10 @@ namespace Singularity {
             }
             if (!_enabled) {
                 ((Gtk.Widget) this).hide();
+                // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                // Cast required: GtkWindow implements GtkNative, so a bare
+                // unrealize() binds to gtk_native_unrealize, not the widget one.
+                ((Gtk.Widget) this).unrealize();
                 set_exclusive_zone(this, 0);
                 app_system.shell_dock_height = 0;
                 _set_reveal_barrier_active(false);
@@ -1158,6 +1178,10 @@ namespace Singularity {
                 queue_resize();
             } else if (visibility_mode == "overview-only") {
                 hide();
+                // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                // Cast required: GtkWindow implements GtkNative, so a bare
+                // unrealize() binds to gtk_native_unrealize, not the widget one.
+                ((Gtk.Widget) this).unrealize();
                 set_exclusive_zone(this, 0);
             }
             update_autohide_state();
@@ -1208,6 +1232,10 @@ namespace Singularity {
                 // committed, so closing a focused fullscreen window left the
                 // dock buried. Remap to force a fresh buffer and present.
                 ((Gtk.Widget) this).hide();
+                // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                // Cast required: GtkWindow implements GtkNative, so a bare
+                // unrealize() binds to gtk_native_unrealize, not the widget one.
+                ((Gtk.Widget) this).unrealize();
                 present();
                 update_visibility_mode();
                 pulse_frame_clock();

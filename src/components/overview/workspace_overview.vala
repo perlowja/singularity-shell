@@ -136,6 +136,10 @@ namespace Singularity {
             update_wallpaper();
 
             hide();
+            // Drop the GdkSurface so the next open gets a fresh wl_surface.
+            // Cast required: GtkWindow implements GtkNative, so a bare
+            // unrealize() binds to gtk_native_unrealize, not the widget one.
+            ((Gtk.Widget) this).unrealize();
         }
 
         private void update_wallpaper() {
@@ -421,6 +425,10 @@ namespace Singularity {
                     opacity = 0;
                     anim_box.remove_css_class("animating-out");
                     hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     // Free all window preview textures - they'll be re-captured on next open
                     clear_overview_content();
                     hidden();
@@ -499,6 +507,10 @@ namespace Singularity {
                 opacity = target;
                 if (!stay_open) {
                     hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     clear_overview_content();
                     hidden();
                 }
@@ -518,6 +530,10 @@ namespace Singularity {
                 if (_gesture_animation == animation) _gesture_animation = null;
                 if (!stay_open) {
                     hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     clear_overview_content();
                     hidden();
                 }

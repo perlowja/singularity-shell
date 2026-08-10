@@ -159,6 +159,10 @@ namespace Singularity {
             ((Gtk.Widget)this).add_controller(key_controller);
 
             hide();
+            // Drop the GdkSurface so the next open gets a fresh wl_surface.
+            // Cast required: GtkWindow implements GtkNative, so a bare
+            // unrealize() binds to gtk_native_unrealize, not the widget one.
+            ((Gtk.Widget) this).unrealize();
         }
 
         private void apply_monitor_sizing() {
@@ -270,6 +274,10 @@ namespace Singularity {
                 menu_animation.done.connect(() => {
                     if (_is_open) return;
                     hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 });
@@ -334,6 +342,10 @@ namespace Singularity {
                 if (stay_open) search_entry.grab_focus();
                 else {
                     hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 }
@@ -354,6 +366,10 @@ namespace Singularity {
                 if (stay_open) search_entry.grab_focus();
                 else {
                     hide();
+                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
+                    // Cast required: GtkWindow implements GtkNative, so a bare
+                    // unrealize() binds to gtk_native_unrealize, not the widget one.
+                    ((Gtk.Widget) this).unrealize();
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 }

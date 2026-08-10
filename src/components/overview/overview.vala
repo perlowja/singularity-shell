@@ -334,6 +334,22 @@ namespace Singularity {
                     _anim_out_timer = 0;
                     main_box.remove_css_class("animating-out");
                     hide();
+                    // Drop the GdkSurface, do not merely unmap it.
+                    // GTK reuses one wl_surface across hide/show, and
+                    // gtk4-layer-shell builds a fresh layer surface over
+                    // it on the next open. A frame queued by the closing
+                    // animation can land after the unmap and re-attach a
+                    // live buffer; the next open then commits that stale
+                    // buffer before any configure, and the compositor
+                    // kills the client -- wl_display error 2,
+                    // layer_surface has never been configured.
+                    // unrealize() forces a fresh wl_surface next time.
+                    // Same call gtk4-layer-shell uses in its own remap.
+                    // The cast is REQUIRED: GtkWindow implements GtkNative,
+                    // so a bare unrealize() binds to gtk_native_unrealize,
+                    // an internal vfunc, not gtk_widget_unrealize. Verified
+                    // by inspecting the C valac emits for each spelling.
+                    ((Gtk.Widget) this).unrealize();
                     PreviewCache.get_default().clear();
                     hidden();
                     // The overview just freed its grid widgets, icon textures
@@ -434,6 +450,10 @@ namespace Singularity {
 
         private void finish_gesture_hide() {
             hide();
+            // Drop the GdkSurface so the next open gets a fresh wl_surface.
+            // Cast required: GtkWindow implements GtkNative, so a bare
+            // unrealize() binds to gtk_native_unrealize, not the widget one.
+            ((Gtk.Widget) this).unrealize();
             PreviewCache.get_default().clear();
             hidden();
             Singularity.trim_heap();
