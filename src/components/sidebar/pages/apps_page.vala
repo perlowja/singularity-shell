@@ -55,7 +55,7 @@ namespace Singularity.SidebarPages {
                 return false;
             });
             // Rebuild the list when software is installed or removed so it
-            // stays in sync with the overview and spotlight.
+            // stays in sync with the overview and command palette.
             AppSystem.get_default().apps_changed.connect(reload_apps);
         }
         private bool loaded = false;

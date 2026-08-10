@@ -60,7 +60,7 @@ namespace Singularity {
                         );
 
                         var home = GLib.Environment.get_home_dir();
-                        string clean_path = uri.replace("file://", "");
+                        string clean_path = file.get_path() ?? uri;
                         if (clean_path.has_prefix(home)) {
                             clean_path = "~" + clean_path.substring(home.length);
                         }

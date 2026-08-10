@@ -268,18 +268,17 @@ namespace Singularity {
             // Build the first batch synchronously (instant content), the rest
             // across idle ticks.
             build_batch(12);
+            start_widget_jobs();
             if (_build_index < _build_keys.length)
                 _build_source = GLib.Idle.add(() => {
                     build_batch(16);
+                    start_widget_jobs();
                     if (_build_index >= _build_keys.length) {
                         _build_source = 0;
-                        start_widget_jobs();
                         return GLib.Source.REMOVE;
                     }
                     return GLib.Source.CONTINUE;
                 }, GLib.Priority.DEFAULT_IDLE);
-            else
-                start_widget_jobs();
         }
 
         private class FixedCell : Gtk.Widget {
@@ -359,8 +358,8 @@ namespace Singularity {
         }
 
         private void start_widget_jobs() {
-            if (_pending_widgets.size > 0)
-                _pending_source = GLib.Idle.add(process_next_widget, GLib.Priority.LOW);
+            if (_pending_source == 0 && _pending_widgets.size > 0)
+                _pending_source = GLib.Idle.add(process_next_widget, GLib.Priority.DEFAULT_IDLE);
         }
 
         private bool process_next_widget() {

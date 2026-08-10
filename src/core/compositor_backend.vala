@@ -6,7 +6,7 @@ namespace Singularity.Compositor {
      *
      * The shell used to scatter labwc specifics (the ~/.config/labwc path, the
      * binary resolution, the "labwc -r" reload) across main.vala, the shortcut
-     * manager, the display manager and the run dialog, each doing it a little
+     * manager, the display manager and the command palette, each doing it a little
      * differently. Routing everything through this single backend keeps the rest
      * of the shell free of compositor details and is the natural seam at which a
      * different compositor could be swapped in later.

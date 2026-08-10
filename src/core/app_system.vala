@@ -116,6 +116,8 @@ namespace Singularity {
             public bool is_fullscreen;
             public bool is_minimized;
             public uint snap_type = 0; // last snap type applied by TilingManager (SNAP_* constants)
+            public bool scrolling_tiled = false;
+            public bool scrolling_floating = false;
 
             public Window(void* handle, string app_id) {
                 this.handle = handle;
@@ -177,7 +179,7 @@ namespace Singularity {
                 return Source.REMOVE;
             });
             // Re-scan installed apps when software is added or removed, so the
-            // overview, spotlight and settings stay current. AppInfoMonitor is
+            // overview, command palette and settings stay current. AppInfoMonitor is
             // the standard GIO signal and covers every XDG_DATA_DIRS location.
             _app_info_monitor = GLib.AppInfoMonitor.@get();
             _app_info_monitor.changed.connect(() => {

@@ -4,6 +4,35 @@ using Gee;
 
 namespace Singularity {
 
+    private class TilingPositionIndicator : Gtk.Fixed {
+        private const int TRACK_WIDTH = 58;
+        private const int TRACK_HEIGHT = 18;
+        private const int INSET = 4;
+        private Box thumb;
+
+        public TilingPositionIndicator() {
+            set_size_request(TRACK_WIDTH, TRACK_HEIGHT);
+            valign = Align.CENTER;
+            add_css_class("tiling-position-track");
+            tooltip_text = _("Scrolling position");
+            thumb = new Box(Orientation.HORIZONTAL, 0);
+            thumb.add_css_class("tiling-position-thumb");
+            put(thumb, INSET, 5);
+            set_position(0.5, 1.0);
+        }
+
+        public void set_position(double position, double visible_fraction) {
+            int available = TRACK_WIDTH - 2 * INSET;
+            int width = (int)Math.round(available
+                * double.max(0, double.min(1, visible_fraction)));
+            width = int.max(12, int.min(available, width));
+            double progress = double.max(0, double.min(1, position));
+            double x = INSET + (available - width) * progress;
+            thumb.set_size_request(width, 8);
+            move(thumb, x, 5);
+        }
+    }
+
     public class Panel : Gtk.Window {
         private Label clock_label;
         private Label app_title_label;
@@ -31,6 +60,9 @@ namespace Singularity {
         private double _last_strip_lum = -1.0;
         private double _last_frac = -1.0;
         private Button workspace_btn;
+        private TilingPositionIndicator tiling_position;
+        private bool _tiling_position_active = false;
+        private bool _overview_active = false;
         private bool _workspace_overview_active = false;
         private bool _dock_hidden = false;
         private Widget _corner_tl;
@@ -49,13 +81,7 @@ namespace Singularity {
             _settings = new GLib.Settings("dev.sinty.desktop");
             var app_system = AppSystem.get_default();
             init_for_window(this);
-            var _shell_mon = target_monitor ?? find_shell_monitor();
-            // Always remember which monitor this panel lives on (even the
-            // primary, which is constructed with target_monitor == null) so
-            // per-monitor logic like flat-on-maximize works correctly. Without
-            // this the primary panel had a null monitor and fell back to the
-            // GLOBAL maximized check - flattening on every screen whenever any
-            // window was maximized anywhere.
+            var _shell_mon = target_monitor ?? find_primary_monitor();
             this.gdk_monitor = _shell_mon;
             if (_shell_mon != null) GtkLayerShell.set_monitor(this, _shell_mon);
             set_layer(this, GtkLayerShell.Layer.OVERLAY);
@@ -146,6 +172,27 @@ namespace Singularity {
                 workspace_clicked();
             });
             layout_items["workspaces"] = workspace_btn;
+
+            tiling_position = new TilingPositionIndicator();
+            tiling_position.visible = false;
+            layout_items["tiling-position"] = tiling_position;
+            var tiling = TilingManager.get_default();
+            if (tiling != null) {
+                tiling.scrolling_position_changed.connect((monitor, position,
+                        visible_fraction, active) => {
+                    if (!active && (monitor == null
+                            || panel_monitor_matches(monitor))) {
+                        _tiling_position_active = false;
+                    } else if (panel_monitor_matches(monitor)) {
+                        _tiling_position_active = true;
+                        tiling_position.set_position(position, visible_fraction);
+                    } else {
+                        return;
+                    }
+                    update_tiling_position_visibility();
+                });
+                tiling.refresh_scrolling_position();
+            }
 
             app_title_label = new Label("");
             app_title_label.add_css_class("app-title");
@@ -366,13 +413,16 @@ namespace Singularity {
                     center_box,
                     right_box,
                     layout_items,
-                    { "overview", "workspaces", "app-title", "global-menu", "system", "notifications", "clock" },
-                    { _("Overview"), _("Workspaces"), _("App Title"), _("Global Menu"), _("System Status"), _("Notifications"), _("Clock") }
+                    { "overview", "workspaces", "tiling-position", "app-title", "global-menu", "system", "notifications", "clock" },
+                    { _("Overview"), _("Workspaces"), _("Scrolling Position"), _("App Title"), _("Global Menu"), _("System Status"), _("Notifications"), _("Clock") }
                 );
                 layout_editor.move_requested.connect((item_id, section, index) => {
                     if (bar_layout != null && bar_layout.move(item_id, section, index)) save_bar_layout();
                 });
-                layout_editor.edit_mode_changed.connect(() => update_visibility());
+                layout_editor.edit_mode_changed.connect(() => {
+                    update_visibility();
+                    update_tiling_position_visibility();
+                });
             }
 
             // Clock format from our own settings
@@ -530,7 +580,8 @@ namespace Singularity {
                    || has_fullscreen_on_my_monitor())
                 : (AppSystem.get_default().has_any_maximized_window()
                    || AppSystem.get_default().has_any_fullscreen_window());
-            if (flat_setting || force_flat) {
+            if (!_overview_active && !_workspace_overview_active
+                    && (flat_setting || force_flat)) {
                 add_css_class("flat-panel");
             } else {
                 remove_css_class("flat-panel");
@@ -567,6 +618,20 @@ namespace Singularity {
             return true;
         }
 
+        private bool panel_monitor_matches(Gdk.Monitor? monitor) {
+            if (monitor == null || gdk_monitor == null) return is_primary;
+            if (monitor == gdk_monitor) return true;
+            string? source = monitor.get_connector();
+            string? target = gdk_monitor.get_connector();
+            return source != null && target != null && source == target;
+        }
+
+        private void update_tiling_position_visibility() {
+            bool editing = !is_greeter_mode
+                && _settings.get_boolean("bar-layout-edit-mode");
+            tiling_position.visible = _tiling_position_active || editing;
+        }
+
         public void play_intro() {
             if (!is_primary || is_greeter_mode) return;
             main_box.opacity = 1.0;
@@ -578,6 +643,7 @@ namespace Singularity {
         }
 
         public void set_overview_mode(bool enabled, bool instant = false) {
+            _overview_active = enabled;
             if (instant) {
                 main_box.add_css_class("no-transition");
                 GLib.Idle.add(() => {
@@ -590,17 +656,26 @@ namespace Singularity {
             } else {
                 main_box.remove_css_class("overview-mode");
             }
+            update_overview_surface_mode();
+        }
+
+        private void update_overview_surface_mode() {
+            if (_overview_active || _workspace_overview_active)
+                set_exclusive_zone(this, 0);
+            else
+                update_visibility();
+            update_flat_mode();
         }
 
         private void reload_bar_layout() {
             string[] item_ids = {
-                "overview", "workspaces", "app-title", "global-menu",
+                "overview", "workspaces", "tiling-position", "app-title", "global-menu",
                 "system", "notifications", "clock"
             };
             bar_layout = new BarLayout(
                 item_ids,
                 { "overview", "workspaces", "app-title", "global-menu" },
-                {},
+                { "tiling-position" },
                 { "system", "notifications", "clock" },
                 _settings.get_strv("panel-layout-left"),
                 _settings.get_strv("panel-layout-center"),
@@ -683,7 +758,10 @@ namespace Singularity {
 
         public void set_workspace_overview_active(bool active) {
             _workspace_overview_active = active;
+            if (active) main_box.add_css_class("workspace-overview-mode");
+            else main_box.remove_css_class("workspace-overview-mode");
             workspace_btn.visible = _dock_hidden || _workspace_overview_active;
+            update_overview_surface_mode();
         }
 
         protected override void dispose() {

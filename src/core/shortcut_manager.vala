@@ -29,7 +29,9 @@ namespace Singularity {
         public signal void run_command_triggered();
         public signal void retile_triggered();
         public signal void launcher_triggered();
+        public signal void launcher_hide_triggered();
         public signal void workspace_overview_triggered();
+        public signal void workspace_overview_hide_triggered();
         public signal void emoji_picker_triggered();
 
         public ShortcutManager() {
@@ -55,8 +57,8 @@ namespace Singularity {
             register_shortcut("Workspaces", "Show workspace overview", "<Super>w", "toggle_workspace_overview");
             register_shortcut("Terminal", "Open terminal", "<Super>Return", "spawn_terminal");
             register_shortcut("Emoji Picker", "Open the emoji picker", "<Super>period", "toggle_emoji_picker");
-            register_shortcut("Run Command", "Open the run/search spotlight", "<Super>Tab", "run_command");
-            register_shortcut("Run Command (alt)", "Open the run/search spotlight", "<Shift><Alt>F2", "run_command");
+            register_shortcut("Command Palette", "Open the command palette", "<Super>Tab", "run_command");
+            register_shortcut("Command Palette (alt)", "Open the command palette", "<Shift><Alt>F2", "run_command");
             register_shortcut("Re-tile Windows", "Re-arrange windows in grid", "<Super>r", "retile_windows");
             register_shortcut("Screenshot", "Open screenshot tool", "Print", "screenshot_tool");
             register_shortcut("Screenshot Region", "Select region to screenshot", "<Shift>Print", "screenshot_region");
@@ -88,6 +90,9 @@ namespace Singularity {
                 write_labwc_rc_xml();
             });
             settings.changed["natural-scrolling"].connect(() => {
+                write_labwc_rc_xml();
+            });
+            Gtk.Settings.get_default().notify["gtk-enable-animations"].connect(() => {
                 write_labwc_rc_xml();
             });
             if (wm_settings != null) {
@@ -237,7 +242,9 @@ namespace Singularity {
 
             var xml = new StringBuilder();
             xml.append("<?xml version=\"1.0\"?>\n<labwc_config>\n");
-            xml.append("  <desktops number=\"4\" />\n");
+            xml.append("  <desktops number=\"4\">\n");
+            xml.append("    <popupTime>0</popupTime>\n");
+            xml.append("  </desktops>\n");
 
             // Theme (dark/light) + titlebar layout (must be inside <theme>)
             bool dark = settings.get_boolean("dark-mode");
@@ -249,7 +256,10 @@ namespace Singularity {
             xml.append("    </titlebar>\n");
             xml.append("  </theme>\n");
 
-            xml.append("  <core>\n    <decoration>server</decoration>\n  </core>\n");
+            bool animations = Gtk.Settings.get_default().gtk_enable_animations;
+            xml.append("  <core>\n    <decoration>server</decoration>\n");
+            xml.append_printf("    <windowAnimations>%s</windowAnimations>\n", animations ? "yes" : "no");
+            xml.append("  </core>\n");
 
             // Show the snap/tile preview overlay immediately instead of after
             // labwc's default 500ms, so the tiling rectangles appear instantly (#120).
@@ -275,6 +285,12 @@ namespace Singularity {
             xml.append("      <mousebind direction=\"Up\" action=\"Scroll\" />\n");
             xml.append("      <mousebind direction=\"Down\" action=\"Scroll\" />\n");
             xml.append("    </context>\n");
+            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"3\" direction=\"Up\"><action name=\"Execute\"><command>%s toggle_workspace_overview</command></action></gesturebind>\n", dbus_shorts);
+            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"3\" direction=\"Down\"><action name=\"Execute\"><command>%s hide_workspace_overview</command></action></gesturebind>\n", dbus_shorts);
+            xml.append("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Left\"><action name=\"GoToDesktop\" to=\"right\" wrap=\"yes\" /></gesturebind>\n");
+            xml.append("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Right\"><action name=\"GoToDesktop\" to=\"left\" wrap=\"yes\" /></gesturebind>\n");
+            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Up\"><action name=\"Execute\"><command>%s toggle_launcher</command></action></gesturebind>\n", dbus_shorts);
+            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Down\"><action name=\"Execute\"><command>%s hide_launcher</command></action></gesturebind>\n", dbus_shorts);
             xml.append("  </mouse>\n");
 
             // Keyboard layout (xkb)
@@ -504,7 +520,9 @@ namespace Singularity {
                     case "kbd_brightness_up":   kbd_brightness_up(); break;
                     case "kbd_brightness_down": kbd_brightness_down(); break;
                     case "toggle_launcher": toggle_launcher(); break;
+                    case "hide_launcher": launcher_hide_triggered(); break;
                     case "toggle_workspace_overview": workspace_overview_triggered(); break;
+                    case "hide_workspace_overview": workspace_overview_hide_triggered(); break;
                     case "spawn_terminal": spawn_terminal(); break;
                     case "run_command": run_command(); break;
                     case "toggle_emoji_picker": emoji_picker_triggered(); break;

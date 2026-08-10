@@ -37,6 +37,12 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     private Singularity.Overview? overview = null;
     private Singularity.AppMenu? app_menu = null;
     private Singularity.WorkspaceOverview? workspace_overview = null;
+    private Singularity.Overview? gesture_launcher_overview = null;
+    private bool gesture_launcher_menu = false;
+    private Singularity.ShellSurfaceProvider? gesture_launcher_claim = null;
+    private Singularity.ShellSurfaceProvider? gesture_workspace_claim = null;
+    private Gee.HashSet<GLib.Object> tiling_layout_holds =
+        new Gee.HashSet<GLib.Object>();
     private Singularity.Panel panel;
     private Singularity.Dock dock;
     private Singularity.SessionRecovery? session_recovery = null;
@@ -169,6 +175,8 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             apply_x_font_settings();
         });
         Singularity.AppSystem.get_default();
+        Singularity.wayland_set_desktop_gesture_callback(
+            on_desktop_gesture, this);
         // Launch the user's autostart entries once the session has settled
         // (bus, portals); nothing else in the shell did this before (#170).
         Timeout.add_seconds(1, () => { launch_autostart_apps(); return Source.REMOVE; });
@@ -236,6 +244,8 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             );
         }
 
+        tiling_manager = new Singularity.TilingManager(
+            Singularity.AppSystem.get_default());
         setup_backgrounds();
         hot_corner_manager = new Singularity.HotCornerManager(this);
         hot_corner_manager.overview_triggered.connect(() => toggle_overview());
@@ -259,8 +269,6 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         notification_display = new Singularity.NotificationDisplay(this);
         setup_shell_monitor_listener();
         setup_secondary_surfaces();
-        tiling_manager = new Singularity.TilingManager(Singularity.AppSystem.get_default());
-
         setup_entrance();
 
         // Session recovery: snapshot windows on session end; offer to reopen
@@ -339,8 +347,16 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         Singularity.SystemMonitor.get_default().shortcuts.launcher_triggered.connect(() => {
             toggle_overview();
         });
+        Singularity.SystemMonitor.get_default().shortcuts.launcher_hide_triggered.connect(() => {
+            hide_overview();
+        });
         Singularity.SystemMonitor.get_default().shortcuts.workspace_overview_triggered.connect(() => {
             toggle_workspace_overview();
+        });
+        Singularity.SystemMonitor.get_default().shortcuts.workspace_overview_hide_triggered.connect(() => {
+            if (workspace_overview != null && workspace_overview.visible) {
+                workspace_overview.toggle();
+            }
         });
         Singularity.SystemMonitor.get_default().shortcuts.run_command_triggered.connect(() => {
             ensure_run_dialog();
@@ -760,6 +776,20 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     }
     // Opens overview anchored to the given panel (for secondary monitors)
 
+    private void set_tiling_layout_hold(GLib.Object source, bool active) {
+        if (active) tiling_layout_holds.add(source);
+        else tiling_layout_holds.remove(source);
+        tiling_manager.set_shell_overview_active(tiling_layout_holds.size > 0);
+    }
+
+    private void ensure_app_menu() {
+        if (app_menu != null) return;
+        var menu = new Singularity.AppMenu(this);
+        app_menu = menu;
+        menu.shown.connect(() => set_tiling_layout_hold(menu, true));
+        menu.hidden.connect(() => set_tiling_layout_hold(menu, false));
+    }
+
     private void toggle_overview_on_panel(Singularity.Panel anchor_panel) {
         if (workspace_overview != null && workspace_overview.visible) {
             workspace_overview.toggle();
@@ -767,9 +797,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         string mode = settings.get_string("app-launcher-mode");
         if (mode == "menu") {
             if (overview != null && overview.showing) overview.toggle();
-            if (app_menu == null) {
-                app_menu = new Singularity.AppMenu(this);
-            }
+            ensure_app_menu();
             app_menu.toggle();
         } else {
             if (app_menu != null && app_menu.visible) app_menu.toggle();
@@ -787,10 +815,14 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
                 var sec_overview = new Singularity.Overview(this, anchor_panel);
                 secondary_overviews.insert(anchor_panel, sec_overview);
                 sec_overview.shown.connect(() => {
+                    set_tiling_layout_hold(sec_overview, true);
                     anchor_panel.set_overview_mode(true);
                 });
                 sec_overview.hiding.connect(() => {
                     anchor_panel.set_overview_mode(false);
+                });
+                sec_overview.hidden.connect(() => {
+                    set_tiling_layout_hold(sec_overview, false);
                 });
                 sec_overview.toggle();
             }
@@ -829,9 +861,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         string mode = settings.get_string("app-launcher-mode");
         if (mode == "menu") {
             if (overview != null && overview.showing) overview.toggle();
-            if (app_menu == null) {
-                app_menu = new Singularity.AppMenu(this);
-            }
+            ensure_app_menu();
             app_menu.toggle();
         } else {
             if (app_menu != null && app_menu.visible) app_menu.toggle();
@@ -842,6 +872,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             if (overview == null) {
                 overview = new Singularity.Overview(this, panel);
                 overview.shown.connect(() => {
+                    set_tiling_layout_hold(overview, true);
                     if (panel != null) panel.set_overview_mode(true);
                     if (dock != null) dock.set_overview_mode(true);
                 });
@@ -849,13 +880,52 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
                     if (panel != null) panel.set_overview_mode(false);
                     if (dock != null) dock.set_overview_mode(false);
                 });
+                overview.hidden.connect(() => {
+                    set_tiling_layout_hold(overview, false);
+                });
             }
             overview.toggle();
         }
     }
 
-    private void toggle_workspace_overview() {
+    private void hide_overview() {
+        if (app_menu != null && app_menu.visible) app_menu.toggle();
+        if (overview != null && overview.showing) overview.toggle();
+        secondary_overviews.foreach((p, ov) => {
+            if (ov.showing) ov.toggle();
+        });
+    }
+
+    private bool ensure_workspace_overview() {
         // A plugin can claim the workspaces role.
+        var ws_claim = Singularity.ShellSurfaceRegistry.get_default()
+                       .claimant(Singularity.ShellRole.WORKSPACES);
+        if (ws_claim != null) return false;
+        if (workspace_overview == null) {
+            workspace_overview = new Singularity.WorkspaceOverview(this);
+            workspace_overview.shown.connect(() => {
+                set_tiling_layout_hold(workspace_overview, true);
+                if (panel != null) {
+                    panel.set_workspace_overview_active(true);
+                }
+                if (dock != null) dock.set_overview_mode(true);
+                foreach (var p in secondary_panels) p.set_workspace_overview_active(true);
+                foreach (var d in secondary_docks) d.set_overview_mode(true);
+            });
+            workspace_overview.hidden.connect(() => {
+                if (dock != null) dock.set_overview_mode(false);
+                if (panel != null) {
+                    panel.set_workspace_overview_active(false);
+                }
+                foreach (var p in secondary_panels) p.set_workspace_overview_active(false);
+                foreach (var d in secondary_docks) d.set_overview_mode(false);
+                set_tiling_layout_hold(workspace_overview, false);
+            });
+        }
+        return true;
+    }
+
+    private void toggle_workspace_overview() {
         var ws_claim = Singularity.ShellSurfaceRegistry.get_default()
                        .claimant(Singularity.ShellRole.WORKSPACES);
         if (ws_claim != null) { ws_claim.toggle(); return; }
@@ -863,28 +933,98 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         if (overview != null && overview.showing) {
             overview.toggle();
         }
-        if (workspace_overview == null) {
-            workspace_overview = new Singularity.WorkspaceOverview(this);
-            workspace_overview.shown.connect(() => {
-                if (panel != null) {
-                    panel.set_overview_mode(true);
-                    panel.set_workspace_overview_active(true);
-                }
-                if (dock != null) dock.set_overview_mode(true);
-                foreach (var p in secondary_panels) p.set_overview_mode(true);
-                foreach (var d in secondary_docks) d.set_overview_mode(true);
-            });
-            workspace_overview.hidden.connect(() => {
-                if (dock != null) dock.set_overview_mode(false);
-                if (panel != null) {
-                    panel.set_overview_mode(false, true);
-                    panel.set_workspace_overview_active(false);
-                }
-                foreach (var p in secondary_panels) p.set_overview_mode(false, true);
-                foreach (var d in secondary_docks) d.set_overview_mode(false);
-            });
-        }
+        if (!ensure_workspace_overview()) return;
         workspace_overview.toggle();
+    }
+
+    private static void on_desktop_gesture(uint32 phase, uint32 fingers,
+            uint32 direction,
+            double dx, double dy, int cancelled, int committed, void* data) {
+        var self = (SingularityApp)data;
+        self.handle_desktop_gesture(phase, fingers, direction, dx, dy,
+            cancelled != 0, committed != 0);
+    }
+
+    private Singularity.Overview? get_showing_launcher_overview() {
+        if (overview != null && overview.showing) return overview;
+        Singularity.Overview? found = null;
+        secondary_overviews.foreach((p, ov) => {
+            if (found == null && ov.showing) found = ov;
+        });
+        return found;
+    }
+
+    private void handle_desktop_gesture(uint32 phase, uint32 fingers,
+            uint32 direction,
+            double dx, double dy, bool cancelled, bool committed) {
+        if (fingers == 3 && (direction == 1 || direction == 2)) {
+            tiling_manager.handle_scrolling_gesture(phase, dx, cancelled);
+            return;
+        }
+        if (direction != 3 && direction != 4) return;
+        if (fingers == 3) {
+            if (phase == 0) {
+                gesture_workspace_claim = Singularity.ShellSurfaceRegistry.get_default()
+                    .claimant(Singularity.ShellRole.WORKSPACES);
+                if (gesture_workspace_claim != null) return;
+                if (direction == 3) {
+                    if (overview != null && overview.showing) overview.toggle();
+                    if (!ensure_workspace_overview()) return;
+                    workspace_overview.begin_gesture(true);
+                } else if (workspace_overview != null && workspace_overview.visible) {
+                    workspace_overview.begin_gesture(false);
+                }
+            } else if (phase == 1) {
+                workspace_overview?.update_gesture(dy);
+            } else if (phase == 2) {
+                if (gesture_workspace_claim != null) {
+                    if (!cancelled && committed) gesture_workspace_claim.toggle();
+                    gesture_workspace_claim = null;
+                } else {
+                    workspace_overview?.end_gesture(!cancelled && committed);
+                }
+            }
+            return;
+        }
+        if (fingers != 4) return;
+        if (phase == 0) {
+            gesture_launcher_overview = null;
+            gesture_launcher_menu = false;
+            gesture_launcher_claim = Singularity.ShellSurfaceRegistry.get_default()
+                .claimant(Singularity.ShellRole.OVERVIEW)
+                ?? Singularity.ShellSurfaceRegistry.get_default()
+                    .claimant(Singularity.ShellRole.LAUNCHER);
+            if (gesture_launcher_claim != null) return;
+            if (direction == 3) {
+                if (workspace_overview != null && workspace_overview.visible)
+                    workspace_overview.toggle();
+                if ((app_menu != null && app_menu.visible)
+                        || get_showing_launcher_overview() != null) return;
+                toggle_overview();
+            }
+            if (app_menu != null && app_menu.visible) {
+                gesture_launcher_menu = true;
+                app_menu.begin_gesture(direction == 3);
+            } else {
+                gesture_launcher_overview = get_showing_launcher_overview();
+                gesture_launcher_overview?.begin_gesture(direction == 3);
+            }
+        } else if (phase == 1) {
+            if (gesture_launcher_menu) app_menu?.update_gesture(dy);
+            else gesture_launcher_overview?.update_gesture(dy);
+        } else if (phase == 2) {
+            bool commit = !cancelled && committed;
+            if (gesture_launcher_claim != null) {
+                if (commit) gesture_launcher_claim.toggle();
+            } else if (gesture_launcher_menu) {
+                app_menu?.end_gesture(commit);
+            } else {
+                gesture_launcher_overview?.end_gesture(commit);
+            }
+            gesture_launcher_claim = null;
+            gesture_launcher_overview = null;
+            gesture_launcher_menu = false;
+        }
     }
 
     private bool _entrance_played = false;

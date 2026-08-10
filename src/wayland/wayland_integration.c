@@ -37,6 +37,7 @@ static void install_crash_handler(void) {
 #include "singularity-preview-unstable-v1-client-protocol.h"
 #include "wlr-output-management-unstable-v1-client-protocol.h"
 #include "singularity-tiling-unstable-v1-client-protocol.h"
+#include "singularity-gesture-unstable-v1-client-protocol.h"
 #include "wlr-gamma-control-unstable-v1-client-protocol.h"
 void singularity_display_manager_add_head(void *head_handle);
 void singularity_display_manager_update_head(void *head_handle, const char *name, const char *description, int phys_w, int phys_h, int x, int y, int transform, double scale, int enabled);
@@ -56,6 +57,7 @@ struct SingularityWaylandContext {
     struct zsingularity_preview_manager_v1 *preview_manager;
     struct zwlr_output_manager_v1 *output_manager;
     struct zsingularity_tiling_manager_v1 *tiling_manager;
+    struct zsingularity_gesture_manager_v1 *gesture_manager;
     struct zwlr_gamma_control_manager_v1 *gamma_manager;
     /* Set of zwlr_foreign_toplevel_handle_v1* that are currently alive.
      * Handles are added on toplevel creation and removed before the closed
@@ -78,6 +80,12 @@ static GHashTable *output_connector_map = NULL;
 /* Optional callback fired when a toplevel changes its output */
 static WindowOutputChangedCallback window_output_changed_cb = NULL;
 static void *window_output_changed_user_data = NULL;
+static DesktopGestureCallback desktop_gesture_cb = NULL;
+static void *desktop_gesture_user_data = NULL;
+static TilingInteractionCallback tiling_interaction_cb = NULL;
+static void *tiling_interaction_user_data = NULL;
+static uint32_t desktop_gesture_fingers = 0;
+static uint32_t desktop_gesture_direction = 0;
 static int wayland_debug_enabled = -1;
 static bool wl_debug(void) {
     if (wayland_debug_enabled < 0)
@@ -990,7 +998,13 @@ void singularity_wayland_reset_night_light(void) {
 /* ── Window geometry cache (for session save) ─────────────────────────────
  * The compositor replies to get_geometry with a single `geometry` event; we
  * cache the last reported geometry per toplevel and read it after a roundtrip. */
-struct GeomEntry { int x, y, w, h, maximized, fullscreen; char connector[64]; int got; };
+struct GeomEntry {
+    int x, y, w, h, maximized, fullscreen;
+    int work_x, work_y, work_w, work_h;
+    char connector[64];
+    int got;
+    int workarea_got;
+};
 static GHashTable *geometry_map = NULL; /* handle -> GeomEntry* */
 
 static void tiling_handle_geometry(void *data,
@@ -1006,8 +1020,85 @@ static void tiling_handle_geometry(void *data,
     g_strlcpy(e->connector, output ? output : "", sizeof(e->connector));
     e->got = 1;
 }
+
+static void tiling_handle_workarea(void *data,
+        struct zsingularity_tiling_manager_v1 *mgr,
+        struct zwlr_foreign_toplevel_handle_v1 *toplevel,
+        int32_t x, int32_t y, int32_t width, int32_t height) {
+    if (!geometry_map) return;
+    struct GeomEntry *e = g_hash_table_lookup(geometry_map, toplevel);
+    if (!e) {
+        e = calloc(1, sizeof(*e));
+        g_hash_table_insert(geometry_map, toplevel, e);
+    }
+    e->work_x = x;
+    e->work_y = y;
+    e->work_w = width;
+    e->work_h = height;
+    e->workarea_got = 1;
+}
+
+static void tiling_handle_interaction(void *data,
+        struct zsingularity_tiling_manager_v1 *mgr,
+        struct zwlr_foreign_toplevel_handle_v1 *toplevel,
+        uint32_t phase, uint32_t kind,
+        int32_t x, int32_t y, int32_t width, int32_t height,
+        int32_t cursor_x, int32_t cursor_y, uint32_t edges,
+        uint32_t float_candidate) {
+    (void)data;
+    (void)mgr;
+    if (tiling_interaction_cb)
+        tiling_interaction_cb(toplevel, phase, kind, x, y, width, height,
+            cursor_x, cursor_y, edges, float_candidate != 0,
+            tiling_interaction_user_data);
+}
 static const struct zsingularity_tiling_manager_v1_listener tiling_listener = {
     .geometry = tiling_handle_geometry,
+    .workarea = tiling_handle_workarea,
+    .interaction = tiling_handle_interaction,
+};
+
+static void gesture_handle_begin(void *data,
+        struct zsingularity_gesture_manager_v1 *manager,
+        uint32_t fingers, uint32_t direction) {
+    (void)data;
+    (void)manager;
+    desktop_gesture_fingers = fingers;
+    desktop_gesture_direction = direction;
+    if (desktop_gesture_cb)
+        desktop_gesture_cb(0, fingers, direction, 0, 0, 0, 0,
+            desktop_gesture_user_data);
+}
+
+static void gesture_handle_update(void *data,
+        struct zsingularity_gesture_manager_v1 *manager,
+        wl_fixed_t dx, wl_fixed_t dy) {
+    (void)data;
+    (void)manager;
+    if (desktop_gesture_cb)
+        desktop_gesture_cb(1, desktop_gesture_fingers,
+            desktop_gesture_direction,
+            wl_fixed_to_double(dx), wl_fixed_to_double(dy), 0, 0,
+            desktop_gesture_user_data);
+}
+
+static void gesture_handle_end(void *data,
+        struct zsingularity_gesture_manager_v1 *manager,
+        uint32_t cancelled, uint32_t committed) {
+    (void)data;
+    (void)manager;
+    if (desktop_gesture_cb)
+        desktop_gesture_cb(2, desktop_gesture_fingers,
+            desktop_gesture_direction, 0, 0,
+            cancelled != 0, committed != 0, desktop_gesture_user_data);
+    desktop_gesture_fingers = 0;
+    desktop_gesture_direction = 0;
+}
+
+static const struct zsingularity_gesture_manager_v1_listener gesture_listener = {
+    .begin = gesture_handle_begin,
+    .update = gesture_handle_update,
+    .end = gesture_handle_end,
 };
 
 static void registry_handle_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
@@ -1028,10 +1119,15 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         ctx.output_manager = wl_registry_bind(registry, name, &zwlr_output_manager_v1_interface, 4);
         zwlr_output_manager_v1_add_listener(ctx.output_manager, &output_manager_listener, NULL);
     } else if (strcmp(interface, zsingularity_tiling_manager_v1_interface.name) == 0) {
-        uint32_t v = version < 3 ? version : 3;
+        uint32_t v = version < 6 ? version : 6;
         ctx.tiling_manager = wl_registry_bind(registry, name, &zsingularity_tiling_manager_v1_interface, v);
         if (v >= 2)
             zsingularity_tiling_manager_v1_add_listener(ctx.tiling_manager, &tiling_listener, NULL);
+    } else if (strcmp(interface, zsingularity_gesture_manager_v1_interface.name) == 0) {
+        ctx.gesture_manager = wl_registry_bind(registry, name,
+            &zsingularity_gesture_manager_v1_interface, 1);
+        zsingularity_gesture_manager_v1_add_listener(ctx.gesture_manager,
+            &gesture_listener, NULL);
     } else if (strcmp(interface, zwlr_gamma_control_manager_v1_interface.name) == 0) {
         ctx.gamma_manager = wl_registry_bind(registry, name, &zwlr_gamma_control_manager_v1_interface, 1);
         for (struct GammaOutput *go = gamma_outputs; go; go = go->next)
@@ -1047,6 +1143,18 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         /* Listen for connector name so we can match toplevel outputs to GdkMonitors */
         wl_output_add_listener(go->output, &wl_output_connector_listener, NULL);
     }
+}
+
+void singularity_wayland_set_desktop_gesture_callback(
+        DesktopGestureCallback cb, void *user_data) {
+    desktop_gesture_cb = cb;
+    desktop_gesture_user_data = user_data;
+}
+
+void singularity_wayland_set_tiling_interaction_callback(
+        TilingInteractionCallback cb, void *user_data) {
+    tiling_interaction_cb = cb;
+    tiling_interaction_user_data = user_data;
 }
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {}
 static const struct wl_registry_listener registry_listener = {
@@ -1343,6 +1451,32 @@ int singularity_wayland_get_window_geometry(void* toplevel_handle,
     return 1;
 }
 
+int singularity_wayland_get_window_workarea(void *toplevel_handle,
+        int *x, int *y, int *w, int *h) {
+    if (x) *x = 0;
+    if (y) *y = 0;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (!ctx.tiling_manager || !ctx.display) return 0;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 4) return 0;
+    if (!ctx.valid_handles || !g_hash_table_contains(ctx.valid_handles, toplevel_handle)) return 0;
+    if (!geometry_map) geometry_map = g_hash_table_new_full(NULL, NULL, NULL, free);
+
+    struct zwlr_foreign_toplevel_handle_v1 *toplevel = toplevel_handle;
+    struct GeomEntry *e = g_hash_table_lookup(geometry_map, toplevel);
+    if (e) e->workarea_got = 0;
+    zsingularity_tiling_manager_v1_get_workarea(ctx.tiling_manager, toplevel);
+    wl_display_roundtrip(ctx.display);
+
+    e = g_hash_table_lookup(geometry_map, toplevel);
+    if (!e || !e->workarea_got) return 0;
+    if (x) *x = e->work_x;
+    if (y) *y = e->work_y;
+    if (w) *w = e->work_w;
+    if (h) *h = e->work_h;
+    return 1;
+}
+
 void singularity_wayland_set_geometry(void* toplevel_handle, int x, int y, int width, int height) {
     if (!ctx.tiling_manager) return;
     if (!ctx.valid_handles || !g_hash_table_contains(ctx.valid_handles, toplevel_handle)) {
@@ -1351,6 +1485,7 @@ void singularity_wayland_set_geometry(void* toplevel_handle, int x, int y, int w
     }
     struct zwlr_foreign_toplevel_handle_v1 *toplevel = (struct zwlr_foreign_toplevel_handle_v1 *)toplevel_handle;
     zsingularity_tiling_manager_v1_set_geometry(ctx.tiling_manager, toplevel, x, y, width, height);
+    wl_display_flush(ctx.display);
 }
 void singularity_wayland_set_tiled(void* toplevel_handle, uint32_t tiled) {
     if (!ctx.tiling_manager) return;
@@ -1360,6 +1495,32 @@ void singularity_wayland_set_tiled(void* toplevel_handle, uint32_t tiled) {
     }
     struct zwlr_foreign_toplevel_handle_v1 *toplevel = (struct zwlr_foreign_toplevel_handle_v1 *)toplevel_handle;
     zsingularity_tiling_manager_v1_set_tiled(ctx.tiling_manager, toplevel, tiled);
+    wl_display_flush(ctx.display);
+}
+void singularity_wayland_set_scrolling_mode(uint32_t enabled) {
+    if (!ctx.tiling_manager) return;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 5) return;
+    zsingularity_tiling_manager_v1_set_scrolling_mode(ctx.tiling_manager,
+        enabled);
+    wl_display_flush(ctx.display);
+}
+void singularity_wayland_detach_tiled(void* toplevel_handle) {
+    if (!ctx.tiling_manager) return;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 5) return;
+    if (!ctx.valid_handles || !g_hash_table_contains(ctx.valid_handles,
+            toplevel_handle)) return;
+    struct zwlr_foreign_toplevel_handle_v1 *toplevel =
+        (struct zwlr_foreign_toplevel_handle_v1 *)toplevel_handle;
+    zsingularity_tiling_manager_v1_detach_tiled(ctx.tiling_manager, toplevel);
+    wl_display_flush(ctx.display);
+}
+void singularity_wayland_set_tiling_drop_preview(int x, int y, int width,
+        int height, uint32_t visible) {
+    if (!ctx.tiling_manager) return;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 6) return;
+    zsingularity_tiling_manager_v1_set_drop_preview(ctx.tiling_manager,
+        x, y, width, height, visible);
+    wl_display_flush(ctx.display);
 }
 void singularity_wayland_snap_view(void* toplevel_handle, uint32_t direction) {
     if (!ctx.tiling_manager) return;

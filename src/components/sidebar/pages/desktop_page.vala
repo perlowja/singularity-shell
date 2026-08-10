@@ -885,11 +885,44 @@ namespace Singularity {
             });
             wm_group.add_row(rounded_row);
 
-            var tile_row = new SwitchRow(_("Tiling"), _("Automatically arrange windows in a grid"), settings.get_boolean("tiling-enabled"));
+            var tile_row = new SwitchRow(_("Tiling"), _("Automatically arrange windows using the selected layout"), settings.get_boolean("tiling-enabled"));
             tile_row.switch_btn.notify["active"].connect(() => {
                 settings.set_boolean("tiling-enabled", tile_row.switch_btn.active);
             });
             wm_group.add_row(tile_row);
+
+            string tiling_layout = settings.get_string("tiling-layout");
+            var tiling_layout_row = new SelectionRow(_("Tiling Layout"),
+                { _("Grid"), _("Scrolling") },
+                tiling_layout == "scrolling" ? _("Scrolling") : _("Grid"));
+            tiling_layout_row.selected.connect((item) => {
+                settings.set_string("tiling-layout",
+                    item == _("Scrolling") ? "scrolling" : "grid");
+            });
+            tiling_layout_row.sensitive = tile_row.switch_btn.active;
+            wm_group.add_row(tiling_layout_row);
+
+            var column_width_row = new SpinRow(_("Column Width"),
+                _("Percentage of the work area used by the focused scrolling column"),
+                35, 100, 5, settings.get_int("tiling-column-width"));
+            column_width_row.spin_btn.value_changed.connect(() => {
+                settings.set_int("tiling-column-width",
+                    (int)column_width_row.spin_btn.value);
+            });
+            column_width_row.visible = tile_row.switch_btn.active
+                && tiling_layout == "scrolling";
+            wm_group.add_row(column_width_row);
+
+            tile_row.switch_btn.notify["active"].connect(() => {
+                tiling_layout_row.sensitive = tile_row.switch_btn.active;
+                column_width_row.visible = tile_row.switch_btn.active
+                    && settings.get_string("tiling-layout") == "scrolling";
+            });
+            settings.changed["tiling-layout"].connect(() => {
+                bool scrolling = settings.get_string("tiling-layout") == "scrolling";
+                tiling_layout_row.current_value = scrolling ? _("Scrolling") : _("Grid");
+                column_width_row.visible = tile_row.switch_btn.active && scrolling;
+            });
 
             var ssd_row = new SwitchRow(_("Disable Client Side Decorations"), _("Force standard window titles (requires app restart)"), settings.get_boolean("force-ssd"));
             ssd_row.switch_btn.notify["active"].connect(() => {
@@ -1037,7 +1070,7 @@ namespace Singularity {
             settings.changed["dock-style"].connect(() => {
                 extended_row.visible = settings.get_string("dock-style") == "panel";
             });
-            var previews_row = new SwitchRow(_("Window Previews on Hover"), _("Preview open windows when hovering an app with more than one window"), settings.get_boolean("dock-window-previews"));
+            var previews_row = new SwitchRow(_("Window Previews on Hover"), _("Preview open windows when hovering an app"), settings.get_boolean("dock-window-previews"));
             previews_row.switch_btn.notify["active"].connect(() => {
                 settings.set_boolean("dock-window-previews", previews_row.switch_btn.active);
             });

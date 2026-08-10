@@ -14,6 +14,13 @@ typedef void (*WorkspaceCreatedCallback)(void* handle, const char* name, void* d
 typedef void (*WorkspaceDestroyedCallback)(void* handle, void* data);
 typedef void (*WorkspaceStateCallback)(void* handle, uint32_t state, void* data);
 typedef void (*WindowOutputChangedCallback)(void* handle, void* data);
+typedef void (*DesktopGestureCallback)(uint32_t phase, uint32_t fingers,
+    uint32_t direction,
+    double dx, double dy, int cancelled, int committed, void* data);
+typedef void (*TilingInteractionCallback)(void *handle, uint32_t phase,
+    uint32_t kind, int32_t x, int32_t y, int32_t width, int32_t height,
+    int32_t cursor_x, int32_t cursor_y, uint32_t edges,
+    int float_candidate, void *data);
 
 void singularity_wayland_init(
     AppOpenedCallback opened_cb, 
@@ -27,6 +34,10 @@ void singularity_wayland_init(
     void* user_data
 );
 void singularity_wayland_set_window_output_changed_callback(WindowOutputChangedCallback cb, void* user_data);
+void singularity_wayland_set_desktop_gesture_callback(DesktopGestureCallback cb,
+    void* user_data);
+void singularity_wayland_set_tiling_interaction_callback(
+    TilingInteractionCallback cb, void *user_data);
 
 void singularity_wayland_minimize_window(void* handle);
 void singularity_wayland_unminimize_window(void* handle);
@@ -56,7 +67,13 @@ void singularity_display_manager_update_adaptive_sync(void* head_handle, uint32_
 void singularity_wayland_set_geometry(void* toplevel_handle, int32_t x, int32_t y, int32_t width, int32_t height);
 int singularity_wayland_get_window_geometry(void* toplevel_handle,
         int* x, int* y, int* w, int* h, int* maximized, int* fullscreen, char** connector);
+int singularity_wayland_get_window_workarea(void* toplevel_handle,
+        int* x, int* y, int* w, int* h);
 void singularity_wayland_set_tiled(void* toplevel_handle, uint32_t tiled);
+void singularity_wayland_set_scrolling_mode(uint32_t enabled);
+void singularity_wayland_detach_tiled(void* toplevel_handle);
+void singularity_wayland_set_tiling_drop_preview(int x, int y, int width,
+    int height, uint32_t visible);
 void singularity_wayland_snap_view(void* toplevel_handle, uint32_t direction);
 void singularity_wayland_move_to_workspace(void* toplevel_handle, uint32_t workspace_index);
 

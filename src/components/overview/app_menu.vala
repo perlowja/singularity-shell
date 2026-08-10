@@ -1,6 +1,7 @@
 using Gtk;
 using GtkLayerShell;
 using GLib;
+using Math;
 
 namespace Singularity {
 
@@ -18,6 +19,8 @@ namespace Singularity {
         private Box main_box;
         private Singularity.Animation.TimedAnimation? menu_animation;
         private bool _is_open = false;
+        private bool _gesture_active = false;
+        private bool _gesture_opening = false;
 
         public signal void shown();
         public signal void hidden();
@@ -294,6 +297,68 @@ namespace Singularity {
                 search_entry.grab_focus();
                 shown();
             }
+        }
+
+        public void begin_gesture(bool opening) {
+            if (!opening && !_is_open) return;
+            if (!opening && Singularity.DebugManager.get_default().overview_pinned) return;
+            if (opening) {
+                if (!_is_open) toggle();
+                if (!_is_open) return;
+            }
+            if (menu_animation != null) {
+                menu_animation.reset();
+                menu_animation = null;
+            }
+            _gesture_active = true;
+            _gesture_opening = opening;
+            opacity = opening ? 0 : 1;
+        }
+
+        public void update_gesture(double dy) {
+            if (!_gesture_active) return;
+            double distance = _gesture_opening ? -dy : dy;
+            double progress = double.max(0, double.min(1, distance / 240.0));
+            opacity = _gesture_opening ? progress : 1.0 - progress;
+        }
+
+        public void end_gesture(bool committed) {
+            if (!_gesture_active) return;
+            _gesture_active = false;
+            bool stay_open = _gesture_opening ? committed : !committed;
+            _is_open = stay_open;
+            double target = stay_open ? 1.0 : 0.0;
+            if (!Gtk.Settings.get_default().gtk_enable_animations
+                    || Math.fabs(opacity - target) < 0.001) {
+                opacity = target;
+                if (stay_open) search_entry.grab_focus();
+                else {
+                    hide();
+                    if (widgets_grid != null) widgets_grid.depopulate();
+                    hidden();
+                }
+                return;
+            }
+            uint duration = (uint)double.max(80,
+                180.0 * Math.fabs(target - opacity));
+            var animation = new Singularity.Animation.TimedAnimation(
+                this, opacity, target, duration,
+                Singularity.Animation.TimedAnimation.Easing.EASE_OUT_CUBIC);
+            menu_animation = animation;
+            animation.tick.connect(() => {
+                opacity = animation.value;
+            });
+            animation.done.connect(() => {
+                opacity = target;
+                if (menu_animation == animation) menu_animation = null;
+                if (stay_open) search_entry.grab_focus();
+                else {
+                    hide();
+                    if (widgets_grid != null) widgets_grid.depopulate();
+                    hidden();
+                }
+            });
+            animation.play();
         }
     }
 }

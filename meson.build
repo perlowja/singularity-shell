@@ -133,6 +133,19 @@ st_proto_h = custom_target(
   input: st_proto_xml,
   command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@']
 )
+sg_proto_xml = 'protocols/singularity-gesture-unstable-v1.xml'
+sg_proto_c = custom_target(
+  'singularity-gesture-unstable-v1-protocol.c',
+  output: 'singularity-gesture-unstable-v1-protocol.c',
+  input: sg_proto_xml,
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@']
+)
+sg_proto_h = custom_target(
+  'singularity-gesture-unstable-v1-client-protocol.h',
+  output: 'singularity-gesture-unstable-v1-client-protocol.h',
+  input: sg_proto_xml,
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@']
+)
 sc_proto_xml = 'protocols/wlr-screencopy-unstable-v1.xml'
 sc_proto_c = custom_target(
   'wlr-screencopy-unstable-v1-protocol.c',
@@ -361,7 +374,7 @@ subdir('src/lockscreen')
 
 executable('singularity-desktop',
   sources: ['src/core/main.vala'] + singularity_core_sources + [
-    wl_proto_c, wl_proto_h, ws_proto_c, ws_proto_h, sp_proto_c, sp_proto_h, om_proto_c, om_proto_h, st_proto_c, st_proto_h, gc_proto_c, gc_proto_h, sb_proto_c, sb_proto_h, vk_proto_c, vk_proto_h
+    wl_proto_c, wl_proto_h, ws_proto_c, ws_proto_h, sp_proto_c, sp_proto_h, om_proto_c, om_proto_h, st_proto_c, st_proto_h, sg_proto_c, sg_proto_h, gc_proto_c, gc_proto_h, sb_proto_c, sb_proto_h, vk_proto_c, vk_proto_h
   ],
   dependencies: dependencies + [libsingularity_dep, system_dep, gee_dep, json_dep, cc.find_library('m'), cc.find_library('crypt'), dependency('xcb')],
   include_directories: [

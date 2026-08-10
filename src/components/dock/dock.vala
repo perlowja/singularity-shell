@@ -1821,7 +1821,7 @@ namespace Singularity {
             foreach (var win in app_system.get_windows()) {
                 if (win.app_id != null && dock_matches(app_id, win.app_id)) wins.add(win);
             }
-            if (wins.size < 2) return;
+            if (wins.size == 0) return;
 
             Graphene.Rect anchor_bounds;
             if (!anchor.compute_bounds(main_container, out anchor_bounds)) return;

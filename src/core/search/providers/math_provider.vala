@@ -15,16 +15,18 @@ namespace Singularity {
             var results = new List<SearchResult>();
 
             string q = query.strip();
+            string expression = q.has_suffix("=")
+                ? q.substring(0, q.length - 1).strip() : q;
             // Only arithmetic expressions, and not a bare number on its own.
             var allowed = new Regex("""^[0-9\s\+\-\*\/\(\)\.]+$""");
-            if (!allowed.match(q)) return results;
+            if (!allowed.match(expression)) return results;
             var only_digits = new Regex("""^[0-9\s\.]+$""");
-            if (only_digits.match(q)) return results;
+            if (only_digits.match(expression)) return results;
 
             // Evaluate in-process: no python3 dependency, no per-keystroke
             // subprocess, and no exponentiation DoS (fork-free Math.pow).
             double value;
-            if (!new ExprParser(q).parse(out value)) return results;
+            if (!new ExprParser(expression).parse(out value)) return results;
             if (value != value) return results;                          // NaN
             if (value == double.INFINITY || value == -double.INFINITY) return results;
 

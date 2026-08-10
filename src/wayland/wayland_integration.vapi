@@ -90,8 +90,22 @@ namespace Singularity {
         out int x, out int y, out int width, out int height,
         out int maximized, out int fullscreen, out string? connector);
 
+    [CCode (cname = "singularity_wayland_get_window_workarea", cheader_filename = "wayland_integration.h")]
+    public bool wayland_get_window_workarea(void* toplevel_handle,
+        out int x, out int y, out int width, out int height);
+
     [CCode (cname = "singularity_wayland_set_tiled", cheader_filename = "wayland_integration.h")]
     public void wayland_set_tiled(void* toplevel_handle, uint32 tiled);
+
+    [CCode (cname = "singularity_wayland_set_scrolling_mode", cheader_filename = "wayland_integration.h")]
+    public void wayland_set_scrolling_mode(uint32 enabled);
+
+    [CCode (cname = "singularity_wayland_detach_tiled", cheader_filename = "wayland_integration.h")]
+    public void wayland_detach_tiled(void* toplevel_handle);
+
+    [CCode (cname = "singularity_wayland_set_tiling_drop_preview", cheader_filename = "wayland_integration.h")]
+    public void wayland_set_tiling_drop_preview(int x, int y, int width,
+        int height, uint32 visible);
 
     [CCode (cname = "singularity_wayland_snap_view", cheader_filename = "wayland_integration.h")]
     public void wayland_snap_view(void* toplevel_handle, uint32 direction);
@@ -112,6 +126,22 @@ namespace Singularity {
     public delegate void WindowOutputChangedCallback(void* handle, void* data);
     [CCode (cname = "singularity_wayland_set_window_output_changed_callback", cheader_filename = "wayland_integration.h")]
     public void wayland_set_window_output_changed_callback(WindowOutputChangedCallback cb, void* data);
+
+    [CCode (has_target = false)]
+    public delegate void DesktopGestureCallback(uint32 phase, uint32 fingers,
+        uint32 direction,
+        double dx, double dy, int cancelled, int committed, void* data);
+    [CCode (cname = "singularity_wayland_set_desktop_gesture_callback", cheader_filename = "wayland_integration.h")]
+    public void wayland_set_desktop_gesture_callback(DesktopGestureCallback cb, void* data);
+
+    [CCode (has_target = false)]
+    public delegate void TilingInteractionCallback(void* handle, uint32 phase,
+        uint32 kind, int x, int y, int width, int height,
+        int cursor_x, int cursor_y, uint32 edges, int float_candidate,
+        void* data);
+    [CCode (cname = "singularity_wayland_set_tiling_interaction_callback", cheader_filename = "wayland_integration.h")]
+    public void wayland_set_tiling_interaction_callback(
+        TilingInteractionCallback cb, void* data);
 
     [CCode (cname = "singularity_wayland_list_globals", cheader_filename = "wayland_integration.h")]
     public string wayland_list_globals();

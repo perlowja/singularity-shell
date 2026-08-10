@@ -14,6 +14,9 @@ namespace Singularity {
         private Box ws_strip_container;
         private Gtk.Widget anim_box;
         private uint _anim_out_timer = 0;
+        private Singularity.Animation.TimedAnimation? _gesture_animation = null;
+        private bool _gesture_active = false;
+        private bool _gesture_opening = false;
         private AppSystem.Workspace? viewed_workspace = null;
         private int viewed_index = -1;
 
@@ -97,12 +100,12 @@ namespace Singularity {
             // Workspace Strip (Top area)
             ws_strip_container = new Box(Orientation.VERTICAL, 0);
             ws_strip_container.add_css_class("workspace-strip-container");
-            ws_strip_container.margin_top = 32;
             ws_strip_container.vexpand = false;
-            ws_strip_container.set_size_request(-1, 130);
+            ws_strip_container.set_size_request(-1, 162);
             main_box.append(ws_strip_container);
 
             var ws_scroll = new ScrolledWindow();
+            ws_scroll.margin_top = 32;
             ws_scroll.hscrollbar_policy = PolicyType.AUTOMATIC;
             ws_scroll.vscrollbar_policy = PolicyType.NEVER;
             ws_scroll.hexpand = true;
@@ -395,6 +398,11 @@ namespace Singularity {
         public void toggle() {
             if (visible && Singularity.DebugManager.get_default().workspaces_pinned)
                 return; // dev aid: keep workspaces open for screenshots
+            if (_gesture_animation != null) {
+                _gesture_animation.reset();
+                _gesture_animation = null;
+            }
+            _gesture_active = false;
             if (visible) {
                 // Commit the workspace the user navigated to: closing the
                 // overview should leave you on the selected workspace (#108).
@@ -414,15 +422,7 @@ namespace Singularity {
                     anim_box.remove_css_class("animating-out");
                     hide();
                     // Free all window preview textures - they'll be re-captured on next open
-                    Widget? c = window_stack.get_first_child();
-                    while (c != null) {
-                        Widget next = c.get_next_sibling();
-                        window_stack.remove(c);
-                        c = next;
-                    }
-                    PreviewCache.get_default().clear();
-                    viewed_workspace = null;
-                    viewed_index = -1;
+                    clear_overview_content();
                     hidden();
                     return GLib.Source.REMOVE;
                 });
@@ -443,6 +443,86 @@ namespace Singularity {
                 present();
                 shown();
             }
+        }
+
+        private void clear_overview_content() {
+            Widget? child = window_stack.get_first_child();
+            while (child != null) {
+                Widget next = child.get_next_sibling();
+                window_stack.remove(child);
+                child = next;
+            }
+            PreviewCache.get_default().clear();
+            viewed_workspace = null;
+            viewed_index = -1;
+        }
+
+        public void begin_gesture(bool opening) {
+            if ((opening && visible) || (!opening && !visible)) return;
+            if (_gesture_animation != null) {
+                _gesture_animation.reset();
+                _gesture_animation = null;
+            }
+            if (_anim_out_timer != 0) {
+                GLib.Source.remove(_anim_out_timer);
+                _anim_out_timer = 0;
+            }
+            anim_box.remove_css_class("animating-in");
+            anim_box.remove_css_class("animating-out");
+            _gesture_active = true;
+            _gesture_opening = opening;
+            if (opening) {
+                refresh();
+                opacity = 0;
+                present();
+                shown();
+            } else {
+                opacity = 1;
+            }
+        }
+
+        public void update_gesture(double dy) {
+            if (!_gesture_active) return;
+            double distance = _gesture_opening ? -dy : dy;
+            double progress = double.max(0, double.min(1, distance / 240.0));
+            opacity = _gesture_opening ? progress : 1.0 - progress;
+        }
+
+        public void end_gesture(bool committed) {
+            if (!_gesture_active) return;
+            _gesture_active = false;
+            bool stay_open = _gesture_opening ? committed : !committed;
+            double target = stay_open ? 1.0 : 0.0;
+            if (!stay_open) hiding();
+            if (!Gtk.Settings.get_default().gtk_enable_animations
+                    || Math.fabs(opacity - target) < 0.001) {
+                opacity = target;
+                if (!stay_open) {
+                    hide();
+                    clear_overview_content();
+                    hidden();
+                }
+                return;
+            }
+            uint duration = (uint)double.max(80,
+                180.0 * Math.fabs(target - opacity));
+            var animation = new Singularity.Animation.TimedAnimation(
+                this, opacity, target, duration,
+                Singularity.Animation.TimedAnimation.Easing.EASE_OUT_CUBIC);
+            _gesture_animation = animation;
+            animation.tick.connect(() => {
+                opacity = animation.value;
+            });
+            animation.done.connect(() => {
+                opacity = target;
+                if (_gesture_animation == animation) _gesture_animation = null;
+                if (!stay_open) {
+                    hide();
+                    clear_overview_content();
+                    hidden();
+                }
+            });
+            animation.play();
         }
     }
 

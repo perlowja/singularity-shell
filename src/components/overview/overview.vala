@@ -19,6 +19,10 @@ namespace Singularity {
         private Box main_box;
         private uint _anim_out_timer = 0;
         private uint _anim_in_timer = 0;
+        private uint _present_timer = 0;
+        private Singularity.Animation.TimedAnimation? _gesture_animation = null;
+        private bool _gesture_active = false;
+        private bool _gesture_opening = false;
         // Tears down the grid (icon textures + widget instances) once the
         // overview has stayed hidden a while, so an idle desktop doesn't pay
         // for content nobody is looking at. Reopening within the window keeps
@@ -301,6 +305,15 @@ namespace Singularity {
             int64 now = GLib.get_monotonic_time();
             if (now - last_toggle_time < 150000) return;
             last_toggle_time = now;
+            if (_gesture_animation != null) {
+                _gesture_animation.reset();
+                _gesture_animation = null;
+            }
+            _gesture_active = false;
+            if (_present_timer != 0) {
+                GLib.Source.remove(_present_timer);
+                _present_timer = 0;
+            }
             // Dev aid: keep the overview open for screenshots. The toggle to
             // close is suppressed while pinned (turn it off in Developer
             // settings to dismiss).
@@ -398,7 +411,8 @@ namespace Singularity {
                     if (!launcher_grid.is_populated()) launcher_grid.populate(true);
                     return GLib.Source.REMOVE;
                 });
-                GLib.Timeout.add(16, () => {
+                _present_timer = GLib.Timeout.add(16, () => {
+                    _present_timer = 0;
                     if (!is_showing) return GLib.Source.REMOVE;
                     opacity = 1;
                     main_box.remove_css_class("animating-out");
@@ -416,6 +430,100 @@ namespace Singularity {
                 });
                 shown();
             }
+        }
+
+        private void finish_gesture_hide() {
+            hide();
+            PreviewCache.get_default().clear();
+            hidden();
+            Singularity.trim_heap();
+            if (_idle_depopulate_timer != 0)
+                GLib.Source.remove(_idle_depopulate_timer);
+            _idle_depopulate_timer = GLib.Timeout.add(IDLE_DEPOPULATE_MS, () => {
+                _idle_depopulate_timer = 0;
+                if (!is_showing) {
+                    launcher_grid.depopulate();
+                    Singularity.trim_heap();
+                }
+                return GLib.Source.REMOVE;
+            });
+        }
+
+        public void begin_gesture(bool opening) {
+            if (!opening && !is_showing) return;
+            if (!opening && Singularity.DebugManager.get_default().overview_pinned) return;
+            if (_gesture_animation != null) {
+                _gesture_animation.reset();
+                _gesture_animation = null;
+            }
+            if (opening) {
+                if (!is_showing) toggle();
+                if (!is_showing) return;
+            }
+            if (_present_timer != 0) {
+                GLib.Source.remove(_present_timer);
+                _present_timer = 0;
+            }
+            if (_anim_in_timer != 0) {
+                GLib.Source.remove(_anim_in_timer);
+                _anim_in_timer = 0;
+            }
+            if (_anim_out_timer != 0) {
+                GLib.Source.remove(_anim_out_timer);
+                _anim_out_timer = 0;
+            }
+            main_box.remove_css_class("animating-in");
+            main_box.remove_css_class("animating-out");
+            _gesture_active = true;
+            _gesture_opening = opening;
+            opacity = opening ? 0 : 1;
+        }
+
+        public void update_gesture(double dy) {
+            if (!_gesture_active) return;
+            double distance = _gesture_opening ? -dy : dy;
+            double progress = double.max(0, double.min(1, distance / 240.0));
+            opacity = _gesture_opening ? progress : 1.0 - progress;
+        }
+
+        public void end_gesture(bool committed) {
+            if (!_gesture_active) return;
+            _gesture_active = false;
+            bool stay_open = _gesture_opening ? committed : !committed;
+            double target = stay_open ? 1.0 : 0.0;
+            if (stay_open) {
+                is_showing = true;
+                showing = true;
+                set_keyboard_mode(this, GtkLayerShell.KeyboardMode.ON_DEMAND);
+            } else {
+                is_showing = false;
+                showing = false;
+                set_keyboard_mode(this, GtkLayerShell.KeyboardMode.NONE);
+                hiding();
+            }
+            if (!Gtk.Settings.get_default().gtk_enable_animations
+                    || Math.fabs(opacity - target) < 0.001) {
+                opacity = target;
+                if (stay_open) search_entry.grab_focus();
+                else finish_gesture_hide();
+                return;
+            }
+            uint duration = (uint)double.max(80,
+                180.0 * Math.fabs(target - opacity));
+            var animation = new Singularity.Animation.TimedAnimation(
+                this, opacity, target, duration,
+                Singularity.Animation.TimedAnimation.Easing.EASE_OUT_CUBIC);
+            _gesture_animation = animation;
+            animation.tick.connect(() => {
+                opacity = animation.value;
+            });
+            animation.done.connect(() => {
+                opacity = target;
+                if (_gesture_animation == animation) _gesture_animation = null;
+                if (stay_open) search_entry.grab_focus();
+                else finish_gesture_hide();
+            });
+            animation.play();
         }
     }
 
