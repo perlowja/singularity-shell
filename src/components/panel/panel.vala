@@ -5,91 +5,31 @@ using Gee;
 namespace Singularity {
 
     /**
-     * SensorsIndicator — compact temperature/clock readout for the panel.
+     * SensorsIndicator — one compact chip in the panel, detail in a popover.
      *
-     * ONE panel item, never a row of them. The bar shows a single chip (the
-     * hottest sensor, optionally the CPU clock); everything else lives in a
-     * popover grouped into CPU / GPU / Clocks. A machine can expose a lot of
-     * sensors -- a CIX Sky1 board reports five thermal zones, a desktop x86
-     * box with a Super-I/O chip can report a dozen -- and putting each on the
-     * bar would push the clock off the screen.
+     * Deliberately ONE panel item rather than a row of them: a machine can
+     * expose a lot of sensors (a CIX Sky1 board reports five thermal zones; an
+     * x86 desktop with a Super-I/O chip can report a dozen), and putting each
+     * on the bar would push the clock off the screen.
      *
-     * PORTABILITY. This reads only standard Linux sysfs and hardcodes no
-     * board-, vendor- or architecture-specific name:
-     *
-     *   1. /sys/class/hwmon/hwmon*  is the primary source. It is the generic
-     *      kernel hwmon interface and is what x86 exposes (coretemp, k10temp,
-     *      zenpower, nct6775) as well as most discrete GPUs (amdgpu, nouveau,
-     *      i915) and many ARM SoCs.
-     *   2. /sys/class/thermal/thermal_zone*  is the fallback. Plenty of ARM
-     *      SoCs expose temperatures ONLY here -- the CIX Sky1 is one, with
-     *      TZB0/TZB1 (big cluster), TZM0/TZM1 (mid) and TZGT (graphics).
-     *
-     * A sensor is classified as GPU by matching its driver name or label
-     * against known GPU driver names, so amdgpu/nouveau/i915/panfrost/panthor
-     * and a Mali or "graphics" thermal zone all land in the GPU group without
-     * the widget knowing anything about a specific board. `sensors-gpu-zone`
-     * exists purely as an override for hardware the heuristic misses; it is
-     * empty by default rather than naming any one platform's zone.
-     *
-     * Clock reading prefers cpufreq and falls back to /proc/cpuinfo, since
-     * cpufreq is absent on some systems (many VMs, some x86 without a
-     * scaling driver).
-     *
-     * Hardware exposing nothing readable hides the widget rather than
-     * displaying zeros, so this is inert rather than wrong on such a machine.
-     *
-     * EVERY settings read is guarded by has_key(): this widget's schema may
-     * ship from a different package than the binary, and an unguarded
-     * g_settings_get_* against a missing key is a FATAL abort that would take
-     * down the whole panel -- and, since the greeter builds the same Panel,
-     * the login screen with it.
+     * All sysfs reading lives in Singularity.SensorMonitor
+     * (libsingularity-system). This widget only renders what that backend
+     * publishes, per CONTRIBUTING: headless system backends do not live in the
+     * shell.
      */
-    private enum SensorKind { CPU, GPU, OTHER }
-
-    private class SensorReading : Object {
-        public string label;
-        public int millicelsius;
-        public SensorKind kind;
-        public SensorReading(string label, int millicelsius, SensorKind kind) {
-            this.label = label;
-            this.millicelsius = millicelsius;
-            this.kind = kind;
-        }
-    }
-
     private class SensorsIndicator : Gtk.Box {
-        // Kernel DRIVER names, not product names. Classification exists because
-        // hwmon reports far more than a CPU: MEASURED on a CIX Sky1 board, the
-        // eight hwmon chips are four CPU-cluster zones, one graphics zone, an
-        // nvme drive at 67.8 C and TWO r8169 NIC sensors. Taking the hottest
-        // sensor overall would have put the SSD's 68 C on a widget labelled
-        // CPU/GPU -- correct number, wrong thing entirely.
-        private const string[] GPU_HINTS = {
-            "amdgpu", "radeon", "nouveau", "i915", "xe", "panfrost", "panthor",
-            "mali", "gpu", "graphics"
-        };
-        // Sensors that are neither CPU nor GPU. Grouped separately rather than
-        // dropped: a hot drive is worth seeing, just not as "CPU".
-        private const string[] OTHER_HINTS = {
-            "nvme", "drivetemp", "sd", "r8169", "e1000", "igb", "ixgbe",
-            "iwlwifi", "mt76", "ath1", "battery", "bat", "wifi", "acpitz"
-        };
+        // Sensor counts vary by two orders of magnitude across platforms, so
+        // the detail list is capped rather than unbounded.
+        private const int MAX_ROWS_PER_GROUP = 6;
 
-        // MenuButton is CONTAINED, not inherited: GtkMenuButton is declared
-        // final in GTK4, so subclassing it fails to compile outright
-        // ("unknown type name GtkMenuButtonClass").
         private MenuButton button;
         private Label summary_label;
         private Box detail_box;
-        private uint timer_id = 0;
-        private GLib.Settings settings;
-        private bool show_freq = true;
-        private string gpu_override = "";
+        private SensorMonitor monitor;
+        private bool show_frequency = true;
 
         public SensorsIndicator(GLib.Settings settings) {
             Object(orientation: Orientation.HORIZONTAL, spacing: 0);
-            this.settings = settings;
             valign = Align.CENTER;
             add_css_class("sensors-indicator");
 
@@ -107,247 +47,158 @@ namespace Singularity {
             detail_box.margin_bottom = 10;
             detail_box.margin_start = 12;
             detail_box.margin_end = 12;
-            var pop = new Popover();
-            pop.child = detail_box;
-            button.popover = pop;
+            Popover popover = new Popover();
+            popover.child = detail_box;
+            button.popover = popover;
 
-            var schema = settings.settings_schema;
-            if (schema != null && schema.has_key("sensors-gpu-zone")) {
-                gpu_override = settings.get_string("sensors-gpu-zone");
-            }
-            if (schema != null && schema.has_key("sensors-show-frequency")) {
-                show_freq = settings.get_boolean("sensors-show-frequency");
-            }
+            monitor = SystemMonitor.get_default().sensors;
+
+            // Every settings read is guarded: this widget and the schema can
+            // ship from different packages, and an unguarded read of a missing
+            // key is a fatal abort that would take the panel -- and the
+            // greeter, which builds the same Panel -- down with it.
+            SettingsSchema? schema = settings.settings_schema;
             int interval = 2;
             if (schema != null && schema.has_key("sensors-interval-seconds")) {
                 interval = settings.get_int("sensors-interval-seconds");
             }
-            if (interval < 1) interval = 2;
-
-            refresh();
-            timer_id = GLib.Timeout.add_seconds(interval, () => {
-                // Skip entirely when nothing can see it: unmapped panel, other
-                // workspace, overview. The detail list is rebuilt only while
-                // the popover is actually open.
-                if (get_mapped()) refresh();
-                return GLib.Source.CONTINUE;
-            });
-
-            destroy.connect(() => {
-                if (timer_id != 0) { GLib.Source.remove(timer_id); timer_id = 0; }
-            });
-        }
-
-        private static string? read_line(string path) {
-            try {
-                string contents;
-                if (!FileUtils.get_contents(path, out contents)) return null;
-                return contents.strip();
-            } catch (GLib.Error e) {
-                return null;
+            if (schema != null && schema.has_key("sensors-show-frequency")) {
+                show_frequency = settings.get_boolean("sensors-show-frequency");
             }
-        }
-
-        private static bool matches(string text, string[] hints) {
-            var lower = text.down();
-            foreach (string hint in hints) {
-                if (lower.contains(hint)) return true;
+            if (schema != null && schema.has_key("sensors-gpu-zone")) {
+                monitor.gpu_hint = settings.get_string("sensors-gpu-zone");
             }
-            return false;
-        }
-
-        /**
-         * Classify a sensor from its driver name and label.
-         *
-         * Anything unrecognised is treated as CPU, which is the right default:
-         * SoC thermal zones are typically CPU clusters and carry names no
-         * generic list can enumerate (Sky1 uses TZB0/TZB1/TZM0/TZM1). Known
-         * drives, NICs and radios are pulled out explicitly so they cannot be
-         * mistaken for the CPU.
-         */
-        private SensorKind classify(string chip, string? label) {
-            var joined = label != null && label != "" ? chip + " " + label : chip;
-            if (gpu_override != "" && joined.contains(gpu_override)) return SensorKind.GPU;
-            if (matches(joined, GPU_HINTS)) return SensorKind.GPU;
-            if (matches(joined, OTHER_HINTS)) return SensorKind.OTHER;
-            return SensorKind.CPU;
-        }
-
-        /** All readable temperature sensors, hwmon first, thermal as fallback. */
-        private Gee.ArrayList<SensorReading> collect() {
-            var list = new Gee.ArrayList<SensorReading>();
-
-            try {
-                var dir = Dir.open("/sys/class/hwmon", 0);
-                string? node;
-                while ((node = dir.read_name()) != null) {
-                    var basep = "/sys/class/hwmon/" + node;
-                    var chip = read_line(basep + "/name") ?? node;
-                    try {
-                        var inner = Dir.open(basep, 0);
-                        string? f;
-                        while ((f = inner.read_name()) != null) {
-                            if (!f.has_prefix("temp") || !f.has_suffix("_input")) continue;
-                            var raw = read_line(basep + "/" + f);
-                            if (raw == null) continue;
-                            var mc = int.parse(raw);
-                            if (mc <= 0) continue;
-                            var stem = f.substring(0, f.length - "_input".length);
-                            var lbl = read_line(basep + "/" + stem + "_label");
-                            var name = lbl != null && lbl != "" ? "%s %s".printf(chip, lbl) : chip;
-                            list.add(new SensorReading(name, mc, classify(chip, lbl)));
-                        }
-                    } catch (GLib.Error e) {
-                    }
-                }
-            } catch (GLib.Error e) {
-                // No hwmon at all: fall through to thermal zones.
+            if (schema != null && schema.has_key("sensors-cpu-zone")) {
+                monitor.cpu_hint = settings.get_string("sensors-cpu-zone");
             }
 
-            if (list.size == 0) {
-                try {
-                    var dir = Dir.open("/sys/class/thermal", 0);
-                    string? node;
-                    while ((node = dir.read_name()) != null) {
-                        if (!node.has_prefix("thermal_zone")) continue;
-                        var basep = "/sys/class/thermal/" + node;
-                        var type = read_line(basep + "/type");
-                        var raw = read_line(basep + "/temp");
-                        if (type == null || raw == null) continue;
-                        var mc = int.parse(raw);
-                        if (mc <= 0) continue;
-                        list.add(new SensorReading(type, mc, classify(type, null)));
-                    }
-                } catch (GLib.Error e) {
-                }
-            }
-
-            return list;
+            monitor.updated.connect(on_updated);
+            monitor.start(interval);
+            on_updated();
         }
 
-        /** Current CPU clocks in MHz, one per policy, highest first. */
-        private Gee.ArrayList<int> collect_clocks() {
-            var out_list = new Gee.ArrayList<int>();
-            try {
-                var dir = Dir.open("/sys/devices/system/cpu/cpufreq", 0);
-                string? node;
-                while ((node = dir.read_name()) != null) {
-                    if (!node.has_prefix("policy")) continue;
-                    var v = read_line("/sys/devices/system/cpu/cpufreq/" + node + "/scaling_cur_freq");
-                    if (v == null) continue;
-                    var khz = int.parse(v);
-                    if (khz > 0) out_list.add(khz / 1000);
-                }
-            } catch (GLib.Error e) {
-            }
-
-            if (out_list.size == 0) {
-                // No cpufreq (common in VMs and on some x86 without a scaling
-                // driver): /proc/cpuinfo still reports a MHz figure.
-                var txt = read_line("/proc/cpuinfo");
-                if (txt != null) {
-                    foreach (string line in txt.split("\n")) {
-                        if (!line.down().has_prefix("cpu mhz")) continue;
-                        var parts = line.split(":");
-                        if (parts.length < 2) continue;
-                        var mhz = (int) double.parse(parts[1].strip());
-                        if (mhz > 0) out_list.add(mhz);
-                    }
-                }
-            }
-
-            out_list.sort((a, b) => b - a);
-            return out_list;
+        public override void dispose() {
+            monitor.updated.disconnect(on_updated);
+            monitor.stop();
+            base.dispose();
         }
 
-        private static string fmt_c(int millicelsius) {
-            return "%d°".printf((millicelsius + 500) / 1000);
+        private static string format_celsius(int millidegrees) {
+            return "%d°".printf((millidegrees + 500) / 1000);
         }
 
-        private static string fmt_mhz(int mhz) {
-            return mhz >= 1000 ? "%.1f GHz".printf(mhz / 1000.0) : "%d MHz".printf(mhz);
+        private static string format_clock(int khz) {
+            return khz >= 1000000
+                ? "%.1f GHz".printf(khz / 1000000.0)
+                : "%d MHz".printf(khz / 1000);
         }
 
-        private void refresh() {
-            var readings = collect();
-            if (readings.size == 0) {
-                visible = false;   // never display zeros on unsupported hardware
+        private void on_updated() {
+            if (!monitor.available) {
+                // Nothing readable on this hardware: hide rather than show zeros.
+                visible = false;
                 return;
             }
             visible = true;
 
-            // The chip shows the hottest CPU sensor -- NOT the hottest sensor
-            // overall, which on a board with a warm NVMe drive would show the
-            // drive's temperature on a CPU/GPU widget. Falls back to the
-            // hottest of anything only when nothing classified as CPU.
-            SensorReading? hottest = null;
-            foreach (var r in readings) {
-                if (r.kind != SensorKind.CPU) continue;
-                if (hottest == null || r.millicelsius > hottest.millicelsius) hottest = r;
-            }
-            if (hottest == null) {
-                hottest = readings[0];
-                foreach (var r in readings) {
-                    if (r.millicelsius > hottest.millicelsius) hottest = r;
-                }
-            }
+            // Prefer a sensor positively identified as the CPU. The backend
+            // reports -1 when it found none, and falls back to the hottest
+            // unidentified sensor -- it never guesses that an unknown chip is
+            // the processor.
+            int primary = monitor.cpu_millidegrees >= 0
+                ? monitor.cpu_millidegrees
+                : monitor.system_millidegrees;
 
-            var clocks = show_freq ? collect_clocks() : new Gee.ArrayList<int>();
-            var text = new StringBuilder(fmt_c(hottest.millicelsius));
-            if (clocks.size > 0) text.append(" · ").append(fmt_mhz(clocks[0]));
+            StringBuilder text = new StringBuilder();
+            if (primary >= 0) {
+                text.append(format_celsius(primary));
+            }
+            if (show_frequency && monitor.cpu_khz > 0) {
+                if (text.len > 0) {
+                    text.append(" · ");
+                }
+                text.append(format_clock(monitor.cpu_khz));
+            }
             summary_label.label = text.str;
 
-            var pop = button.popover;
-            if (pop != null && pop.visible) rebuild_details(readings, clocks);
+            Popover? popover = button.popover;
+            if (popover != null && popover.visible) {
+                rebuild_details();
+            }
         }
 
         private void add_heading(string title) {
-            var l = new Label(title);
-            l.add_css_class("heading");
-            l.halign = Align.START;
-            l.margin_top = 4;
-            detail_box.append(l);
+            Label heading = new Label(title);
+            heading.add_css_class("heading");
+            heading.halign = Align.START;
+            heading.margin_top = 4;
+            detail_box.append(heading);
         }
 
         private void add_row(string name, string value) {
-            var row = new Box(Orientation.HORIZONTAL, 12);
-            var n = new Label(name);
-            n.halign = Align.START;
-            n.hexpand = true;
-            var v = new Label(value);
-            v.halign = Align.END;
-            v.add_css_class("dim-label");
-            row.append(n);
-            row.append(v);
+            Box row = new Box(Orientation.HORIZONTAL, 12);
+            Label name_label = new Label(name);
+            name_label.halign = Align.START;
+            name_label.hexpand = true;
+            Label value_label = new Label(value);
+            value_label.halign = Align.END;
+            value_label.add_css_class("dim-label");
+            row.append(name_label);
+            row.append(value_label);
             detail_box.append(row);
         }
 
-        private void add_group(Gee.ArrayList<SensorReading> readings,
-                               SensorKind kind, string title) {
+        private void add_group(SensorKind kind, string title) {
             bool any = false;
-            foreach (var r in readings) {
-                if (r.kind == kind) { any = true; break; }
+            foreach (SensorReading reading in monitor.readings()) {
+                if (reading.kind == kind) {
+                    any = true;
+                    break;
+                }
             }
-            if (!any) return;
+            if (!any) {
+                return;
+            }
             add_heading(title);
-            foreach (var r in readings) {
-                if (r.kind == kind) add_row(r.label, fmt_c(r.millicelsius));
+            // Cap the rows. Sensor count varies enormously by platform: an ARM
+            // dev board reports 5, a Qualcomm SC8280XP reports 55. Listing all
+            // of them turns the popover into a wall of near-identical numbers,
+            // so show the first few and state how many were left out.
+            int shown = 0;
+            int hidden = 0;
+            foreach (SensorReading reading in monitor.readings()) {
+                if (reading.kind != kind) {
+                    continue;
+                }
+                if (shown < MAX_ROWS_PER_GROUP) {
+                    add_row(reading.label, format_celsius(reading.millidegrees));
+                    shown++;
+                } else {
+                    hidden++;
+                }
+            }
+            if (hidden > 0) {
+                add_row(_("%d more").printf(hidden), "");
             }
         }
 
-        /** Grouped detail: CPU, GPU, Other, Clocks — built only while open. */
-        private void rebuild_details(Gee.ArrayList<SensorReading> readings,
-                                     Gee.ArrayList<int> clocks) {
-            Gtk.Widget? c;
-            while ((c = detail_box.get_first_child()) != null) detail_box.remove(c);
+        /** Built only while the popover is open. */
+        private void rebuild_details() {
+            Gtk.Widget? child = detail_box.get_first_child();
+            while (child != null) {
+                detail_box.remove(child);
+                child = detail_box.get_first_child();
+            }
 
-            add_group(readings, SensorKind.CPU, _("CPU"));
-            add_group(readings, SensorKind.GPU, _("GPU"));
-            add_group(readings, SensorKind.OTHER, _("Other"));
-            if (clocks.size > 0) {
+            add_group(SensorKind.CPU, _("CPU"));
+            add_group(SensorKind.GPU, _("GPU"));
+            add_group(SensorKind.SYSTEM, _("System"));
+
+            int[] clocks = monitor.clocks_khz();
+            if (clocks.length > 0) {
                 add_heading(_("Clocks"));
-                for (int i = 0; i < clocks.size; i++) {
-                    add_row(_("Core group %d").printf(i + 1), fmt_mhz(clocks[i]));
+                for (int i = 0; i < clocks.length; i++) {
+                    add_row(_("Core group %d").printf(i + 1), format_clock(clocks[i]));
                 }
             }
         }
