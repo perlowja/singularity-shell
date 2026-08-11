@@ -16,6 +16,7 @@ namespace Singularity {
         public BluetoothManager bluetooth { get { if (_bluetooth == null) _bluetooth = new BluetoothManager(); return _bluetooth; } }
         public PowerProfilesManager power_profiles { get { if (_power_profiles == null) _power_profiles = new PowerProfilesManager(); return _power_profiles; } }
         public ResourceMonitor resources { get { if (_resources == null) _resources = new ResourceMonitor(); return _resources; } }
+        public SensorMonitor sensors { get { if (_sensors == null) _sensors = new SensorMonitor(); return _sensors; } }
         public CallMonitor call_monitor { get { if (_call_monitor == null) _call_monitor = new CallMonitor(audio); return _call_monitor; } }
 
         private PowerManager? _power;
@@ -31,6 +32,7 @@ namespace Singularity {
         private BluetoothManager? _bluetooth;
         private PowerProfilesManager? _power_profiles;
         private ResourceMonitor? _resources;
+        private SensorMonitor? _sensors = null;
         private CallMonitor? _call_monitor;
 
         public static SystemMonitor get_default() {
