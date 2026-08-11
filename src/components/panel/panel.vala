@@ -4,6 +4,162 @@ using Gee;
 
 namespace Singularity {
 
+    /**
+     * SensorsIndicator — CPU/GPU temperature and clock for the panel.
+     *
+     * Reads sysfs directly: thermal zones for temperature, cpufreq for clock.
+     *
+     * NOT wattage: the CIX Sky1 boards expose no power rail to the kernel at
+     * all (no /sys/class/power_supply, no hwmon power*_input or curr*_input,
+     * no energy*_uj), so a "watts" readout could only be an invented estimate.
+     *
+     * Zone names are board-specific -- Sky1 exposes TZB0/TZB1 (big cluster),
+     * TZM0/TZM1 (mid) and TZGT (graphics) -- so nothing is hardcoded except
+     * the default GPU zone. The zone matching "sensors-gpu-zone" is shown as
+     * GPU and the hottest of the rest as CPU. On hardware with no readable
+     * zones the widget hides itself rather than displaying zeros.
+     *
+     * EVERY settings read is guarded by has_key(). The gschema ships from the
+     * singularity-desktop superproject while this code ships from the
+     * singularity-shell submodule, so the two CAN be version-skewed on a real
+     * install. An unguarded g_settings_get_* on a missing key is a FATAL
+     * abort, which would take the whole panel (and the greeter) down.
+     */
+    private class SensorsIndicator : Gtk.Box {
+        private Label temp_label;
+        private Label freq_label;
+        private uint timer_id = 0;
+        private GLib.Settings settings;
+
+        private string gpu_zone = "TZGT";
+        private bool show_freq = true;
+
+        public SensorsIndicator(GLib.Settings settings) {
+            Object(orientation: Orientation.HORIZONTAL, spacing: 6);
+            this.settings = settings;
+            valign = Align.CENTER;
+            add_css_class("sensors-indicator");
+
+            temp_label = new Label("");
+            temp_label.add_css_class("sensors-temp");
+            freq_label = new Label("");
+            freq_label.add_css_class("sensors-freq");
+            append(temp_label);
+            append(freq_label);
+
+            tooltip_text = _("CPU and GPU temperature and clock");
+
+            var schema = settings.settings_schema;
+            if (schema != null && schema.has_key("sensors-gpu-zone")) {
+                var z = settings.get_string("sensors-gpu-zone");
+                if (z != "") gpu_zone = z;
+            }
+            if (schema != null && schema.has_key("sensors-show-frequency")) {
+                show_freq = settings.get_boolean("sensors-show-frequency");
+            }
+            int interval = 2;
+            if (schema != null && schema.has_key("sensors-interval-seconds")) {
+                interval = settings.get_int("sensors-interval-seconds");
+            }
+            if (interval < 1) interval = 2;
+
+            update();
+            timer_id = GLib.Timeout.add_seconds(interval, () => {
+                // Polling is skipped while not mapped: in the overview, on
+                // another workspace or with the panel hidden there is nobody
+                // to read it, and the point of this work is to let an idle
+                // board stay idle.
+                if (get_mapped()) update();
+                return GLib.Source.CONTINUE;
+            });
+
+            destroy.connect(() => {
+                if (timer_id != 0) { GLib.Source.remove(timer_id); timer_id = 0; }
+            });
+        }
+
+        private static string? read_first_line(string path) {
+            try {
+                string contents;
+                if (!FileUtils.get_contents(path, out contents)) return null;
+                return contents.strip();
+            } catch (GLib.Error e) {
+                return null;
+            }
+        }
+
+        /** Hottest non-GPU zone and the GPU zone, both in millicelsius. */
+        private void read_temps(out int cpu_mc, out int gpu_mc) {
+            cpu_mc = -1;
+            gpu_mc = -1;
+            try {
+                var dir = Dir.open("/sys/class/thermal", 0);
+                string? name;
+                while ((name = dir.read_name()) != null) {
+                    if (!name.has_prefix("thermal_zone")) continue;
+                    var bp = "/sys/class/thermal/" + name;
+                    var type = read_first_line(bp + "/type");
+                    var temp = read_first_line(bp + "/temp");
+                    if (type == null || temp == null) continue;
+                    var mc = int.parse(temp);
+                    if (mc <= 0) continue;
+                    if (type == gpu_zone) {
+                        gpu_mc = mc;
+                    } else if (mc > cpu_mc) {
+                        cpu_mc = mc;
+                    }
+                }
+            } catch (GLib.Error e) {
+                // No readable zones: both stay -1 and the widget hides.
+            }
+        }
+
+        /** Highest current cpufreq across all policies, in kHz. */
+        private int read_max_freq_khz() {
+            int best = -1;
+            try {
+                var dir = Dir.open("/sys/devices/system/cpu/cpufreq", 0);
+                string? name;
+                while ((name = dir.read_name()) != null) {
+                    if (!name.has_prefix("policy")) continue;
+                    var v = read_first_line("/sys/devices/system/cpu/cpufreq/" + name + "/scaling_cur_freq");
+                    if (v == null) continue;
+                    var khz = int.parse(v);
+                    if (khz > best) best = khz;
+                }
+            } catch (GLib.Error e) {
+            }
+            return best;
+        }
+
+        private void update() {
+            int cpu_mc, gpu_mc;
+            read_temps(out cpu_mc, out gpu_mc);
+
+            if (cpu_mc < 0 && gpu_mc < 0) {
+                visible = false;   // never show zeros on unsupported hardware
+                return;
+            }
+            visible = true;
+
+            var parts = new StringBuilder();
+            if (cpu_mc >= 0) parts.append_printf("%d°", (cpu_mc + 500) / 1000);
+            if (gpu_mc >= 0) {
+                if (parts.len > 0) parts.append(" / ");
+                parts.append_printf("%d°", (gpu_mc + 500) / 1000);
+            }
+            temp_label.label = parts.str;
+
+            if (show_freq) {
+                var khz = read_max_freq_khz();
+                freq_label.label = khz > 0 ? "%.1f GHz".printf(khz / 1000000.0) : "";
+                freq_label.visible = khz > 0;
+            } else {
+                freq_label.visible = false;
+            }
+        }
+    }
+
     private class TilingPositionIndicator : Gtk.Fixed {
         private const int TRACK_WIDTH = 58;
         private const int TRACK_HEIGHT = 18;
@@ -610,6 +766,12 @@ namespace Singularity {
             clock_box.append(clock_btn);
             clock_box.append(clock_suffix_box);
             layout_items["clock"] = clock_box;
+            // Registered unconditionally so the greeter panel gets it too:
+            // Panel is constructed with greeter_mode for the login screen and
+            // shares this layout_items map. Registering an item does NOT show
+            // it -- placement comes from panel-layout-*, so it stays opt-in.
+            layout_items["sensors"] = new SensorsIndicator(_settings);
+
             reload_bar_layout();
             _settings.changed["panel-layout-left"].connect(() => {
                 if (!saving_bar_layout) reload_bar_layout();
@@ -628,8 +790,8 @@ namespace Singularity {
                     center_box,
                     right_box,
                     layout_items,
-                    { "overview", "workspaces", "tiling-position", "app-title", "global-menu", "system", "notifications", "clock" },
-                    { _("Overview"), _("Workspaces"), _("Scrolling Position"), _("App Title"), _("Global Menu"), _("System Status"), _("Notifications"), _("Clock") }
+                    { "overview", "workspaces", "tiling-position", "app-title", "global-menu", "system", "notifications", "clock", "sensors" },
+                    { _("Overview"), _("Workspaces"), _("Scrolling Position"), _("App Title"), _("Global Menu"), _("System Status"), _("Notifications"), _("Clock"), _("Sensors") }
                 );
                 layout_editor.move_requested.connect((item_id, section, index) => {
                     if (bar_layout != null && bar_layout.move(item_id, section, index)) save_bar_layout();
@@ -966,7 +1128,7 @@ namespace Singularity {
         private void reload_bar_layout() {
             string[] item_ids = {
                 "overview", "workspaces", "tiling-position", "app-title", "global-menu",
-                "system", "notifications", "clock"
+                "system", "notifications", "clock", "sensors"
             };
             bar_layout = new BarLayout(
                 item_ids,
