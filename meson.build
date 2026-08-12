@@ -267,6 +267,7 @@ endif
 
 singularity_core_sources = files(
     'src/components/panel/panel.vala',
+    'src/components/workspace_switch_feedback.vala',
     'src/core/bar_layout.vala',
     'src/core/bar_layout_edit_controller.vala',
     'src/core/bar_layout_edit_overlay.vala',

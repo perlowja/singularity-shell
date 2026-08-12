@@ -62,6 +62,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     private Singularity.SettingsWindow? settings_window = null;
     private Singularity.BarLayoutEditOverlay? bar_layout_edit_overlay = null;
     private Singularity.AppSwitcher? app_switcher = null;
+    private Singularity.WorkspaceSwitchFeedback? workspace_switch_feedback = null;
     private bool icon_theme_probe_done = false;
     public Singularity.DesktopIcons? desktop_icons = null;
     public Singularity.PreviewManager preview_manager;
@@ -270,6 +271,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             activate_shell_surface(Singularity.ShellRole.DOCK);
         }
         notification_display = new Singularity.NotificationDisplay(this);
+        workspace_switch_feedback = new Singularity.WorkspaceSwitchFeedback(this);
         setup_shell_monitor_listener();
         setup_secondary_surfaces();
         setup_entrance();
@@ -960,6 +962,11 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     private void handle_desktop_gesture(uint32 phase, uint32 fingers,
             uint32 direction,
             double dx, double dy, bool cancelled, bool committed) {
+        if (fingers == 4 && (direction == 1 || direction == 2)) {
+            workspace_switch_feedback?.handle_gesture(phase, direction, dx,
+                cancelled, committed);
+            return;
+        }
         if (fingers == 3 && (direction == 1 || direction == 2)) {
             tiling_manager.handle_scrolling_gesture(phase, dx, cancelled);
             return;
