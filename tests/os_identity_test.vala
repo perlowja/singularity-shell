@@ -26,4 +26,15 @@ void main() {
     var current = Singularity.OsIdentity.load();
     assert(current.name != "");
     assert(current.pretty_name != "");
+
+    string host_path = Path.build_filename(Environment.get_tmp_dir(), "singularity-host-os-release");
+    FileUtils.set_contents(host_path,
+        "NAME=\"Vanilla OS\"\nPRETTY_NAME=\"Vanilla OS 2.0\"\nVERSION_ID=2.0\nBUILD_ID=orchid\n");
+    var host = Singularity.OsIdentity.from_file(host_path);
+    assert(host != null);
+    assert(host.name == "Vanilla OS");
+    assert(host.pretty_name == "Vanilla OS 2.0");
+    assert(host.version_id == "2.0");
+    assert(host.build_id == "orchid");
+    FileUtils.remove(host_path);
 }

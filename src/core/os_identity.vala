@@ -22,6 +22,48 @@ namespace Singularity {
             );
         }
 
+        public static OsIdentity load_host() {
+            string? path = Environment.get_variable("CPAK_HOST_OS_RELEASE");
+            if (path != null && path != "") {
+                var identity = from_file(path);
+                if (identity != null) return identity;
+            }
+            return load();
+        }
+
+        public static bool has_host_identity() {
+            string? path = Environment.get_variable("CPAK_HOST_OS_RELEASE");
+            return path != null && path != "" && FileUtils.test(path, FileTest.IS_REGULAR);
+        }
+
+        internal static OsIdentity? from_file(string path) {
+            string content;
+            if (!FileUtils.get_contents(path, out content)) return null;
+
+            var values = new HashTable<string, string>(str_hash, str_equal);
+            foreach (var raw_line in content.split("\n")) {
+                string line = raw_line.strip();
+                if (line == "" || line.has_prefix("#")) continue;
+                int separator = line.index_of_char('=');
+                if (separator <= 0) continue;
+                string key = line.substring(0, separator).strip();
+                string value = line.substring(separator + 1).strip();
+                if (value.length >= 2 &&
+                    ((value.has_prefix("\"") && value.has_suffix("\"")) ||
+                     (value.has_prefix("'") && value.has_suffix("'")))) {
+                    value = value.substring(1, value.length - 2);
+                }
+                values.insert(key, value);
+            }
+
+            return from_values(
+                values.lookup("NAME"),
+                values.lookup("PRETTY_NAME"),
+                values.lookup("VERSION_ID"),
+                values.lookup("BUILD_ID")
+            );
+        }
+
         internal static OsIdentity from_values(string? name_value, string? pretty_name_value,
                                                 string? version_id_value, string? build_id_value) {
             string name = clean(name_value);

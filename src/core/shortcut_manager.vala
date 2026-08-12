@@ -635,6 +635,8 @@ namespace Singularity {
         }
 
         public void spawn_terminal() throws Error {
+            if (spawn_host_terminal()) return;
+
             // Try terminals in preference order
             string[] candidates = {
                 "singularity-leafs",
@@ -662,6 +664,35 @@ namespace Singularity {
             } catch (Error e) {
                 warning("spawn_terminal: no terminal emulator found: %s", e.message);
             }
+        }
+
+        private bool spawn_host_terminal() {
+            string? data_path = Environment.get_variable("CPAK_HOST_APPLICATIONS");
+            if (data_path == null || data_path == "") return false;
+
+            string applications_path = Path.build_filename(data_path, "applications");
+            try {
+                var directory = Dir.open(applications_path);
+                string? name;
+                while ((name = directory.read_name()) != null) {
+                    if (!name.has_suffix(".desktop")) continue;
+                    var info = new DesktopAppInfo.from_filename(
+                        Path.build_filename(applications_path, name));
+                    if (info == null) continue;
+                    string? categories = info.get_categories();
+                    if (categories == null || !(";" + categories + ";").contains(";TerminalEmulator;"))
+                        continue;
+                    try {
+                        info.launch(null, Gdk.Display.get_default().get_app_launch_context());
+                        return true;
+                    } catch (Error e) {
+                        continue;
+                    }
+                }
+            } catch (Error e) {
+                warning("spawn_terminal: failed to launch host terminal: %s", e.message);
+            }
+            return false;
         }
 
         // Run a command in a terminal, used as a fallback when GLib's

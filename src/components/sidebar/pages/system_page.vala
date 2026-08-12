@@ -18,7 +18,8 @@ namespace Singularity.SidebarPages {
         }
 
         private void build_ui() {
-            var os_identity = OsIdentity.load();
+            var runtime_identity = OsIdentity.load();
+            var host_identity = OsIdentity.load_host();
 
             // Copy-all-as-markdown action, far right in the page header.
             var spacer = new Box(Orientation.HORIZONTAL, 0);
@@ -60,11 +61,16 @@ namespace Singularity.SidebarPages {
             add_group(hw_group);
             var sw_group = new PreferencesGroup(_("Software Information"));
             sw_group.add_row(create_info_row("Firmware Version", get_firmware_version()));
-            sw_group.add_row(create_info_row("OS Name", os_identity.name));
-            if (os_identity.version_id != "")
-                sw_group.add_row(create_info_row("OS Version", os_identity.version_id));
-            if (os_identity.build_id != "")
-                sw_group.add_row(create_info_row("OS Build", os_identity.build_id));
+            if (OsIdentity.has_host_identity()) {
+                sw_group.add_row(create_info_row("Host OS", host_identity.menu_label()));
+                sw_group.add_row(create_info_row("cpak Runtime", runtime_identity.menu_label()));
+            } else {
+                sw_group.add_row(create_info_row("OS Name", runtime_identity.name));
+                if (runtime_identity.version_id != "")
+                    sw_group.add_row(create_info_row("OS Version", runtime_identity.version_id));
+                if (runtime_identity.build_id != "")
+                    sw_group.add_row(create_info_row("OS Build", runtime_identity.build_id));
+            }
             sw_group.add_row(create_info_row("OS Type", sizeof(void*) == 8 ? "64-bit" : "32-bit"));
             sw_group.add_row(create_info_row("Singularity Desktop", SingularityApp.VERSION));
             sw_group.add_row(create_info_row("Windowing System", "Wayland"));
@@ -150,10 +156,15 @@ namespace Singularity.SidebarPages {
             var sb = new StringBuilder();
             sb.append("## Singularity report\n\n");
             sb.append_printf("- Singularity Desktop: %s\n", SingularityApp.VERSION);
-            var os_identity = OsIdentity.load();
-            sb.append_printf("- OS: %s\n", os_identity.pretty_name);
-            if (os_identity.build_id != "")
-                sb.append_printf("- OS build: %s\n", os_identity.build_id);
+            var runtime_identity = OsIdentity.load();
+            if (OsIdentity.has_host_identity()) {
+                sb.append_printf("- Host OS: %s\n", OsIdentity.load_host().menu_label());
+                sb.append_printf("- cpak runtime: %s\n", runtime_identity.menu_label());
+            } else {
+                sb.append_printf("- OS: %s\n", runtime_identity.pretty_name);
+                if (runtime_identity.build_id != "")
+                    sb.append_printf("- OS build: %s\n", runtime_identity.build_id);
+            }
             sb.append_printf("- Kernel: %s\n", get_kernel_version());
             sb.append_printf("- Graphics: %s\n", get_graphics_info());
             sb.append_printf("- Processor: %s\n", get_processor_info());
