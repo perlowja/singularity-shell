@@ -285,12 +285,11 @@ namespace Singularity {
             xml.append("      <mousebind direction=\"Up\" action=\"Scroll\" />\n");
             xml.append("      <mousebind direction=\"Down\" action=\"Scroll\" />\n");
             xml.append("    </context>\n");
-            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"3\" direction=\"Up\"><action name=\"Execute\"><command>%s toggle_workspace_overview</command></action></gesturebind>\n", dbus_shorts);
-            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"3\" direction=\"Down\"><action name=\"Execute\"><command>%s hide_workspace_overview</command></action></gesturebind>\n", dbus_shorts);
+            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"3\" direction=\"Down\"><action name=\"Execute\"><command>%s hide_launcher</command></action></gesturebind>\n", dbus_shorts);
             xml.append("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Left\"><action name=\"GoToDesktop\" to=\"right\" wrap=\"yes\" /></gesturebind>\n");
             xml.append("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Right\"><action name=\"GoToDesktop\" to=\"left\" wrap=\"yes\" /></gesturebind>\n");
-            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Up\"><action name=\"Execute\"><command>%s toggle_launcher</command></action></gesturebind>\n", dbus_shorts);
-            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Down\"><action name=\"Execute\"><command>%s hide_launcher</command></action></gesturebind>\n", dbus_shorts);
+            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Down\"><action name=\"Execute\"><command>%s toggle_workspace_overview</command></action></gesturebind>\n", dbus_shorts);
+            xml.append_printf("    <gesturebind type=\"swipe\" fingers=\"4\" direction=\"Up\"><action name=\"Execute\"><command>%s hide_workspace_overview</command></action></gesturebind>\n", dbus_shorts);
             xml.append("  </mouse>\n");
 
             // Keyboard layout (xkb)

@@ -471,9 +471,10 @@ namespace Singularity {
             anim_box.remove_css_class("animating-out");
             _gesture_active = true;
             _gesture_opening = opening;
+            window_stack.opacity = 1;
+            window_stack.margin_top = 0;
             if (opening) {
                 refresh();
-                opacity = 0;
                 present();
                 shown();
             } else {
@@ -483,9 +484,11 @@ namespace Singularity {
 
         public void update_gesture(double dy) {
             if (!_gesture_active) return;
-            double distance = _gesture_opening ? -dy : dy;
+            double distance = Math.fabs(dy);
             double progress = double.max(0, double.min(1, distance / 240.0));
-            opacity = _gesture_opening ? progress : 1.0 - progress;
+            double value = _gesture_opening ? progress : 1.0 - progress;
+            window_stack.opacity = value;
+            window_stack.margin_top = (int)Math.round((1.0 - value) * 72.0);
         }
 
         public void end_gesture(bool committed) {
@@ -494,9 +497,11 @@ namespace Singularity {
             bool stay_open = _gesture_opening ? committed : !committed;
             double target = stay_open ? 1.0 : 0.0;
             if (!stay_open) hiding();
+            double current = window_stack.opacity;
             if (!Gtk.Settings.get_default().gtk_enable_animations
-                    || Math.fabs(opacity - target) < 0.001) {
-                opacity = target;
+                    || Math.fabs(current - target) < 0.001) {
+                window_stack.opacity = target;
+                window_stack.margin_top = 0;
                 if (!stay_open) {
                     hide();
                     clear_overview_content();
@@ -505,16 +510,18 @@ namespace Singularity {
                 return;
             }
             uint duration = (uint)double.max(80,
-                180.0 * Math.fabs(target - opacity));
+                180.0 * Math.fabs(target - current));
             var animation = new Singularity.Animation.TimedAnimation(
-                this, opacity, target, duration,
+                this, current, target, duration,
                 Singularity.Animation.TimedAnimation.Easing.EASE_OUT_CUBIC);
             _gesture_animation = animation;
             animation.tick.connect(() => {
-                opacity = animation.value;
+                window_stack.opacity = animation.value;
+                window_stack.margin_top = (int)Math.round((1.0 - animation.value) * 72.0);
             });
             animation.done.connect(() => {
-                opacity = target;
+                window_stack.opacity = target;
+                window_stack.margin_top = 0;
                 if (_gesture_animation == animation) _gesture_animation = null;
                 if (!stay_open) {
                     hide();

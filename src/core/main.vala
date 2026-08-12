@@ -964,67 +964,64 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             tiling_manager.handle_scrolling_gesture(phase, dx, cancelled);
             return;
         }
-        if (direction != 3 && direction != 4) return;
-        if (fingers == 3) {
-            if (phase == 0) {
-                gesture_workspace_claim = Singularity.ShellSurfaceRegistry.get_default()
-                    .claimant(Singularity.ShellRole.WORKSPACES);
-                if (gesture_workspace_claim != null) return;
-                if (direction == 3) {
-                    if (overview != null && overview.showing) overview.toggle();
-                    if (!ensure_workspace_overview()) return;
-                    workspace_overview.begin_gesture(true);
-                } else if (workspace_overview != null && workspace_overview.visible) {
-                    workspace_overview.begin_gesture(false);
-                }
-            } else if (phase == 1) {
-                workspace_overview?.update_gesture(dy);
-            } else if (phase == 2) {
-                if (gesture_workspace_claim != null) {
-                    if (!cancelled && committed) gesture_workspace_claim.toggle();
-                    gesture_workspace_claim = null;
-                } else {
-                    workspace_overview?.end_gesture(!cancelled && committed);
-                }
-            }
-            return;
+        if (fingers == 3 && direction == 4) {
+            if (tiling_manager.handle_close_gesture(phase, dy, cancelled,
+                    committed)) return;
         }
-        if (fingers != 4) return;
+        if (fingers != 4 || (direction != 3 && direction != 4)) return;
         if (phase == 0) {
-            gesture_launcher_overview = null;
+            gesture_workspace_claim = Singularity.ShellSurfaceRegistry.get_default()
+                .claimant(Singularity.ShellRole.WORKSPACES);
+            if (gesture_workspace_claim != null) return;
             gesture_launcher_menu = false;
-            gesture_launcher_claim = Singularity.ShellSurfaceRegistry.get_default()
-                .claimant(Singularity.ShellRole.OVERVIEW)
-                ?? Singularity.ShellSurfaceRegistry.get_default()
-                    .claimant(Singularity.ShellRole.LAUNCHER);
-            if (gesture_launcher_claim != null) return;
-            if (direction == 3) {
-                if (workspace_overview != null && workspace_overview.visible)
-                    workspace_overview.toggle();
-                if ((app_menu != null && app_menu.visible)
-                        || get_showing_launcher_overview() != null) return;
-                toggle_overview();
+            gesture_launcher_overview = null;
+
+            if (workspace_overview != null && workspace_overview.visible) {
+                if (direction == 3) workspace_overview.begin_gesture(false);
+                return;
             }
-            if (app_menu != null && app_menu.visible) {
-                gesture_launcher_menu = true;
-                app_menu.begin_gesture(direction == 3);
+            if ((app_menu != null && app_menu.visible)
+                    || get_showing_launcher_overview() != null) {
+                if (direction == 4) {
+                    gesture_launcher_menu = app_menu != null && app_menu.visible;
+                    gesture_launcher_overview = get_showing_launcher_overview();
+                    if (gesture_launcher_menu) app_menu.begin_gesture(false);
+                    else gesture_launcher_overview?.begin_gesture(false);
+                }
+                return;
+            }
+            if (direction == 4) {
+                if (!ensure_workspace_overview()) return;
+                set_tiling_layout_hold(workspace_overview, true);
+                workspace_overview.begin_gesture(true);
             } else {
+                toggle_overview();
+                gesture_launcher_menu = app_menu != null && app_menu.visible;
                 gesture_launcher_overview = get_showing_launcher_overview();
-                gesture_launcher_overview?.begin_gesture(direction == 3);
+                if (gesture_launcher_menu) app_menu.begin_gesture(true);
+                else {
+                    if (gesture_launcher_overview != null)
+                        set_tiling_layout_hold(gesture_launcher_overview, true);
+                    gesture_launcher_overview?.begin_gesture(true);
+                }
             }
         } else if (phase == 1) {
             if (gesture_launcher_menu) app_menu?.update_gesture(dy);
-            else gesture_launcher_overview?.update_gesture(dy);
+            else if (gesture_launcher_overview != null)
+                gesture_launcher_overview.update_gesture(dy);
+            else workspace_overview?.update_gesture(dy);
         } else if (phase == 2) {
             bool commit = !cancelled && committed;
-            if (gesture_launcher_claim != null) {
-                if (commit) gesture_launcher_claim.toggle();
+            if (gesture_workspace_claim != null) {
+                if (commit) gesture_workspace_claim.toggle();
             } else if (gesture_launcher_menu) {
                 app_menu?.end_gesture(commit);
+            } else if (gesture_launcher_overview != null) {
+                gesture_launcher_overview.end_gesture(commit);
             } else {
-                gesture_launcher_overview?.end_gesture(commit);
+                workspace_overview?.end_gesture(commit);
             }
-            gesture_launcher_claim = null;
+            gesture_workspace_claim = null;
             gesture_launcher_overview = null;
             gesture_launcher_menu = false;
         }

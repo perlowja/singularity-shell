@@ -1,6 +1,8 @@
 using Singularity;
 using GLib;
 using Gee;
+using Gtk;
+using GtkLayerShell;
 
 namespace Singularity {
 
@@ -96,6 +98,11 @@ namespace Singularity {
         private AppSystem.Window? gesture_start_window;
         private double gesture_start_offset = 0;
         private double gesture_last_dx = 0;
+        private ScrollingGroup? close_gesture_group;
+        private AppSystem.Window? close_gesture_window;
+        private ScrollingRect? close_gesture_rect;
+        private double close_gesture_last_dy = 0;
+        private Gtk.Window? close_gesture_indicator;
 
         public signal void scrolling_position_changed(Gdk.Monitor? monitor,
             double position, double visible_fraction, bool active);
@@ -108,6 +115,7 @@ namespace Singularity {
             instance = this;
             this.app_system = app_system;
             settings = new GLib.Settings("dev.sinty.desktop");
+            setup_close_gesture_indicator();
             enabled = settings.get_boolean("tiling-enabled");
             settings.changed["tiling-enabled"].connect(on_mode_changed);
             settings.changed["tiling-layout"].connect(on_mode_changed);
@@ -142,6 +150,27 @@ namespace Singularity {
                 on_tiling_interaction, this);
             sync_compositor_mode();
             if (enabled) schedule_apply_layout();
+        }
+
+        private void setup_close_gesture_indicator() {
+            close_gesture_indicator = new Gtk.Window();
+            GtkLayerShell.init_for_window(close_gesture_indicator);
+            GtkLayerShell.set_layer(close_gesture_indicator, GtkLayerShell.Layer.OVERLAY);
+            GtkLayerShell.set_anchor(close_gesture_indicator, GtkLayerShell.Edge.TOP, true);
+            GtkLayerShell.set_anchor(close_gesture_indicator, GtkLayerShell.Edge.BOTTOM, true);
+            GtkLayerShell.set_anchor(close_gesture_indicator, GtkLayerShell.Edge.LEFT, true);
+            GtkLayerShell.set_anchor(close_gesture_indicator, GtkLayerShell.Edge.RIGHT, true);
+            GtkLayerShell.set_exclusive_zone(close_gesture_indicator, -1);
+            GtkLayerShell.set_keyboard_mode(close_gesture_indicator, GtkLayerShell.KeyboardMode.NONE);
+            var icon = new Gtk.Image.from_icon_name("user-trash-symbolic");
+            icon.pixel_size = 42;
+            icon.add_css_class("accent");
+            icon.halign = Gtk.Align.CENTER;
+            icon.valign = Gtk.Align.CENTER;
+            close_gesture_indicator.set_child(icon);
+            close_gesture_indicator.add_css_class("singularity");
+            close_gesture_indicator.add_css_class("tiling-close-indicator");
+            close_gesture_indicator.hide();
         }
 
         private bool scrolling_active() {
@@ -664,6 +693,15 @@ namespace Singularity {
             return win != null ? group_for_window(win) : null;
         }
 
+        private ScrollingGroup? gesture_group_fallback() {
+            var group = focused_group();
+            if (group != null) return group;
+            foreach (var candidate in scrolling_groups.values) {
+                if (candidate.columns.size > 0) return candidate;
+            }
+            return null;
+        }
+
         private ScrollingColumn? nearest_column(ScrollingGroup group) {
             if (group.columns.size == 0) return null;
             double viewport_center = group.offset + viewport_width(group) / 2.0;
@@ -752,6 +790,71 @@ namespace Singularity {
                     Singularity.wayland_activate_window(target.handle);
                 if (animate_offset(group, target_offset)) return true;
                 layout_group(group);
+                return true;
+            }
+            return true;
+        }
+
+        public bool handle_close_gesture(uint32 phase, double dy,
+                                         bool cancelled, bool committed) {
+            if (!scrolling_active() || shell_overview_active) return false;
+            if (phase == 0) {
+                apply_layout();
+                close_gesture_group = gesture_group_fallback();
+                if (close_gesture_group == null) return false;
+                close_gesture_window = focused_in_group(close_gesture_group);
+                if (close_gesture_window == null
+                        && close_gesture_group.focused != null)
+                    close_gesture_window = close_gesture_group.focused;
+                if (close_gesture_window == null)
+                    close_gesture_window = nearest_window(close_gesture_group);
+                if (close_gesture_window == null) {
+                    close_gesture_group = null;
+                    return false;
+                }
+                close_gesture_rect = rect_for_window(close_gesture_group,
+                    close_gesture_window);
+                close_gesture_last_dy = 0;
+                if (close_gesture_rect == null) {
+                    close_gesture_group = null;
+                    close_gesture_window = null;
+                    return false;
+                }
+                if (close_gesture_indicator != null) {
+                    close_gesture_indicator.opacity = 0;
+                    close_gesture_indicator.present();
+                    close_gesture_indicator.show();
+                }
+                return true;
+            }
+            if (close_gesture_group == null || close_gesture_window == null
+                    || close_gesture_rect == null) return false;
+            var group = close_gesture_group;
+            var win = close_gesture_window;
+            var rect = close_gesture_rect;
+            if (phase == 1) {
+                close_gesture_last_dy = dy;
+                if (close_gesture_indicator != null) {
+                    close_gesture_indicator.opacity = double.min(1.0,
+                        double.max(0.0, dy / 72.0));
+                }
+                Singularity.wayland_set_geometry(win.handle, rect.x,
+                    rect.y + (int)Math.round(double.max(0, dy)), rect.width, rect.height);
+                return true;
+            }
+            if (phase == 2) {
+                bool close = !cancelled && committed && close_gesture_last_dy >= 72;
+                close_gesture_group = null;
+                close_gesture_window = null;
+                close_gesture_rect = null;
+                close_gesture_last_dy = 0;
+                if (close_gesture_indicator != null) close_gesture_indicator.hide();
+                if (close) {
+                    Singularity.close_window(win.handle);
+                    schedule_apply_layout();
+                } else {
+                    layout_group(group);
+                }
                 return true;
             }
             return true;
