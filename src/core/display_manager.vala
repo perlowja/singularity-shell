@@ -11,18 +11,27 @@ namespace Singularity {
         // below 1.0 does not make the UI smaller -- it enlarges the logical
         // desktop beyond the panel's native size while clients are told "scale
         // 1", so everything renders undersized, including the settings page that
-        // would undo it. Clamp anything read back from disk (written by an older
-        // build, or edited by hand) into a range that can actually be represented.
+        // would undo it.
+        //
+        // MAX_SCALE is a protocol sanity ceiling, NOT the settings slider's
+        // range. Integer scales above the slider maximum (4 and up) are
+        // representable and are legitimately used on very high-DPI panels and
+        // for accessibility, so they are passed through. But the value reaches
+        // wl_fixed_from_double() in apply_configuration(), and wl_fixed is 24.8
+        // fixed point: a non-finite or absurdly large value -- from a
+        // hand-edited displays.json or a misbehaving compositor -- cannot be
+        // represented and would overflow into a bad output configuration.
         private const double MIN_SCALE = 1.0;
-        private const double MAX_SCALE = 3.0;
+        private const double MAX_SCALE = 16.0;
 
         private static double clamp_scale(double value) {
             // The negated comparison also rejects NaN, which would otherwise
             // propagate into the compositor configuration.
             if (!(value >= MIN_SCALE)) return MIN_SCALE;
-            if (value > MAX_SCALE) return MAX_SCALE;
+            if (!(value <= MAX_SCALE)) return MAX_SCALE;  // also catches +inf
             return value;
         }
+
         public struct Mode {
             public int width;
             public int height;
@@ -110,7 +119,7 @@ namespace Singularity {
                     m.x = x;
                     m.y = y;
                     m.transform = transform;
-                    m.scale = scale;
+                    m.scale = clamp_scale(scale);
                     m.enabled = enabled;
                     monitors_changed();
                     return;
