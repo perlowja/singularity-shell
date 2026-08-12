@@ -84,6 +84,8 @@ namespace Singularity {
 
     [CCode (cname = "singularity_wayland_set_geometry", cheader_filename = "wayland_integration.h")]
     public void wayland_set_geometry(void* toplevel_handle, int x, int y, int width, int height);
+    [CCode (cname = "singularity_wayland_set_close_gesture_progress", cheader_filename = "wayland_integration.h")]
+    public void wayland_set_close_gesture_progress(void* toplevel_handle, double progress);
 
     [CCode (cname = "singularity_wayland_get_window_geometry", cheader_filename = "wayland_integration.h")]
     public bool wayland_get_window_geometry(void* toplevel_handle,

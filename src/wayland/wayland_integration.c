@@ -1542,6 +1542,18 @@ void singularity_wayland_set_geometry(void* toplevel_handle, int x, int y, int w
     zsingularity_tiling_manager_v1_set_geometry(ctx.tiling_manager, toplevel, x, y, width, height);
     wl_display_flush(ctx.display);
 }
+void singularity_wayland_set_close_gesture_progress(void* toplevel_handle,
+        double progress) {
+    if (!ctx.tiling_manager) return;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 8) return;
+    if (!ctx.valid_handles || !g_hash_table_contains(ctx.valid_handles,
+            toplevel_handle)) return;
+    struct zwlr_foreign_toplevel_handle_v1 *toplevel =
+        (struct zwlr_foreign_toplevel_handle_v1 *)toplevel_handle;
+    zsingularity_tiling_manager_v1_set_close_gesture_progress(
+        ctx.tiling_manager, toplevel, wl_fixed_from_double(progress));
+    wl_display_flush(ctx.display);
+}
 void singularity_wayland_set_tiled(void* toplevel_handle, uint32_t tiled) {
     if (!ctx.tiling_manager) return;
     if (!ctx.valid_handles || !g_hash_table_contains(ctx.valid_handles, toplevel_handle)) {

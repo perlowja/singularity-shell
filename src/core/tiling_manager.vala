@@ -85,6 +85,8 @@ namespace Singularity {
         private const int MIN_COLUMN_WIDTH = 240;
         private const int STACK_TARGET_SIZE = 30;
         private const int GESTURE_ADVANCE_DISTANCE = 48;
+        private const double CLOSE_GESTURE_THRESHOLD = 72;
+        private const double CLOSE_GESTURE_RESISTANCE = 0.28;
         private const uint OFFSET_SETTLE_DURATION = 180;
         private static TilingManager? instance;
         private AppSystem app_system;
@@ -975,21 +977,34 @@ namespace Singularity {
             var rect = close_gesture_rect;
             if (phase == 1) {
                 close_gesture_last_dy = dy;
+                double distance = double.max(0, dy);
+                double progress = double.min(1.0,
+                    distance / CLOSE_GESTURE_THRESHOLD);
+                double resisted_distance = distance;
+                if (distance > CLOSE_GESTURE_THRESHOLD) {
+                    resisted_distance = CLOSE_GESTURE_THRESHOLD
+                        + (distance - CLOSE_GESTURE_THRESHOLD)
+                            * CLOSE_GESTURE_RESISTANCE;
+                }
                 if (close_gesture_indicator != null) {
-                    close_gesture_indicator.opacity = double.min(1.0,
-                        double.max(0.0, dy / 72.0));
+                    close_gesture_indicator.opacity = progress;
                 }
                 Singularity.wayland_set_geometry(win.handle, rect.x,
-                    rect.y + (int)Math.round(double.max(0, dy)), rect.width, rect.height);
+                    rect.y + (int)Math.round(resisted_distance), rect.width,
+                    rect.height);
+                Singularity.wayland_set_close_gesture_progress(win.handle,
+                    progress);
                 return true;
             }
             if (phase == 2) {
-                bool close = !cancelled && committed && close_gesture_last_dy >= 72;
+                bool close = !cancelled && committed
+                    && close_gesture_last_dy >= CLOSE_GESTURE_THRESHOLD;
                 close_gesture_group = null;
                 close_gesture_window = null;
                 close_gesture_rect = null;
                 close_gesture_last_dy = 0;
                 if (close_gesture_indicator != null) close_gesture_indicator.hide();
+                Singularity.wayland_set_close_gesture_progress(win.handle, 0);
                 if (close) {
                     Singularity.close_window(win.handle);
                     schedule_apply_layout();

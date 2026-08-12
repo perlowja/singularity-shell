@@ -66,6 +66,7 @@ void singularity_wayland_finish_output_config();
 void singularity_display_manager_update_adaptive_sync(void* head_handle, uint32_t state);
 
 void singularity_wayland_set_geometry(void* toplevel_handle, int32_t x, int32_t y, int32_t width, int32_t height);
+void singularity_wayland_set_close_gesture_progress(void* toplevel_handle, double progress);
 int singularity_wayland_get_window_geometry(void* toplevel_handle,
         int* x, int* y, int* w, int* h, int* maximized, int* fullscreen, char** connector);
 int singularity_wayland_get_window_workarea(void* toplevel_handle,
