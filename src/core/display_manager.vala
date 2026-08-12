@@ -24,6 +24,57 @@ namespace Singularity {
         private const double MIN_SCALE = 1.0;
         private const double MAX_SCALE = 16.0;
 
+        /**
+         * A sensible starting scale for a display that has no saved setting.
+         *
+         * Without this a fresh install comes up at 1.0 on every panel, which on
+         * a high-DPI screen means an unreadably small UI and sends the user
+         * straight to the scale slider. The physical size needed to compute it
+         * is already reported by wl_output and was previously stored and never
+         * read.
+         *
+         * Returns 1.0 whenever the DPI cannot be trusted: many outputs report a
+         * physical size of 0x0 (and projectors/TVs report sizes that are honest
+         * but irrelevant), so the fallback has to be the safe one.
+         */
+        public static double dpi_default_scale(int phys_w_mm, int phys_h_mm, int px_w, int px_h) {
+            if (phys_w_mm <= 0 || phys_h_mm <= 0 || px_w <= 0 || px_h <= 0) {
+                return 1.0;
+            }
+            double diag_mm = Math.sqrt((double) phys_w_mm * phys_w_mm
+                                     + (double) phys_h_mm * phys_h_mm);
+            double diag_in = diag_mm / 25.4;
+            if (diag_in < 1.0) return 1.0;
+            double diag_px = Math.sqrt((double) px_w * px_w + (double) px_h * px_h);
+            double dpi = diag_px / diag_in;
+
+            // Fractional steps are deliberate -- 4K/27" lands near 163 dpi, where
+            // 2.0 is too large and 1.0 too small.
+            if (dpi >= 192.0) return 2.0;
+            if (dpi >= 168.0) return 1.75;
+            if (dpi >= 144.0) return 1.5;
+            if (dpi >= 120.0) return 1.25;
+            return 1.0;
+        }
+
+        private void apply_dpi_defaults() {
+            foreach (var m in monitors) {
+                if (m.scale_from_config) continue;
+                int pw = 0, ph = 0;
+                if (m.current_mode != null) {
+                    pw = m.current_mode.width;
+                    ph = m.current_mode.height;
+                }
+                double d = dpi_default_scale(m.phys_width, m.phys_height, pw, ph);
+                if (d != m.scale) {
+                    message("DisplayManager: %s has no saved scale, defaulting to %.2f "
+                            + "(%dx%d px, %dx%d mm)", m.name, d, pw, ph,
+                            m.phys_width, m.phys_height);
+                    m.scale = d;
+                }
+            }
+        }
+
         private static double clamp_scale(double value) {
             // The negated comparison also rejects NaN, which would otherwise
             // propagate into the compositor configuration.
@@ -49,6 +100,9 @@ namespace Singularity {
             public int x;
             public int y;
             public double scale;
+            // True once a saved scale has been restored for this output, so the
+            // DPI-derived default does not overwrite a deliberate choice.
+            public bool scale_from_config;
             public int transform;
             public bool enabled;
             public bool vrr_supported { get; set; default = false; }
@@ -309,7 +363,12 @@ namespace Singularity {
 
         public void load_and_apply_saved() {
             string path = config_path();
-            if (!GLib.FileUtils.test(path, GLib.FileTest.EXISTS)) return;
+            if (!GLib.FileUtils.test(path, GLib.FileTest.EXISTS)) {
+                // First boot: nothing saved, so every output takes the default.
+                apply_dpi_defaults();
+                apply_configuration();
+                return;
+            }
             try {
                 var parser = new Json.Parser();
                 parser.load_from_file(path);
@@ -346,6 +405,7 @@ namespace Singularity {
                             m.x = (int)obj.get_int_member("x");
                             m.y = (int)obj.get_int_member("y");
                             m.scale = clamp_scale(obj.get_double_member("scale"));
+                            m.scale_from_config = true;
                             m.transform = (int)obj.get_int_member("transform");
                             m.enabled = obj.get_boolean_member("enabled");
                             if (obj.has_member("vrr_enabled")) m.vrr_enabled = obj.get_boolean_member("vrr_enabled");
@@ -364,6 +424,10 @@ namespace Singularity {
                         }
                     }
                 }
+                // An output the config has never seen (new monitor, or a config
+                // written before this display was attached) is still a fresh
+                // display and gets the DPI default rather than a flat 1.0.
+                apply_dpi_defaults();
                 message("DisplayManager: loaded saved config from %s", path);
                 apply_configuration();
             } catch (GLib.Error e) {
