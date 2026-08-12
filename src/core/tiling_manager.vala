@@ -264,6 +264,8 @@ namespace Singularity {
                 if (win.app_id.has_prefix("chrome-")
                         || win.app_id.contains(".flextop.chrome-"))
                     continue;
+                if (!Singularity.wayland_window_is_tileable(win.handle))
+                    continue;
                 if (scrolling_active() && win.scrolling_floating) continue;
                 tileable.add(win);
             }

@@ -69,6 +69,7 @@ int singularity_wayland_get_window_geometry(void* toplevel_handle,
         int* x, int* y, int* w, int* h, int* maximized, int* fullscreen, char** connector);
 int singularity_wayland_get_window_workarea(void* toplevel_handle,
         int* x, int* y, int* w, int* h);
+int singularity_wayland_window_is_tileable(void* toplevel_handle);
 void singularity_wayland_set_tiled(void* toplevel_handle, uint32_t tiled);
 void singularity_wayland_set_scrolling_mode(uint32_t enabled);
 void singularity_wayland_detach_tiled(void* toplevel_handle);

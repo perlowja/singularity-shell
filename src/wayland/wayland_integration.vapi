@@ -94,6 +94,9 @@ namespace Singularity {
     public bool wayland_get_window_workarea(void* toplevel_handle,
         out int x, out int y, out int width, out int height);
 
+    [CCode (cname = "singularity_wayland_window_is_tileable", cheader_filename = "wayland_integration.h")]
+    public bool wayland_window_is_tileable(void* toplevel_handle);
+
     [CCode (cname = "singularity_wayland_set_tiled", cheader_filename = "wayland_integration.h")]
     public void wayland_set_tiled(void* toplevel_handle, uint32 tiled);
 

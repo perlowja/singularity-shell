@@ -75,6 +75,8 @@ struct SingularityWaylandContext {
 };
 static struct SingularityWaylandContext ctx;
 static GHashTable *toplevel_output_map = NULL;
+static GHashTable *geometry_map = NULL;
+static void invalidate_toplevel_tileable(void *handle);
 /* Maps wl_output* (our binding), connector name (heap string, owned) */
 static GHashTable *output_connector_map = NULL;
 /* Optional callback fired when a toplevel changes its output */
@@ -751,6 +753,8 @@ static void toplevel_handle_done(void *data, struct zwlr_foreign_toplevel_handle
 static void toplevel_handle_closed(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle) {
     if (toplevel_output_map)
         g_hash_table_remove(toplevel_output_map, handle);
+    if (geometry_map)
+        g_hash_table_remove(geometry_map, handle);
     /* Mark handle invalid BEFORE notifying Vala so apply_layout can never
      * race and send snap_view for a handle that labwc already destroyed. */
     if (ctx.valid_handles)
@@ -760,7 +764,9 @@ static void toplevel_handle_closed(void *data, struct zwlr_foreign_toplevel_hand
     }
     zwlr_foreign_toplevel_handle_v1_destroy(handle);
 }
-static void toplevel_handle_parent(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle, struct zwlr_foreign_toplevel_handle_v1 *parent) {}
+static void toplevel_handle_parent(void *data, struct zwlr_foreign_toplevel_handle_v1 *handle, struct zwlr_foreign_toplevel_handle_v1 *parent) {
+    invalidate_toplevel_tileable(handle);
+}
 static const struct zwlr_foreign_toplevel_handle_v1_listener toplevel_handle_listener = {
     .title = toplevel_handle_title,
     .app_id = toplevel_handle_app_id,
@@ -1004,9 +1010,15 @@ struct GeomEntry {
     char connector[64];
     int got;
     int workarea_got;
+    int tileable;
+    int tileable_got;
 };
-static GHashTable *geometry_map = NULL; /* handle -> GeomEntry* */
 
+static void invalidate_toplevel_tileable(void *handle) {
+    struct GeomEntry *e = geometry_map
+        ? g_hash_table_lookup(geometry_map, handle) : NULL;
+    if (e) e->tileable_got = 0;
+}
 static void tiling_handle_geometry(void *data,
         struct zsingularity_tiling_manager_v1 *mgr,
         struct zwlr_foreign_toplevel_handle_v1 *toplevel,
@@ -1038,6 +1050,20 @@ static void tiling_handle_workarea(void *data,
     e->workarea_got = 1;
 }
 
+static void tiling_handle_tileable(void *data,
+        struct zsingularity_tiling_manager_v1 *mgr,
+        struct zwlr_foreign_toplevel_handle_v1 *toplevel,
+        uint32_t tileable) {
+    if (!geometry_map) return;
+    struct GeomEntry *e = g_hash_table_lookup(geometry_map, toplevel);
+    if (!e) {
+        e = calloc(1, sizeof(*e));
+        g_hash_table_insert(geometry_map, toplevel, e);
+    }
+    e->tileable = tileable != 0;
+    e->tileable_got = 1;
+}
+
 static void tiling_handle_interaction(void *data,
         struct zsingularity_tiling_manager_v1 *mgr,
         struct zwlr_foreign_toplevel_handle_v1 *toplevel,
@@ -1056,6 +1082,7 @@ static const struct zsingularity_tiling_manager_v1_listener tiling_listener = {
     .geometry = tiling_handle_geometry,
     .workarea = tiling_handle_workarea,
     .interaction = tiling_handle_interaction,
+    .tileable = tiling_handle_tileable,
 };
 
 static void gesture_handle_begin(void *data,
@@ -1119,7 +1146,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         ctx.output_manager = wl_registry_bind(registry, name, &zwlr_output_manager_v1_interface, 4);
         zwlr_output_manager_v1_add_listener(ctx.output_manager, &output_manager_listener, NULL);
     } else if (strcmp(interface, zsingularity_tiling_manager_v1_interface.name) == 0) {
-        uint32_t v = version < 6 ? version : 6;
+        uint32_t v = version < 7 ? version : 7;
         ctx.tiling_manager = wl_registry_bind(registry, name, &zsingularity_tiling_manager_v1_interface, v);
         if (v >= 2)
             zsingularity_tiling_manager_v1_add_listener(ctx.tiling_manager, &tiling_listener, NULL);
@@ -1475,6 +1502,26 @@ int singularity_wayland_get_window_workarea(void *toplevel_handle,
     if (w) *w = e->work_w;
     if (h) *h = e->work_h;
     return 1;
+}
+
+int singularity_wayland_window_is_tileable(void *toplevel_handle) {
+    if (!ctx.tiling_manager || !ctx.display) return 1;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 7)
+        return 1;
+    if (!ctx.valid_handles || !g_hash_table_contains(ctx.valid_handles,
+            toplevel_handle)) return 0;
+    if (!geometry_map)
+        geometry_map = g_hash_table_new_full(NULL, NULL, NULL, free);
+
+    struct zwlr_foreign_toplevel_handle_v1 *toplevel = toplevel_handle;
+    struct GeomEntry *e = g_hash_table_lookup(geometry_map, toplevel);
+    if (!e || !e->tileable_got) {
+        zsingularity_tiling_manager_v1_get_tileable(ctx.tiling_manager,
+            toplevel);
+        wl_display_roundtrip(ctx.display);
+        e = g_hash_table_lookup(geometry_map, toplevel);
+    }
+    return e && e->tileable_got ? e->tileable : 1;
 }
 
 void singularity_wayland_set_geometry(void* toplevel_handle, int x, int y, int width, int height) {
