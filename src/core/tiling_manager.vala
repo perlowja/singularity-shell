@@ -126,7 +126,8 @@ namespace Singularity {
             app_system.config_changed.connect((key) => {
                 if (key == "dock-position" || key == "dock-enabled"
                         || key == "dock-autohide"
-                        || key == "dock-intellihide") {
+                        || key == "dock-intellihide"
+                        || key == "dock-reservation") {
                     if (scrolling_active()) schedule_apply_layout();
                 }
             });

@@ -810,8 +810,10 @@ namespace Singularity {
                 && (scrolling_tiling || (visibility_mode == "always"
                     && !autohide && !intellihide));
             int zone = reserve ? int.max(0, _last_dimension - SHADOW_BOTTOM_PX) : 0;
+            bool changed = app_system.shell_dock_height != zone;
             set_exclusive_zone(this, zone);
             app_system.shell_dock_height = zone;
+            if (changed) app_system.config_changed("dock-reservation");
         }
 
         private void update_autohide_state() {
