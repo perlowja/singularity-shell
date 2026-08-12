@@ -55,6 +55,7 @@ namespace Singularity {
             register_shortcut("Keyboard Light Down", "Decrease keyboard backlight", "XF86KbdBrightnessDown", "kbd_brightness_down");
             register_shortcut("Launcher", "Open application launcher", "<Super>space", "toggle_launcher");
             register_shortcut("Workspaces", "Show workspace overview", "<Super>w", "toggle_workspace_overview");
+            register_shortcut("Desktop", "Reveal the desktop", "<Super>d", "toggle_desktop_reveal");
             register_shortcut("Terminal", "Open terminal", "<Super>Return", "spawn_terminal");
             register_shortcut("Emoji Picker", "Open the emoji picker", "<Super>period", "toggle_emoji_picker");
             register_shortcut("Command Palette", "Open the command palette", "<Super>Tab", "run_command");
@@ -522,6 +523,7 @@ namespace Singularity {
                     case "hide_launcher": launcher_hide_triggered(); break;
                     case "toggle_workspace_overview": workspace_overview_triggered(); break;
                     case "hide_workspace_overview": workspace_overview_hide_triggered(); break;
+                    case "toggle_desktop_reveal": Singularity.wayland_toggle_desktop_reveal(); break;
                     case "spawn_terminal": spawn_terminal(); break;
                     case "run_command": run_command(); break;
                     case "toggle_emoji_picker": emoji_picker_triggered(); break;

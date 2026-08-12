@@ -137,6 +137,9 @@ namespace Singularity {
     [CCode (cname = "singularity_wayland_set_desktop_gesture_callback", cheader_filename = "wayland_integration.h")]
     public void wayland_set_desktop_gesture_callback(DesktopGestureCallback cb, void* data);
 
+    [CCode (cname = "singularity_wayland_toggle_desktop_reveal", cheader_filename = "wayland_integration.h")]
+    public void wayland_toggle_desktop_reveal();
+
     [CCode (has_target = false)]
     public delegate void TilingInteractionCallback(void* handle, uint32 phase,
         uint32 kind, int x, int y, int width, int height,

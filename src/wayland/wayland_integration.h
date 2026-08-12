@@ -36,6 +36,7 @@ void singularity_wayland_init(
 void singularity_wayland_set_window_output_changed_callback(WindowOutputChangedCallback cb, void* user_data);
 void singularity_wayland_set_desktop_gesture_callback(DesktopGestureCallback cb,
     void* user_data);
+void singularity_wayland_toggle_desktop_reveal(void);
 void singularity_wayland_set_tiling_interaction_callback(
     TilingInteractionCallback cb, void *user_data);
 

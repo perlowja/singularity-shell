@@ -1151,8 +1151,9 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         if (v >= 2)
             zsingularity_tiling_manager_v1_add_listener(ctx.tiling_manager, &tiling_listener, NULL);
     } else if (strcmp(interface, zsingularity_gesture_manager_v1_interface.name) == 0) {
+        uint32_t bind_version = version < 2 ? version : 2;
         ctx.gesture_manager = wl_registry_bind(registry, name,
-            &zsingularity_gesture_manager_v1_interface, 1);
+            &zsingularity_gesture_manager_v1_interface, bind_version);
         zsingularity_gesture_manager_v1_add_listener(ctx.gesture_manager,
             &gesture_listener, NULL);
     } else if (strcmp(interface, zwlr_gamma_control_manager_v1_interface.name) == 0) {
@@ -1176,6 +1177,13 @@ void singularity_wayland_set_desktop_gesture_callback(
         DesktopGestureCallback cb, void *user_data) {
     desktop_gesture_cb = cb;
     desktop_gesture_user_data = user_data;
+}
+
+void singularity_wayland_toggle_desktop_reveal(void) {
+    if (ctx.gesture_manager &&
+            zsingularity_gesture_manager_v1_get_version(ctx.gesture_manager) >= 2)
+        zsingularity_gesture_manager_v1_toggle_desktop_reveal(
+            ctx.gesture_manager);
 }
 
 void singularity_wayland_set_tiling_interaction_callback(
