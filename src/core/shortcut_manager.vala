@@ -557,6 +557,13 @@ namespace Singularity {
         private uint _last_snap = TilingLayout.SNAP_NONE;
 
         private void snap_focused(uint snap) {
+            var tiling = TilingManager.get_default();
+            if (tiling != null) {
+                if (snap == TilingLayout.SNAP_LEFT
+                        && tiling.move_focused_slot(-1)) return;
+                if (snap == TilingLayout.SNAP_RIGHT
+                        && tiling.move_focused_slot(1)) return;
+            }
             void* handle = AppSystem.get_default().get_focused_window_handle();
             if (handle == null) return;
             uint effective = snap;

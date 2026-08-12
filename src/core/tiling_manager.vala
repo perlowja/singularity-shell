@@ -94,6 +94,9 @@ namespace Singularity {
         private uint apply_timeout_id = 0;
         private HashMap<string, ScrollingGroup> scrolling_groups =
             new HashMap<string, ScrollingGroup>();
+        private HashMap<AppSystem.Window, AppSystem.Window> insertion_anchors =
+            new HashMap<AppSystem.Window, AppSystem.Window>();
+        private AppSystem.Window? last_scrolling_focus;
         private ScrollingGroup? gesture_group;
         private AppSystem.Window? gesture_start_window;
         private double gesture_start_offset = 0;
@@ -103,9 +106,13 @@ namespace Singularity {
         private ScrollingRect? close_gesture_rect;
         private double close_gesture_last_dy = 0;
         private Gtk.Window? close_gesture_indicator;
+        private AppSystem.Window? organizer_hover_window;
+        private AppSystem.Window? organizer_window;
 
         public signal void scrolling_position_changed(Gdk.Monitor? monitor,
             double position, double visible_fraction, bool active);
+        public signal void scrolling_drag_changed(AppSystem.Window win,
+            Gdk.Monitor? monitor, uint32 phase, int cursor_x, int cursor_y);
 
         public static TilingManager? get_default() {
             return instance;
@@ -190,8 +197,11 @@ namespace Singularity {
             bool is_scrolling = scrolling_active();
             sync_compositor_mode();
             hide_drop_preview();
-            if (!is_scrolling && scrolling_groups.size > 0)
-                release_scrolling_windows();
+            if (!is_scrolling) {
+                insertion_anchors.clear();
+                last_scrolling_focus = null;
+                if (scrolling_groups.size > 0) release_scrolling_windows();
+            }
             if (enabled) schedule_apply_layout();
         }
 
@@ -223,10 +233,23 @@ namespace Singularity {
         }
 
         private void on_app_opened(void* handle, string app_id) {
+            if (scrolling_active() && last_scrolling_focus != null) {
+                var win = app_system.get_window_by_handle(handle);
+                if (win != null && win != last_scrolling_focus)
+                    insertion_anchors[win] = last_scrolling_focus;
+            }
             if (enabled) schedule_apply_layout();
         }
 
         private void on_app_closed(void* handle) {
+            AppSystem.Window? closed = null;
+            foreach (var win in insertion_anchors.keys) {
+                if (win.handle == handle) {
+                    closed = win;
+                    break;
+                }
+            }
+            if (closed != null) insertion_anchors.unset(closed);
             if (enabled) schedule_apply_layout();
         }
 
@@ -235,7 +258,12 @@ namespace Singularity {
         }
 
         private void on_window_focused(void* handle) {
-            if (enabled && handle != null) schedule_apply_layout();
+            if (enabled && handle != null) {
+                var win = app_system.get_window_by_handle(handle);
+                if (win != null && group_for_window(win) != null)
+                    last_scrolling_focus = win;
+                schedule_apply_layout();
+            }
         }
 
         private void on_window_output_changed(void* handle) {
@@ -608,16 +636,27 @@ namespace Singularity {
             foreach (var win in stale) {
                 var column = column_for_window(group, win);
                 if (column != null) column.windows.remove(win);
+                insertion_anchors.unset(win);
                 if (group.focused == win) group.focused = null;
                 if (group.interaction_window == win)
                     group.interaction_window = null;
+                if (last_scrolling_focus == win) last_scrolling_focus = null;
             }
             remove_empty_columns(group);
             foreach (var win in candidates) {
                 if (column_for_window(group, win) != null) continue;
                 var column = new ScrollingColumn(default_column_width(group));
                 column.windows.add(win);
-                group.columns.add(column);
+                var insertion_anchor = insertion_anchors.get(win);
+                var anchor_column = insertion_anchor != null
+                    ? column_for_window(group, insertion_anchor) : null;
+                if (anchor_column == null) {
+                    group.columns.add(column);
+                } else {
+                    group.columns.insert(group.columns.index_of(anchor_column) + 1,
+                        column);
+                }
+                insertion_anchors.unset(win);
             }
             if (anchor != null && anchor_rect != null) {
                 var anchor_column = column_for_window(group, anchor);
@@ -696,7 +735,10 @@ namespace Singularity {
                 }
                 var focused = focused_in_group(group);
                 bool focus_changed = focused != null && focused != group.focused;
-                if (focused != null) group.focused = focused;
+                if (focused != null) {
+                    group.focused = focused;
+                    last_scrolling_focus = focused;
+                }
                 if (group.focused == null
                         || column_for_window(group, group.focused) == null)
                     group.focused = group.columns[0].windows[0];
@@ -726,6 +768,70 @@ namespace Singularity {
             if (focused == null) return null;
             var win = app_system.get_window_by_handle(focused);
             return win != null ? group_for_window(win) : null;
+        }
+
+        public bool move_focused_slot(int direction) {
+            if (!scrolling_active()) return false;
+            apply_layout();
+            var group = focused_group();
+            if (group == null) return true;
+            var win = focused_in_group(group);
+            if (win == null) return true;
+            var column = column_for_window(group, win);
+            if (column == null) return true;
+            int index = group.columns.index_of(column);
+            int target = int.max(0, int.min(group.columns.size - 1,
+                index + direction));
+            if (target == index) return true;
+            group.columns.remove_at(index);
+            group.columns.insert(target, column);
+            group.focused = win;
+            if (animate_offset(group, centered_offset(group, win))) return true;
+            layout_group(group);
+            return true;
+        }
+
+        public void set_slot_organizer_hover(AppSystem.Window win,
+                                              bool hovering) {
+            if (!scrolling_active()) return;
+            if (hovering) {
+                organizer_hover_window = win;
+            } else if (organizer_hover_window == win) {
+                organizer_hover_window = null;
+            }
+        }
+
+        public bool begin_slot_organizer(AppSystem.Window win) {
+            if (!scrolling_active() || group_for_window(win) == null)
+                return false;
+            organizer_hover_window = win;
+            organizer_window = win;
+            return true;
+        }
+
+        public AppSystem.Window[] slot_organizer_windows(AppSystem.Window win) {
+            AppSystem.Window[] result = {};
+            var group = group_for_window(win);
+            if (group == null) return result;
+            foreach (var column in group.columns) {
+                foreach (var item in column.windows) result += item;
+            }
+            return result;
+        }
+
+        public void move_slot_organizer_window(AppSystem.Window win,
+                                                int target) {
+            if (organizer_window != win) return;
+            var group = group_for_window(win);
+            if (group == null) return;
+            var column = column_for_window(group, win);
+            if (column == null) return;
+            int index = group.columns.index_of(column);
+            target = int.max(0, int.min(group.columns.size - 1, target));
+            if (index == target) return;
+            group.columns.remove_at(index);
+            group.columns.insert(target, column);
+            layout_group(group, win);
         }
 
         private ScrollingGroup? gesture_group_fallback() {
@@ -1107,6 +1213,8 @@ namespace Singularity {
                     group.offset = clamp_offset(group, group.offset);
                     layout_group(group, win);
                     show_drop_preview(group, win);
+                    scrolling_drag_changed(win, group.monitor, phase,
+                        cursor_x, cursor_y);
                 }
                 return;
             }
@@ -1124,17 +1232,30 @@ namespace Singularity {
                 return;
             }
 
-            if (phase == 1)
+            if (kind == 0)
+                scrolling_drag_changed(win, group.monitor, phase,
+                    cursor_x, cursor_y);
+
+            if (phase == 1 && organizer_window != win
+                    && organizer_hover_window != win)
                 update_drag(group, win, x, width, cursor_x, cursor_y,
                     float_candidate);
             if (phase != 2) return;
 
             hide_drop_preview();
+            bool organized = organizer_window == win;
+            if (organizer_hover_window == win) organizer_hover_window = null;
+            if (organized) organizer_window = null;
             var stack_target = group.stack_target;
             group.interaction_window = null;
             group.drag_column = null;
             group.stack_target = null;
-            if (float_candidate) {
+            if (organized) {
+                group.focused = win;
+                if (animate_offset(group, centered_offset(group, win)))
+                    return;
+                layout_group(group);
+            } else if (float_candidate) {
                 detach_floating(group, win);
             } else {
                 if (stack_target != null)

@@ -33,6 +33,210 @@ namespace Singularity {
         }
     }
 
+    private class TilingSlotPreview : Gtk.Box {
+        public AppSystem.Window window { get; private set; }
+        public double current_x = 0;
+        public double start_x = 0;
+        public double target_x = 0;
+
+        public TilingSlotPreview(AppSystem.Window window, int width,
+                                 int height, bool dragged) {
+            Object(orientation: Orientation.HORIZONTAL, spacing: 0);
+            this.window = window;
+            set_size_request(width, height);
+            overflow = Overflow.HIDDEN;
+            add_css_class("tiling-slot-preview");
+            if (dragged) add_css_class("dragged");
+
+            var overlay = new Overlay();
+            overlay.hexpand = true;
+            overlay.vexpand = true;
+            append(overlay);
+
+            var picture = new Picture();
+            picture.content_fit = ContentFit.COVER;
+            overlay.set_child(picture);
+
+            var fallback = new Image();
+            if (window.gicon != null) fallback.set_from_gicon(window.gicon);
+            else fallback.set_from_icon_name(window.icon_name);
+            fallback.pixel_size = 24;
+            fallback.halign = Align.CENTER;
+            fallback.valign = Align.CENTER;
+            overlay.add_overlay(fallback);
+
+            PreviewCache.get_default().request(window.handle, width, height,
+                (texture) => {
+                    if (texture == null || get_parent() == null) return;
+                    picture.set_paintable(texture);
+                    fallback.visible = false;
+                });
+        }
+    }
+
+    private class TilingSlotOrganizer : Gtk.Window {
+        private const int HEIGHT = 112;
+        private const int PADDING = 12;
+        private const int GAP = 7;
+        private Gtk.Fixed slots;
+        private Overlay card;
+        private Box seed;
+        private ArrayList<TilingSlotPreview> items =
+            new ArrayList<TilingSlotPreview>();
+        private TilingSlotPreview? dragged_item;
+        private TilingManager manager;
+        private AppSystem.Window dragged;
+        private int surface_x;
+        private int surface_y;
+        private int preview_width;
+        private int preview_height = 76;
+        private int initial_cursor_x;
+        private bool cursor_moved = false;
+        private uint seed_timeout_id = 0;
+        private uint close_timeout_id = 0;
+        private Singularity.Animation.TimedAnimation? reorder_animation;
+
+        public TilingSlotOrganizer(Gtk.Application app, TilingManager manager,
+                                   AppSystem.Window dragged,
+                                   Gdk.Monitor monitor, int anchor_x,
+                                   int cursor_x) {
+            Object(application: app);
+            this.manager = manager;
+            this.dragged = dragged;
+            initial_cursor_x = cursor_x;
+
+            var geometry = monitor.get_geometry();
+            int width = int.min(620, geometry.width - 24);
+            surface_x = int.max(geometry.x + 12,
+                int.min(geometry.x + geometry.width - width - 12,
+                    anchor_x - width / 2));
+            surface_y = geometry.y + 3;
+            set_default_size(width, HEIGHT);
+            resizable = false;
+
+            GtkLayerShell.init_for_window(this);
+            GtkLayerShell.set_namespace(this, "singularity-tiling-organizer");
+            GtkLayerShell.set_layer(this, GtkLayerShell.Layer.OVERLAY);
+            GtkLayerShell.set_monitor(this, monitor);
+            GtkLayerShell.set_anchor(this, GtkLayerShell.Edge.TOP, true);
+            GtkLayerShell.set_anchor(this, GtkLayerShell.Edge.LEFT, true);
+            GtkLayerShell.set_margin(this, GtkLayerShell.Edge.TOP,
+                surface_y - geometry.y);
+            GtkLayerShell.set_margin(this, GtkLayerShell.Edge.LEFT,
+                surface_x - geometry.x);
+            GtkLayerShell.set_exclusive_zone(this, 0);
+            GtkLayerShell.set_keyboard_mode(this,
+                GtkLayerShell.KeyboardMode.NONE);
+
+            card = new Overlay();
+            card.add_css_class("tiling-slot-organizer");
+            card.set_size_request(width, HEIGHT);
+            set_child(card);
+
+            slots = new Gtk.Fixed();
+            slots.overflow = Overflow.HIDDEN;
+            card.set_child(slots);
+
+            seed = new Box(Orientation.HORIZONTAL, 0);
+            seed.add_css_class("tiling-slot-seed");
+            seed.halign = Align.CENTER;
+            seed.valign = Align.CENTER;
+            card.add_overlay(seed);
+
+            build_items(width);
+            map.connect(() => {
+                var surface = get_surface();
+                if (surface != null) surface.set_input_region(new Cairo.Region());
+            });
+        }
+
+        private void build_items(int width) {
+            var windows = manager.slot_organizer_windows(dragged);
+            if (windows.length == 0) return;
+            int available = width - PADDING * 2 - GAP * (windows.length - 1);
+            preview_width = int.max(34, available / windows.length);
+            for (int i = 0; i < windows.length; i++) {
+                var item = new TilingSlotPreview(windows[i], preview_width,
+                    preview_height, windows[i] == dragged);
+                item.current_x = slot_x(i);
+                item.start_x = item.current_x;
+                item.target_x = item.current_x;
+                slots.put(item, item.current_x, 18);
+                items.add(item);
+                if (windows[i] == dragged) dragged_item = item;
+            }
+            seed_timeout_id = Timeout.add(190, () => {
+                seed_timeout_id = 0;
+                seed.visible = false;
+                return Source.REMOVE;
+            });
+        }
+
+        private double slot_x(int index) {
+            return PADDING + index * (preview_width + GAP);
+        }
+
+        public void update_cursor(int cursor_x) {
+            if (dragged_item == null || items.size < 2) return;
+            if (!cursor_moved) {
+                if (Math.fabs(cursor_x - initial_cursor_x) < 8) return;
+                cursor_moved = true;
+            }
+            int target = (int)Math.floor((cursor_x - surface_x - PADDING
+                + (preview_width + GAP) / 2.0) / (preview_width + GAP));
+            target = int.max(0, int.min(items.size - 1, target));
+            int current = items.index_of(dragged_item);
+            if (target == current) return;
+            items.remove_at(current);
+            items.insert(target, dragged_item);
+            manager.move_slot_organizer_window(dragged, target);
+            animate_order();
+        }
+
+        private void animate_order() {
+            reorder_animation?.reset();
+            for (int i = 0; i < items.size; i++) {
+                items[i].start_x = items[i].current_x;
+                items[i].target_x = slot_x(i);
+            }
+            var animation = new Singularity.Animation.TimedAnimation(
+                slots, 0, 1, 150);
+            reorder_animation = animation;
+            animation.tick.connect(() => {
+                foreach (var item in items) {
+                    item.current_x = item.start_x
+                        + (item.target_x - item.start_x) * animation.value;
+                    slots.move(item, item.current_x, 18);
+                }
+            });
+            animation.done.connect(() => reorder_animation = null);
+            animation.play();
+        }
+
+        public void close_animated() {
+            if (close_timeout_id != 0) return;
+            card.add_css_class("closing");
+            close_timeout_id = Timeout.add(140, () => {
+                close_timeout_id = 0;
+                close();
+                return Source.REMOVE;
+            });
+        }
+
+        protected override void dispose() {
+            if (seed_timeout_id != 0) {
+                Source.remove(seed_timeout_id);
+                seed_timeout_id = 0;
+            }
+            if (close_timeout_id != 0) {
+                Source.remove(close_timeout_id);
+                close_timeout_id = 0;
+            }
+            reorder_animation?.reset();
+            base.dispose();
+        }
+    }
+
     public class Panel : Gtk.Window {
         private Label clock_label;
         private Label app_title_label;
@@ -62,6 +266,10 @@ namespace Singularity {
         private Button workspace_btn;
         private TilingPositionIndicator tiling_position;
         private bool _tiling_position_active = false;
+        private uint _tiling_hover_id = 0;
+        private AppSystem.Window? _tiling_drag_window;
+        private bool _tiling_drag_hovering = false;
+        private TilingSlotOrganizer? _tiling_organizer;
         private bool _overview_active = false;
         private bool _workspace_overview_active = false;
         private bool _dock_hidden = false;
@@ -190,6 +398,11 @@ namespace Singularity {
                         return;
                     }
                     update_tiling_position_visibility();
+                });
+                tiling.scrolling_drag_changed.connect((win, monitor, phase,
+                        cursor_x, cursor_y) => {
+                    handle_tiling_drag(tiling, win, monitor, phase,
+                        cursor_x, cursor_y);
                 });
                 tiling.refresh_scrolling_position();
             }
@@ -626,6 +839,85 @@ namespace Singularity {
             return source != null && target != null && source == target;
         }
 
+        private void handle_tiling_drag(TilingManager manager,
+                                        AppSystem.Window win,
+                                        Gdk.Monitor? monitor, uint32 phase,
+                                        int cursor_x, int cursor_y) {
+            if (!panel_monitor_matches(monitor)) return;
+            if (phase == 2) {
+                cancel_tiling_hover(manager);
+                if (_tiling_organizer != null) {
+                    _tiling_organizer.update_cursor(cursor_x);
+                    _tiling_organizer.close_animated();
+                    _tiling_organizer = null;
+                }
+                _tiling_drag_window = null;
+                return;
+            }
+            if (_tiling_organizer != null) {
+                _tiling_organizer.update_cursor(cursor_x);
+                return;
+            }
+
+            bool hovering = cursor_over_tiling_position(cursor_x, cursor_y);
+            if (!hovering) {
+                cancel_tiling_hover(manager);
+                return;
+            }
+            if (_tiling_drag_hovering && _tiling_drag_window == win) return;
+            cancel_tiling_hover(manager);
+            _tiling_drag_window = win;
+            _tiling_drag_hovering = true;
+            manager.set_slot_organizer_hover(win, true);
+            _tiling_hover_id = Timeout.add(1000, () => {
+                _tiling_hover_id = 0;
+                if (!_tiling_drag_hovering || _tiling_drag_window != win)
+                    return Source.REMOVE;
+                var target = gdk_monitor;
+                var app = get_application();
+                if (target == null || app == null
+                        || !manager.begin_slot_organizer(win))
+                    return Source.REMOVE;
+                int anchor_x = tiling_position_center_x();
+                _tiling_organizer = new TilingSlotOrganizer(app, manager,
+                    win, target, anchor_x, cursor_x);
+                _tiling_organizer.present();
+                _tiling_organizer.update_cursor(cursor_x);
+                return Source.REMOVE;
+            });
+        }
+
+        private void cancel_tiling_hover(TilingManager manager) {
+            if (_tiling_hover_id != 0) {
+                Source.remove(_tiling_hover_id);
+                _tiling_hover_id = 0;
+            }
+            if (_tiling_drag_hovering && _tiling_drag_window != null)
+                manager.set_slot_organizer_hover(_tiling_drag_window, false);
+            _tiling_drag_hovering = false;
+        }
+
+        private bool cursor_over_tiling_position(int x, int y) {
+            if (!tiling_position.visible || gdk_monitor == null) return false;
+            Graphene.Rect bounds;
+            if (!tiling_position.compute_bounds(this, out bounds)) return false;
+            var geometry = gdk_monitor.get_geometry();
+            int left = geometry.x + (int)Math.floor(bounds.origin.x);
+            int top = geometry.y + (int)Math.floor(bounds.origin.y);
+            return x >= left && x < left + (int)Math.ceil(bounds.size.width)
+                && y >= top && y < top + (int)Math.ceil(bounds.size.height);
+        }
+
+        private int tiling_position_center_x() {
+            if (gdk_monitor == null) return 0;
+            Graphene.Rect bounds;
+            var geometry = gdk_monitor.get_geometry();
+            if (!tiling_position.compute_bounds(this, out bounds))
+                return geometry.x + geometry.width / 2;
+            return geometry.x + (int)Math.round(bounds.origin.x
+                + bounds.size.width / 2.0);
+        }
+
         private void update_tiling_position_visibility() {
             bool editing = !is_greeter_mode
                 && _settings.get_boolean("bar-layout-edit-mode");
@@ -765,6 +1057,12 @@ namespace Singularity {
         }
 
         protected override void dispose() {
+            var tiling = TilingManager.get_default();
+            if (tiling != null) cancel_tiling_hover(tiling);
+            if (_tiling_organizer != null) {
+                _tiling_organizer.close();
+                _tiling_organizer = null;
+            }
             var as = AppSystem.get_default();
             if (_sig_app_focused != 0) { GLib.SignalHandler.disconnect(as, _sig_app_focused); _sig_app_focused = 0; }
             if (_sig_menu_model_changed != 0) { GLib.SignalHandler.disconnect(as, _sig_menu_model_changed); _sig_menu_model_changed = 0; }
