@@ -1172,7 +1172,6 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         // colour. Accent hex comes from the StyleManager (single source).
         string accent = Singularity.Style.StyleManager.get_default().accent_hex;
         string title_base    = dark ? "#2d2d2e" : "#f0efee";
-        string border_base   = dark ? "#444444" : "#cccccc";
         string inact_base     = dark ? "#1e1e1f" : "#f6f5f4";
         string inact_brd_base = dark ? "#2a2a2a" : "#dddddd";
         string text_active   = dark ? "#ffffff" : "#1a1a1a";
@@ -1181,9 +1180,9 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         string btn_inact     = dark ? "#555555" : "#bbbbbb";
 
         string title  = mix_hex(title_base,     accent, dark ? 0.06 : 0.05);
-        string border = mix_hex(border_base,    accent, 0.10);
+        string border = accent;
         string inact  = mix_hex(inact_base,     accent, 0.03);
-        string inactb = mix_hex(inact_brd_base, accent, 0.06);
+        string inactb = mix_hex(inact_brd_base, accent, 0.55);
         string btn    = mix_hex(btn_base,       accent, 0.20);
         string btnh   = mix_hex(btn_hover_base, accent, 0.20);
 

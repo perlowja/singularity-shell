@@ -53,7 +53,7 @@ namespace Singularity {
         public AppSystem.Window? focused;
         public AppSystem.Window? interaction_window;
         public ScrollingColumn? drag_column;
-        public ScrollingColumn? stack_column;
+        public StackTarget? stack_target;
         public double offset = 0;
         public uint offset_animation_id = 0;
         public double offset_animation_start = 0;
@@ -467,6 +467,25 @@ namespace Singularity {
                 - viewport_width(group) / 2.0;
         }
 
+        private void scroll_drag_viewport(ScrollingGroup group,
+                                          int cursor_x) {
+            int edge_size = int.min(180, group.area.width / 5);
+            int left_edge = group.area.x + edge_size;
+            int right_edge = group.area.x + group.area.width - edge_size;
+            double delta = 0;
+            if (cursor_x < left_edge) {
+                double progress = double.min(1,
+                    (double)(left_edge - cursor_x) / edge_size);
+                delta = -24.0 * progress;
+            } else if (cursor_x > right_edge) {
+                double progress = double.min(1,
+                    (double)(cursor_x - right_edge) / edge_size);
+                delta = 24.0 * progress;
+            }
+            if (Math.fabs(delta) > 0.01)
+                group.offset = clamp_offset(group, group.offset + delta);
+        }
+
         private void emit_position(ScrollingGroup group) {
             double minimum, maximum;
             offset_limits(group, out minimum, out maximum);
@@ -484,7 +503,13 @@ namespace Singularity {
         private ScrollingRect rect_for(ScrollingGroup group,
                                        ScrollingColumn column,
                                        int row) {
-            int count = int.max(1, column.windows.size);
+            return rect_for_count(group, column, row,
+                int.max(1, column.windows.size));
+        }
+
+        private ScrollingRect rect_for_count(ScrollingGroup group,
+                                             ScrollingColumn column,
+                                             int row, int count) {
             int total_height = int.max(count,
                 group.area.height - 2 * scroll_gap()
                 - (count - 1) * scroll_gap());
@@ -535,6 +560,14 @@ namespace Singularity {
                 hide_drop_preview();
                 return;
             }
+            Singularity.wayland_set_tiling_drop_preview(rect.x, rect.y,
+                rect.width, rect.height, 1);
+        }
+
+        private void show_stack_preview(ScrollingGroup group,
+                                        StackTarget target) {
+            var rect = rect_for_count(group, target.column, target.index,
+                target.column.windows.size + 1);
             Singularity.wayland_set_tiling_drop_preview(rect.x, rect.y,
                 rect.width, rect.height, 1);
         }
@@ -872,7 +905,7 @@ namespace Singularity {
 
         private void prepare_drag(ScrollingGroup group,
                                   AppSystem.Window win) {
-            group.stack_column = null;
+            group.stack_target = null;
             var source = column_for_window(group, win);
             if (source == null) return;
             if (source.windows.size == 1) {
@@ -898,19 +931,34 @@ namespace Singularity {
                     var rect = rect_for(group, column, row);
                     if (cursor_x < rect.x || cursor_x >= rect.x + rect.width)
                         continue;
-                    int top_distance = (int)Math.fabs(cursor_y - rect.y);
-                    if (top_distance <= STACK_TARGET_SIZE
+                    int target_size = int.max(STACK_TARGET_SIZE,
+                        rect.height * 2 / 5);
+                    int top_distance = cursor_y - rect.y;
+                    if (top_distance >= 0 && top_distance <= target_size
                             && (best == null || top_distance < best.distance))
                         best = new StackTarget(column, row, top_distance);
-                    int bottom_distance = (int)Math.fabs(
-                        cursor_y - (rect.y + rect.height));
-                    if (bottom_distance <= STACK_TARGET_SIZE
+                    int bottom_distance = rect.y + rect.height - cursor_y;
+                    if (bottom_distance >= 0 && bottom_distance <= target_size
                             && (best == null || bottom_distance < best.distance))
                         best = new StackTarget(column, row + 1,
                             bottom_distance);
                 }
             }
             return best;
+        }
+
+        private bool cursor_over_other_column(ScrollingGroup group,
+                                              AppSystem.Window win,
+                                              int cursor_x) {
+            foreach (var column in group.columns) {
+                bool only_dragged = column.windows.size == 1
+                    && column.windows[0] == win;
+                if (only_dragged) continue;
+                var rect = rect_for(group, column, 0);
+                if (cursor_x >= rect.x && cursor_x < rect.x + rect.width)
+                    return true;
+            }
+            return false;
         }
 
         private void move_to_stack(ScrollingGroup group,
@@ -993,27 +1041,25 @@ namespace Singularity {
                 layout_group(group, win);
                 return;
             }
-            if (group.stack_column != null) {
-                var rect = rect_for(group, group.stack_column, 0);
-                if (cursor_x >= rect.x
-                        && cursor_x < rect.x + rect.width) {
-                    layout_group(group, win);
-                    show_drop_preview(group, win);
-                    return;
-                }
-                group.stack_column = null;
-            }
+            scroll_drag_viewport(group, cursor_x);
             var target = stack_target_at(group, win, cursor_x, cursor_y);
             if (target != null) {
-                move_to_stack(group, win, target);
-                group.stack_column = target.column;
-            } else {
-                double dragged_center = x + width / 2.0;
-                var column = ensure_independent_column(group, win,
-                    dragged_center);
-                reorder_drag_column(group, column, dragged_center);
-                group.drag_column = column;
+                group.stack_target = target;
+                layout_group(group, win);
+                show_stack_preview(group, target);
+                return;
             }
+            group.stack_target = null;
+            if (cursor_over_other_column(group, win, cursor_x)) {
+                hide_drop_preview();
+                layout_group(group, win);
+                return;
+            }
+            double dragged_center = x + width / 2.0;
+            var column = ensure_independent_column(group, win,
+                dragged_center);
+            reorder_drag_column(group, column, dragged_center);
+            group.drag_column = column;
             group.offset = clamp_offset(group, group.offset);
             layout_group(group, win);
             show_drop_preview(group, win);
@@ -1082,12 +1128,15 @@ namespace Singularity {
             if (phase != 2) return;
 
             hide_drop_preview();
+            var stack_target = group.stack_target;
             group.interaction_window = null;
             group.drag_column = null;
-            group.stack_column = null;
+            group.stack_target = null;
             if (float_candidate) {
                 detach_floating(group, win);
             } else {
+                if (stack_target != null)
+                    move_to_stack(group, win, stack_target);
                 group.focused = win;
                 if (animate_offset(group, centered_offset(group, win)))
                     return;
