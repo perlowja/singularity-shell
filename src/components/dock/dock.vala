@@ -254,6 +254,8 @@ namespace Singularity {
                     intellihide = _settings.get_boolean("dock-intellihide");
                     update_autohide_state();
                 }
+                if (key == "tiling-enabled" || key == "tiling-layout")
+                    update_dock_reservation();
                 if (key == "dock-enabled") {
                     _enabled = _settings.get_boolean("dock-enabled");
                     if (!_enabled) {
@@ -800,12 +802,13 @@ namespace Singularity {
         public signal void dock_visibility_changed(bool hidden);
 
         private void update_dock_reservation() {
+            bool scrolling_tiling = _settings.get_boolean("tiling-enabled")
+                && _settings.get_string("tiling-layout") == "scrolling";
             bool reserve = _enabled
                 && !_hidden
                 && !_hidden_for_fullscreen
-                && visibility_mode == "always"
-                && !autohide
-                && !intellihide;
+                && (scrolling_tiling || (visibility_mode == "always"
+                    && !autohide && !intellihide));
             int zone = reserve ? int.max(0, _last_dimension - SHADOW_BOTTOM_PX) : 0;
             set_exclusive_zone(this, zone);
             app_system.shell_dock_height = zone;
