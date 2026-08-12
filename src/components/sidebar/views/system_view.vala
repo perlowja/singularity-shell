@@ -3,6 +3,35 @@ using Singularity.Widgets;
 
 namespace Singularity {
 
+    private delegate bool TileAvailableFunc();
+
+    private class QuickTileItem : Object {
+        public string id;
+        public Widget wrapper;
+        public QuickSettingTile tile;
+        public TileAvailableFunc? available;
+        public Overlay editor;
+        public Button action;
+        public DragSource drag;
+
+        public QuickTileItem(string id, Widget wrapper, QuickSettingTile tile,
+                owned TileAvailableFunc? available) {
+            this.id = id;
+            this.wrapper = wrapper;
+            this.tile = tile;
+            this.available = (owned) available;
+            editor = new Overlay();
+            editor.set_child(wrapper);
+            editor.set_data<string>("quick-tile-id", id);
+            action = new Button.from_icon_name("list-remove-symbolic");
+            drag = new DragSource();
+        }
+
+        public bool is_available() {
+            return available == null || available();
+        }
+    }
+
     public class SystemView : Box {
         public signal void toggle_settings();
         public signal void hide_sidebar();
@@ -10,6 +39,15 @@ namespace Singularity {
         private bool _bri_updating = false;
         private bool _kbd_updating = false;
         private ExtremeModeManager _extreme_mgr;
+        private GLib.Settings _settings;
+        private Button _edit_button;
+        private Box _content;
+        private FlowBox _tile_grid;
+        private FlowBox _inactive_tile_grid;
+        private PreferencesGroup _quick_settings_preferences;
+        private Gee.ArrayList<QuickTileItem> _quick_tiles = new Gee.ArrayList<QuickTileItem>();
+        private bool _editing_tiles = false;
+        private string? _drop_target_id;
 
         public SystemView() {
             Object(orientation: Orientation.VERTICAL, spacing: 0);
@@ -40,6 +78,7 @@ namespace Singularity {
             spacer.hexpand = true;
             header.append(spacer);
             var settings = new GLib.Settings("dev.sinty.desktop");
+            _settings = settings;
 
             var snap_btn = new Button.from_icon_name("camera-photo-symbolic");
             snap_btn.has_frame = false;
@@ -52,6 +91,12 @@ namespace Singularity {
                 if (!tool.ensure_screenshots()) return;
                 tool.present();
             });
+            _edit_button = new Button.from_icon_name("document-edit-symbolic");
+            _edit_button.has_frame = false;
+            _edit_button.add_css_class("navigation-button");
+            _edit_button.tooltip_text = _("Edit quick settings");
+            _edit_button.clicked.connect(() => set_editing_tiles(!_editing_tiles));
+            header.append(_edit_button);
             var settings_btn = new Button.from_icon_name("emblem-system-symbolic");
             settings_btn.has_frame = false;
             settings_btn.add_css_class("navigation-button");
@@ -73,6 +118,7 @@ namespace Singularity {
             header.append(power_btn);
             append(header);
                         var content = new Box(Orientation.VERTICAL, 0);
+                        _content = content;
                         content.margin_bottom = 0;
                         content.margin_start = 6;
                         content.margin_end = 6;
@@ -81,6 +127,10 @@ namespace Singularity {
                         var plugin_ctx = PluginManager.get_default().get_context();
                         plugin_ctx.sidebar_widget_added.connect((w) => {
                             content.prepend(w);
+                            if (_editing_tiles) {
+                                w.set_data<bool>("quick-settings-was-visible", w.visible);
+                                w.visible = false;
+                            }
                         });
                         plugin_ctx.sidebar_widget_removed.connect((w) => {
                             content.remove(w);
@@ -97,6 +147,7 @@ namespace Singularity {
                         grid.selection_mode = SelectionMode.NONE;
                         grid.margin_bottom = 12;
                         grid.add_css_class("quick-settings-grid");
+                        _tile_grid = grid;
 
                         // Wi-Fi Tile
                         var network = SystemMonitor.get_default().network;
@@ -111,6 +162,7 @@ namespace Singularity {
                             wifi_tile.active = network.wifi_enabled;
                             wifi_tile.icon_name = network.wifi_icon;
                             wifi_tile.subtitle = network.wifi_ssid;
+                            rebuild_quick_tiles();
                         });
                         wifi_tile.clicked.connect(() => {
                             network.toggle_wifi();
@@ -170,7 +222,7 @@ namespace Singularity {
                         });
                         var tiling_wrapper = make_tile_with_nav(tile_tile, "desktop");
                         // Bind visibility on the wrapper so the empty group box doesn't show
-                        settings.bind("preview-features-enabled", tiling_wrapper, "visible", SettingsBindFlags.GET);
+                        settings.changed["preview-features-enabled"].connect(() => rebuild_quick_tiles());
 
                         // Airplane Mode
                         bool airplane_on = network.is_airplane_mode;
@@ -221,9 +273,8 @@ namespace Singularity {
                         ppm_tile.state = SystemView.get_profile_state_with_extreme(ppm.active_profile, _extreme_mgr.active);
                         ppm_tile.subtitle = SystemView.format_profile_name_with_extreme(ppm.active_profile, _extreme_mgr.active);
                         var ppm_wrapper = make_tile_with_nav(ppm_tile, "performance");
-                        ppm_wrapper.visible = ppm.available;
                         ppm.profile_changed.connect(() => {
-                            ppm_wrapper.visible = ppm.available;
+                            rebuild_quick_tiles();
                             ppm_tile.icon_name = SystemView.get_profile_icon_with_extreme(ppm.active_profile, _extreme_mgr.active);
                             ppm_tile.subtitle = SystemView.format_profile_name_with_extreme(ppm.active_profile, _extreme_mgr.active);
                             ppm_tile.state = SystemView.get_profile_state_with_extreme(ppm.active_profile, _extreme_mgr.active);
@@ -317,20 +368,16 @@ namespace Singularity {
                             }
                         });
                         var hotspot_nav = make_tile_with_nav(hotspot_tile, "network");
-                        hotspot_nav.visible = network.has_wifi;
 
                         // Wi-Fi & Bluetooth (only when the hardware exists)
                         var wifi_nav = make_tile_with_nav(wifi_tile, "network");
                         var bt_nav = make_tile_with_nav(bt_tile, "bluetooth");
-                        wifi_nav.visible = network.has_wifi;
-                        bt_nav.visible = bluetooth.is_available;
-                        bluetooth.state_changed.connect(() => { bt_nav.visible = bluetooth.is_available; });
+                        bluetooth.state_changed.connect(() => { rebuild_quick_tiles(); });
 
                         // Keyboard-backlight tile only when the hardware exists (hide the whole
                         // nav wrapper, not just the inner tile, so it leaves no slot).
                         var kbd_nav = make_tile_with_nav(kbd_tile, "keyboard");
-                        kbd_nav.visible = kbd_mgr.available;
-                        kbd_mgr.changed.connect(() => { kbd_nav.visible = kbd_mgr.available; });
+                        kbd_mgr.changed.connect(() => { rebuild_quick_tiles(); });
 
                         // GameMode quick tile - only when the gamemode daemon is available.
                         var gm2 = GameModeManager.get_default();
@@ -349,27 +396,50 @@ namespace Singularity {
                             gm_nav = make_tile_with_nav(gm_tile, "performance");
                         }
 
-                        Widget[] tiles = {
-                            wifi_nav, bt_nav,
-                            make_tile_with_nav(theme_tile, "desktop"),
-                            make_tile_with_nav(night_tile, "displays"),
-                            make_tile_with_nav(airplane_tile, "network"),
-                            kbd_nav,
-                            audio_mute_wrapper, ppm_wrapper,
-                            make_tile_with_nav(dnd_tile, "notifications"),
-                            make_tile_with_nav(vpn_tile, "network"),
-                            tiling_wrapper, hotspot_nav
-                        };
-                        foreach (var t in tiles) {
-                            grid.append(t);
-                            t.bind_property("visible", t.parent, "visible", BindingFlags.SYNC_CREATE);
-                        }
-                        if (gm_nav != null) {
-                            grid.append(gm_nav);
-                            gm_nav.bind_property("visible", gm_nav.parent, "visible", BindingFlags.SYNC_CREATE);
-                        }
+                        add_quick_tile("wifi", wifi_nav, wifi_tile, () => network.has_wifi);
+                        add_quick_tile("bluetooth", bt_nav, bt_tile, () => bluetooth.is_available);
+                        add_quick_tile("theme", make_tile_with_nav(theme_tile, "desktop"), theme_tile);
+                        add_quick_tile("night-light", make_tile_with_nav(night_tile, "displays"), night_tile);
+                        add_quick_tile("airplane-mode", make_tile_with_nav(airplane_tile, "network"), airplane_tile);
+                        add_quick_tile("keyboard-light", kbd_nav, kbd_tile, () => kbd_mgr.available);
+                        add_quick_tile("audio", audio_mute_wrapper, audio_tile);
+                        add_quick_tile("power-profile", ppm_wrapper, ppm_tile, () => ppm.available);
+                        add_quick_tile("do-not-disturb", make_tile_with_nav(dnd_tile, "notifications"), dnd_tile);
+                        add_quick_tile("vpn", make_tile_with_nav(vpn_tile, "network"), vpn_tile);
+                        add_quick_tile("tiling", tiling_wrapper, tile_tile,
+                            () => settings.get_boolean("preview-features-enabled"));
+                        add_quick_tile("hotspot", hotspot_nav, hotspot_tile, () => network.has_wifi);
+                        if (gm_nav != null)
+                            add_quick_tile("game-mode", gm_nav, (QuickSettingTile) gm_nav.get_first_child(),
+                                () => gm2.available);
+
+                        _inactive_tile_grid = new FlowBox();
+                        _inactive_tile_grid.column_spacing = 10;
+                        _inactive_tile_grid.row_spacing = 10;
+                        _inactive_tile_grid.homogeneous = true;
+                        _inactive_tile_grid.min_children_per_line = 2;
+                        _inactive_tile_grid.max_children_per_line = 2;
+                        _inactive_tile_grid.selection_mode = SelectionMode.NONE;
+                        _inactive_tile_grid.margin_bottom = 12;
+                        _inactive_tile_grid.add_css_class("quick-settings-grid");
+                        _inactive_tile_grid.add_css_class("quick-settings-inactive-grid");
+
+                        var compact_row = new SwitchRow(_("Compact Mode"),
+                            _("Show quick settings as icon controls"),
+                            settings.get_boolean("quick-settings-compact"));
+                        settings.bind("quick-settings-compact", compact_row.switch_btn,
+                            "active", SettingsBindFlags.DEFAULT);
+                        compact_row.switch_btn.notify["active"].connect(() => update_compact_mode());
+                        _quick_settings_preferences = new PreferencesGroup(_("Preferences"));
+                        _quick_settings_preferences.add_row(compact_row);
+
+                        configure_tile_drop_target(grid, true);
+                        configure_tile_drop_target(_inactive_tile_grid, false);
+                        rebuild_quick_tiles();
 
                         content.append(grid);
+                        content.append(_inactive_tile_grid);
+                        content.append(_quick_settings_preferences);
 
             var sliders_group = new PreferencesGroup();
 
@@ -493,6 +563,8 @@ namespace Singularity {
             var media_player = new MediaPlayerCard();
             media_player.margin_bottom = 13;
             content.append(media_player);
+            _inactive_tile_grid.visible = false;
+            _quick_settings_preferences.visible = false;
             append(content);
         }
 
@@ -530,6 +602,206 @@ namespace Singularity {
                     () => SessionManager.get_default().shutdown());
             });
             menu.popup();
+        }
+
+        private void add_quick_tile(string id, Widget wrapper,
+                QuickSettingTile tile, owned TileAvailableFunc? available = null) {
+            var item = new QuickTileItem(id, wrapper, tile, (owned) available);
+            var action = item.action;
+            action.add_css_class("quick-setting-editor-action");
+            action.width_request = 24;
+            action.height_request = 24;
+            action.hexpand = false;
+            action.vexpand = false;
+            action.halign = Align.END;
+            action.valign = Align.START;
+            action.clicked.connect(() => set_tile_active(item, !tile_is_active(id)));
+            action.set_data<string>("quick-tile-id", id);
+            item.editor.add_overlay(action);
+
+            var drag = item.drag;
+            drag.actions = Gdk.DragAction.MOVE;
+            drag.prepare.connect((x, y) => new Gdk.ContentProvider.for_value(id));
+            drag.drag_begin.connect((source) => item.editor.add_css_class("dragging"));
+            drag.drag_end.connect((source, action_taken, delete_data) =>
+                item.editor.remove_css_class("dragging"));
+            item.editor.add_controller(drag);
+
+            var drop = new DropTarget(typeof(string), Gdk.DragAction.MOVE);
+            drop.enter.connect((x, y) => {
+                set_drop_target(item);
+                return Gdk.DragAction.MOVE;
+            });
+            drop.leave.connect(() => clear_tile_drop_target());
+            drop.drop.connect((value, x, y) => {
+                string? dragged = value.get_string();
+                clear_tile_drop_target();
+                if (dragged == null || dragged == id) return false;
+                move_tile(dragged, id, tile_is_active(id));
+                return true;
+            });
+            item.editor.add_controller(drop);
+            _quick_tiles.add(item);
+        }
+
+        private QuickTileItem? find_quick_tile(string id) {
+            foreach (var item in _quick_tiles)
+                if (item.id == id) return item;
+            return null;
+        }
+
+        private bool tile_is_active(string id) {
+            foreach (var active in _settings.get_strv("quick-settings-active-tiles"))
+                if (active == id) return true;
+            return false;
+        }
+
+        private string[] tile_order() {
+            string[] ordered = {};
+            foreach (var id in _settings.get_strv("quick-settings-tile-order"))
+                if (find_quick_tile(id) != null && !(id in ordered)) ordered += id;
+            foreach (var item in _quick_tiles)
+                if (!(item.id in ordered)) ordered += item.id;
+            return ordered;
+        }
+
+        private void set_tile_active(QuickTileItem item, bool active) {
+            string[] values = {};
+            foreach (var id in _settings.get_strv("quick-settings-active-tiles"))
+                if (id != item.id) values += id;
+            if (active) values += item.id;
+            _settings.set_strv("quick-settings-active-tiles", values);
+            Idle.add(() => {
+                rebuild_quick_tiles();
+                return Source.REMOVE;
+            });
+        }
+
+        private void detach_editor(QuickTileItem item) {
+            var parent = item.editor.parent as FlowBoxChild;
+            if (parent != null && parent.parent is FlowBox)
+                ((FlowBox) parent.parent).remove(parent);
+        }
+
+        private void rebuild_quick_tiles() {
+            foreach (var item in _quick_tiles) detach_editor(item);
+            foreach (var id in tile_order()) {
+                var item = find_quick_tile(id);
+                if (item == null || !item.is_available()) continue;
+                bool active = tile_is_active(id);
+                if (!_editing_tiles && !active) continue;
+                var icon = item.action.get_child() as Image;
+                if (icon != null)
+                    icon.icon_name = active ? "list-remove-symbolic" : "list-add-symbolic";
+                item.action.visible = _editing_tiles;
+                item.drag.actions = _editing_tiles
+                    ? Gdk.DragAction.MOVE : (Gdk.DragAction) 0;
+                item.tile.can_target = !_editing_tiles;
+                item.wrapper.can_target = !_editing_tiles;
+                if (active) _tile_grid.append(item.editor);
+                else _inactive_tile_grid.append(item.editor);
+            }
+            _inactive_tile_grid.visible = _editing_tiles;
+            update_compact_mode();
+        }
+
+        private void set_editing_tiles(bool editing) {
+            _editing_tiles = editing;
+            _edit_button.icon_name = editing ? "object-select-symbolic" : "document-edit-symbolic";
+            _edit_button.tooltip_text = editing ? _("Done") : _("Edit quick settings");
+            set_css_class(_tile_grid, "quick-settings-editing", editing);
+            set_css_class(_inactive_tile_grid, "quick-settings-editing", editing);
+            _inactive_tile_grid.visible = editing;
+            _quick_settings_preferences.visible = editing;
+            Widget? child = _content.get_first_child();
+            while (child != null) {
+                bool editor_child = child == _tile_grid
+                    || child == _inactive_tile_grid
+                    || child == _quick_settings_preferences;
+                if (!editor_child) {
+                    if (editing) {
+                        child.set_data<bool>("quick-settings-was-visible", child.visible);
+                        child.visible = false;
+                    } else if (child.get_data<bool>("quick-settings-was-visible")) {
+                        child.visible = true;
+                        child.set_data<bool>("quick-settings-was-visible", false);
+                    }
+                }
+                child = child.get_next_sibling();
+            }
+            rebuild_quick_tiles();
+        }
+
+        private void update_compact_mode() {
+            bool compact = _settings.get_boolean("quick-settings-compact");
+            set_css_class(_tile_grid, "compact", compact);
+            set_css_class(_inactive_tile_grid, "compact", compact);
+            _tile_grid.min_children_per_line = compact ? 4 : 2;
+            _tile_grid.max_children_per_line = compact ? 4 : 2;
+            _inactive_tile_grid.min_children_per_line = compact ? 4 : 2;
+            _inactive_tile_grid.max_children_per_line = compact ? 4 : 2;
+            foreach (var item in _quick_tiles) {
+                item.wrapper.hexpand = !compact;
+                item.wrapper.halign = compact ? Align.CENTER : Align.FILL;
+                item.tile.hexpand = !compact;
+                item.tile.compact = compact;
+                item.wrapper.tooltip_text = compact ? item.tile.title : null;
+            }
+        }
+
+        private static void set_css_class(Widget widget, string name, bool enabled) {
+            if (enabled) widget.add_css_class(name);
+            else widget.remove_css_class(name);
+        }
+
+        private void set_drop_target(QuickTileItem item) {
+            if (_drop_target_id == item.id) return;
+            clear_tile_drop_target();
+            item.editor.add_css_class("drop-target-here");
+            _drop_target_id = item.id;
+        }
+
+        private void clear_tile_drop_target() {
+            if (_drop_target_id == null) return;
+            var item = find_quick_tile(_drop_target_id);
+            if (item != null) item.editor.remove_css_class("drop-target-here");
+            _drop_target_id = null;
+        }
+
+        private void move_tile(string dragged, string? anchor, bool active) {
+            string[] order = {};
+            foreach (var id in tile_order()) if (id != dragged) order += id;
+            int index = order.length;
+            if (anchor != null) {
+                for (int i = 0; i < order.length; i++) {
+                    if (order[i] == anchor) { index = i; break; }
+                }
+            }
+            string[] updated = {};
+            for (int i = 0; i < order.length; i++) {
+                if (i == index) updated += dragged;
+                updated += order[i];
+            }
+            if (index == order.length) updated += dragged;
+            _settings.set_strv("quick-settings-tile-order", updated);
+            var item = find_quick_tile(dragged);
+            if (item != null && tile_is_active(dragged) != active)
+                set_tile_active(item, active);
+            else
+                rebuild_quick_tiles();
+        }
+
+        private void configure_tile_drop_target(FlowBox grid, bool active) {
+            var drop = new DropTarget(typeof(string), Gdk.DragAction.MOVE);
+            drop.drop.connect((value, x, y) => {
+                string? dragged = value.get_string();
+                clear_tile_drop_target();
+                if (dragged == null) return false;
+                move_tile(dragged, null, active);
+                return true;
+            });
+            drop.leave.connect(() => clear_tile_drop_target());
+            grid.add_controller(drop);
         }
 
         private Widget make_tile_with_nav(QuickSettingTile tile, string page_name) {
