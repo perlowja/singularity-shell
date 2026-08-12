@@ -913,15 +913,37 @@ namespace Singularity {
                 && tiling_layout == "scrolling";
             wm_group.add_row(column_width_row);
 
+            var tiling_gap_row = new SpinRow(_("Window Gap"),
+                _("Space between windows in scrolling tiling"),
+                0, 64, 1, settings.get_int("tiling-gap"));
+            tiling_gap_row.spin_btn.value_changed.connect(() => {
+                settings.set_int("tiling-gap",
+                    (int)tiling_gap_row.spin_btn.value);
+            });
+            tiling_gap_row.visible = tile_row.switch_btn.active
+                && tiling_layout == "scrolling";
+            wm_group.add_row(tiling_gap_row);
+
+            var border_width_row = new SpinRow(_("Window Border Width"),
+                _("Accent-colored border thickness"),
+                0, 8, 1, settings.get_int("window-border-width"));
+            border_width_row.spin_btn.value_changed.connect(() => {
+                settings.set_int("window-border-width",
+                    (int)border_width_row.spin_btn.value);
+            });
+            wm_group.add_row(border_width_row);
+
             tile_row.switch_btn.notify["active"].connect(() => {
                 tiling_layout_row.sensitive = tile_row.switch_btn.active;
                 column_width_row.visible = tile_row.switch_btn.active
                     && settings.get_string("tiling-layout") == "scrolling";
+                tiling_gap_row.visible = column_width_row.visible;
             });
             settings.changed["tiling-layout"].connect(() => {
                 bool scrolling = settings.get_string("tiling-layout") == "scrolling";
                 tiling_layout_row.current_value = scrolling ? _("Scrolling") : _("Grid");
                 column_width_row.visible = tile_row.switch_btn.active && scrolling;
+                tiling_gap_row.visible = column_width_row.visible;
             });
 
             var ssd_row = new SwitchRow(_("Disable Client Side Decorations"), _("Force standard window titles (requires app restart)"), settings.get_boolean("force-ssd"));

@@ -117,6 +117,9 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
                 update_accent_color();
             }
         });
+        settings.changed["window-border-width"].connect(() => {
+            apply_labwc_theme(Singularity.Style.ThemeMode.get_default().app_dark());
+        });
         settings.changed["background-picture-uri"].connect(() => {
             if (settings.get_string("accent-color") == "wallpaper") {
                 update_accent_color();
@@ -1188,6 +1191,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         string btnh   = mix_hex(btn_hover_base, accent, 0.20);
 
         string themerc = """# Singularity labwc theme (accent-tinted)
+border.width: %d
 window.active.title.bg.color: %s
 window.active.title.bg: flat
 window.active.label.text.color: %s
@@ -1212,6 +1216,7 @@ window.inactive.shadow.size: %d
 window.active.shadow.color: %s
 window.inactive.shadow.color: %s
 """.printf(
+            settings.get_int("window-border-width").clamp(0, 8),
             title, text_active, border, title, title,
             inact, inactb, inact, inact,
             btn, btnh, btn_inact,

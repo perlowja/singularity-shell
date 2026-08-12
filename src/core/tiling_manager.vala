@@ -80,7 +80,6 @@ namespace Singularity {
     }
 
     public class TilingManager : Object {
-        private const int SCROLL_GAP = 12;
         private const int MIN_COLUMN_WIDTH = 240;
         private const int STACK_TARGET_SIZE = 30;
         private const int GESTURE_ADVANCE_DISTANCE = 48;
@@ -119,6 +118,18 @@ namespace Singularity {
                 }
                 if (scrolling_active()) schedule_apply_layout();
             });
+            settings.changed["tiling-gap"].connect(() => {
+                foreach (var group in scrolling_groups.values)
+                    group.initialized = false;
+                if (scrolling_active()) schedule_apply_layout();
+            });
+            app_system.config_changed.connect((key) => {
+                if (key == "dock-position" || key == "dock-enabled"
+                        || key == "dock-autohide"
+                        || key == "dock-intellihide") {
+                    if (scrolling_active()) schedule_apply_layout();
+                }
+            });
             app_system.app_opened.connect(on_app_opened);
             app_system.app_closed.connect(on_app_closed);
             app_system.workspaces_changed.connect(on_workspaces_changed);
@@ -134,6 +145,10 @@ namespace Singularity {
 
         private bool scrolling_active() {
             return enabled && settings.get_string("tiling-layout") == "scrolling";
+        }
+
+        private int scroll_gap() {
+            return settings.get_int("tiling-gap").clamp(0, 64);
         }
 
         private void sync_compositor_mode() {
@@ -304,6 +319,7 @@ namespace Singularity {
                                   out int width, out int height) {
             if (Singularity.wayland_get_window_workarea(win.handle,
                     out x, out y, out width, out height)) {
+                adjust_workarea_for_dock(win, ref x, ref y, ref width, ref height);
                 return width > 0 && height > 0;
             }
             var monitor = Singularity.wayland_get_window_monitor(win.handle);
@@ -316,7 +332,29 @@ namespace Singularity {
             y = geometry.y;
             width = geometry.width;
             height = geometry.height;
+            adjust_workarea_for_dock(win, ref x, ref y, ref width, ref height);
             return width > 0 && height > 0;
+        }
+
+        private void adjust_workarea_for_dock(AppSystem.Window win,
+                                              ref int x, ref int y,
+                                              ref int width, ref int height) {
+            int dock = app_system.shell_dock_height;
+            if (dock <= 0) return;
+            var monitor = Singularity.wayland_get_window_monitor(win.handle);
+            if (monitor == null) return;
+            var geometry = monitor.get_geometry();
+            string position = settings.get_string("dock-position");
+            if (position == "bottom"
+                    && y + height >= geometry.y + geometry.height) {
+                height -= dock;
+            } else if (position == "left" && x <= geometry.x) {
+                x += dock;
+                width -= dock;
+            } else if (position == "right"
+                    && x + width >= geometry.x + geometry.width) {
+                width -= dock;
+            }
         }
 
         private string workarea_key(int x, int y, int width, int height) {
@@ -324,7 +362,8 @@ namespace Singularity {
         }
 
         private int default_column_width(ScrollingGroup group) {
-            int available = int.max(1, group.area.width - 2 * SCROLL_GAP);
+            int gap = scroll_gap();
+            int available = int.max(1, group.area.width - 2 * gap);
             int width = group.area.width
                 * settings.get_int("tiling-column-width") / 100;
             return int.min(available, int.max(MIN_COLUMN_WIDTH, width));
@@ -332,8 +371,9 @@ namespace Singularity {
 
         private int width_for(ScrollingGroup group, ScrollingColumn column) {
             if (column.width <= 0) column.width = default_column_width(group);
+            int gap = scroll_gap();
             int available = int.max(MIN_COLUMN_WIDTH,
-                group.area.width - 2 * SCROLL_GAP);
+                group.area.width - 2 * gap);
             return int.min(available, int.max(MIN_COLUMN_WIDTH, column.width));
         }
 
@@ -350,7 +390,7 @@ namespace Singularity {
             double x = 0;
             foreach (var column in group.columns) {
                 if (column == target) return x;
-                x += width_for(group, column) + SCROLL_GAP;
+                x += width_for(group, column) + scroll_gap();
             }
             return x;
         }
@@ -359,13 +399,13 @@ namespace Singularity {
             double width = 0;
             for (int i = 0; i < group.columns.size; i++) {
                 width += width_for(group, group.columns[i]);
-                if (i + 1 < group.columns.size) width += SCROLL_GAP;
+                if (i + 1 < group.columns.size) width += scroll_gap();
             }
             return width;
         }
 
         private double viewport_width(ScrollingGroup group) {
-            return int.max(1, group.area.width - 2 * SCROLL_GAP);
+            return int.max(1, group.area.width - 2 * scroll_gap());
         }
 
         private void offset_limits(ScrollingGroup group,
@@ -416,16 +456,17 @@ namespace Singularity {
                                        int row) {
             int count = int.max(1, column.windows.size);
             int total_height = int.max(count,
-                group.area.height - 2 * SCROLL_GAP
-                - (count - 1) * SCROLL_GAP);
+                group.area.height - 2 * scroll_gap()
+                - (count - 1) * scroll_gap());
             int base_height = total_height / count;
             int remainder = total_height % count;
-            int y = group.area.y + SCROLL_GAP;
+            int gap = scroll_gap();
+            int y = group.area.y + gap;
             for (int i = 0; i < row; i++) {
-                y += base_height + (i < remainder ? 1 : 0) + SCROLL_GAP;
+                y += base_height + (i < remainder ? 1 : 0) + gap;
             }
             int height = base_height + (row < remainder ? 1 : 0);
-            int x = group.area.x + SCROLL_GAP
+            int x = group.area.x + gap
                 + (int)Math.round(logical_x(group, column) - group.offset);
             return new ScrollingRect(x, y, width_for(group, column), height);
         }
@@ -516,7 +557,7 @@ namespace Singularity {
             if (anchor != null && anchor_rect != null) {
                 var anchor_column = column_for_window(group, anchor);
                 if (anchor_column != null) {
-                    group.offset = group.area.x + SCROLL_GAP
+                    group.offset = group.area.x + scroll_gap()
                         + logical_x(group, anchor_column) - anchor_rect.x;
                 }
             }
@@ -786,7 +827,7 @@ namespace Singularity {
             if (source.windows.size == 0) group.columns.remove(source);
             target_index = int.min(target_index, target.column.windows.size);
             target.column.windows.insert(target_index, win);
-            group.offset = group.area.x + SCROLL_GAP
+            group.offset = group.area.x + scroll_gap()
                 + logical_x(group, target.column) - target_x;
             group.drag_column = target.column;
         }
@@ -809,7 +850,7 @@ namespace Singularity {
             column.windows.add(win);
             int target_index = 0;
             foreach (var other in group.columns) {
-                double center = group.area.x + SCROLL_GAP
+                double center = group.area.x + scroll_gap()
                     + logical_x(group, other) - group.offset
                     + width_for(group, other) / 2.0;
                 if (dragged_center < center) break;
@@ -829,11 +870,11 @@ namespace Singularity {
             int target_index = 0;
             double logical = 0;
             foreach (var other in group.columns) {
-                double center = group.area.x + SCROLL_GAP + logical
+                double center = group.area.x + scroll_gap() + logical
                     - group.offset + width_for(group, other) / 2.0;
                 if (dragged_center < center) break;
                 target_index++;
-                logical += width_for(group, other) + SCROLL_GAP;
+                logical += width_for(group, other) + scroll_gap();
             }
             group.columns.insert(target_index, column);
         }
@@ -921,10 +962,10 @@ namespace Singularity {
                 var column = column_for_window(group, win);
                 if (column == null) return;
                 column.width = int.min(
-                    int.max(MIN_COLUMN_WIDTH, group.area.width - 2 * SCROLL_GAP),
+                    int.max(MIN_COLUMN_WIDTH, group.area.width - 2 * scroll_gap()),
                     int.max(MIN_COLUMN_WIDTH, width));
                 double logical = logical_x(group, column);
-                group.offset = group.area.x + SCROLL_GAP + logical - x;
+                group.offset = group.area.x + scroll_gap() + logical - x;
                 group.offset = clamp_offset(group, group.offset);
                 layout_group(group, phase == 1 ? win : null);
                 if (phase == 2) group.interaction_window = null;
