@@ -6,6 +6,23 @@ namespace Singularity {
 
     public class DisplayManager : Object {
         private static DisplayManager? _instance;
+
+        // A wl_output can only advertise an INTEGER scale, so a fractional value
+        // below 1.0 does not make the UI smaller -- it enlarges the logical
+        // desktop beyond the panel's native size while clients are told "scale
+        // 1", so everything renders undersized, including the settings page that
+        // would undo it. Clamp anything read back from disk (written by an older
+        // build, or edited by hand) into a range that can actually be represented.
+        private const double MIN_SCALE = 1.0;
+        private const double MAX_SCALE = 3.0;
+
+        private static double clamp_scale(double value) {
+            // The negated comparison also rejects NaN, which would otherwise
+            // propagate into the compositor configuration.
+            if (!(value >= MIN_SCALE)) return MIN_SCALE;
+            if (value > MAX_SCALE) return MAX_SCALE;
+            return value;
+        }
         public struct Mode {
             public int width;
             public int height;
@@ -319,7 +336,7 @@ namespace Singularity {
                         if (m.name == name) {
                             m.x = (int)obj.get_int_member("x");
                             m.y = (int)obj.get_int_member("y");
-                            m.scale = obj.get_double_member("scale");
+                            m.scale = clamp_scale(obj.get_double_member("scale"));
                             m.transform = (int)obj.get_int_member("transform");
                             m.enabled = obj.get_boolean_member("enabled");
                             if (obj.has_member("vrr_enabled")) m.vrr_enabled = obj.get_boolean_member("vrr_enabled");

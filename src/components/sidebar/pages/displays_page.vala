@@ -101,7 +101,7 @@ namespace Singularity.SidebarPages {
             scale_lbl.add_css_class("title");
             scale_lbl.halign = Align.START;
             scale_box.append(scale_lbl);
-            scale_scale = new Scale.with_range(Orientation.HORIZONTAL, 0.5, 3.0, 0.25);
+            scale_scale = new Scale.with_range(Orientation.HORIZONTAL, 1.0, 3.0, 0.25);
             scale_scale.draw_value = true;
             scale_scale.hexpand = true;
             scale_scale.value_changed.connect(() => {
