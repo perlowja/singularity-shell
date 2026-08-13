@@ -85,7 +85,9 @@ namespace Singularity {
         private const int MIN_COLUMN_WIDTH = 240;
         private const int STACK_TARGET_SIZE = 30;
         private const int GESTURE_ADVANCE_DISTANCE = 48;
+        private const double CLOSE_GESTURE_HINT_DISTANCE = 36;
         private const double CLOSE_GESTURE_THRESHOLD = 72;
+        private const double CLOSE_GESTURE_ARM_DISTANCE = 40;
         private const double CLOSE_GESTURE_RESISTANCE = 0.28;
         private const uint OFFSET_SETTLE_DURATION = 180;
         private static TilingManager? instance;
@@ -108,6 +110,8 @@ namespace Singularity {
         private ScrollingRect? close_gesture_rect;
         private double close_gesture_last_dy = 0;
         private Gtk.Window? close_gesture_indicator;
+        private Gtk.Widget? close_gesture_danger;
+        private Gtk.Image? close_gesture_icon;
         private AppSystem.Window? organizer_hover_window;
         private AppSystem.Window? organizer_window;
 
@@ -171,15 +175,39 @@ namespace Singularity {
             GtkLayerShell.set_anchor(close_gesture_indicator, GtkLayerShell.Edge.RIGHT, true);
             GtkLayerShell.set_exclusive_zone(close_gesture_indicator, -1);
             GtkLayerShell.set_keyboard_mode(close_gesture_indicator, GtkLayerShell.KeyboardMode.NONE);
-            var icon = new Gtk.Image.from_icon_name("user-trash-symbolic");
-            icon.pixel_size = 42;
-            icon.add_css_class("accent");
-            icon.halign = Gtk.Align.CENTER;
-            icon.valign = Gtk.Align.CENTER;
-            close_gesture_indicator.set_child(icon);
+            var overlay = new Gtk.Overlay();
+            close_gesture_danger = new Gtk.Box(Gtk.Orientation.HORIZONTAL, 0);
+            close_gesture_danger.add_css_class("tiling-close-danger");
+            close_gesture_danger.opacity = 0;
+            overlay.set_child(close_gesture_danger);
+            close_gesture_icon = new Gtk.Image.from_icon_name("user-trash-symbolic");
+            close_gesture_icon.pixel_size = 42;
+            close_gesture_icon.add_css_class("accent");
+            close_gesture_icon.halign = Gtk.Align.CENTER;
+            close_gesture_icon.valign = Gtk.Align.CENTER;
+            close_gesture_icon.opacity = 0;
+            overlay.add_overlay(close_gesture_icon);
+            close_gesture_indicator.set_child(overlay);
             close_gesture_indicator.add_css_class("singularity");
             close_gesture_indicator.add_css_class("tiling-close-indicator");
-            close_gesture_indicator.hide();
+            var provider = new Gtk.CssProvider();
+            provider.load_from_string("""
+.tiling-close-danger {
+    background-color: alpha(@destructive_color, 0.16);
+}
+.tiling-close-indicator {
+    background-color: transparent;
+}
+.tiling-close-indicator image.armed {
+    color: @destructive_color;
+}
+""");
+            var display = Gdk.Display.get_default();
+            if (display != null) {
+                Gtk.StyleContext.add_provider_for_display(display, provider,
+                    Gtk.STYLE_PROVIDER_PRIORITY_USER + 2);
+            }
+            close_gesture_indicator.visible = false;
         }
 
         private bool scrolling_active() {
@@ -964,9 +992,13 @@ namespace Singularity {
                     return false;
                 }
                 if (close_gesture_indicator != null) {
-                    close_gesture_indicator.opacity = 0;
-                    close_gesture_indicator.present();
-                    close_gesture_indicator.show();
+                    if (close_gesture_danger != null)
+                        close_gesture_danger.opacity = 0;
+                    if (close_gesture_icon != null) {
+                        close_gesture_icon.opacity = 0;
+                        close_gesture_icon.remove_css_class("armed");
+                    }
+                    close_gesture_indicator.visible = false;
                 }
                 return true;
             }
@@ -978,32 +1010,53 @@ namespace Singularity {
             if (phase == 1) {
                 close_gesture_last_dy = dy;
                 double distance = double.max(0, dy);
-                double progress = double.min(1.0,
-                    distance / CLOSE_GESTURE_THRESHOLD);
+                double hint_progress = double.min(1.0, double.max(0.0,
+                    (distance - CLOSE_GESTURE_HINT_DISTANCE)
+                        / (CLOSE_GESTURE_THRESHOLD
+                            - CLOSE_GESTURE_HINT_DISTANCE)));
+                double warning_progress = double.min(1.0, double.max(0.0,
+                    (distance - CLOSE_GESTURE_THRESHOLD)
+                        / CLOSE_GESTURE_ARM_DISTANCE));
                 double resisted_distance = distance;
                 if (distance > CLOSE_GESTURE_THRESHOLD) {
                     resisted_distance = CLOSE_GESTURE_THRESHOLD
                         + (distance - CLOSE_GESTURE_THRESHOLD)
                             * CLOSE_GESTURE_RESISTANCE;
                 }
+                if (close_gesture_icon != null) {
+                    close_gesture_icon.opacity = hint_progress;
+                    if (warning_progress >= 1.0)
+                        close_gesture_icon.add_css_class("armed");
+                    else
+                        close_gesture_icon.remove_css_class("armed");
+                }
+                if (close_gesture_danger != null)
+                    close_gesture_danger.opacity = warning_progress * 0.7;
                 if (close_gesture_indicator != null) {
-                    close_gesture_indicator.opacity = progress;
+                    if (hint_progress > 0) {
+                        if (!close_gesture_indicator.visible)
+                            close_gesture_indicator.present();
+                    } else {
+                        close_gesture_indicator.visible = false;
+                    }
                 }
                 Singularity.wayland_set_geometry(win.handle, rect.x,
                     rect.y + (int)Math.round(resisted_distance), rect.width,
                     rect.height);
                 Singularity.wayland_set_close_gesture_progress(win.handle,
-                    progress);
+                    warning_progress);
                 return true;
             }
             if (phase == 2) {
                 bool close = !cancelled && committed
-                    && close_gesture_last_dy >= CLOSE_GESTURE_THRESHOLD;
+                    && close_gesture_last_dy >= CLOSE_GESTURE_THRESHOLD
+                        + CLOSE_GESTURE_ARM_DISTANCE;
                 close_gesture_group = null;
                 close_gesture_window = null;
                 close_gesture_rect = null;
                 close_gesture_last_dy = 0;
-                if (close_gesture_indicator != null) close_gesture_indicator.hide();
+                if (close_gesture_indicator != null)
+                    close_gesture_indicator.visible = false;
                 Singularity.wayland_set_close_gesture_progress(win.handle, 0);
                 if (close) {
                     Singularity.close_window(win.handle);

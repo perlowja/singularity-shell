@@ -736,16 +736,23 @@ namespace Singularity {
             bool compact = _settings.get_boolean("quick-settings-compact");
             set_css_class(_tile_grid, "compact", compact);
             set_css_class(_inactive_tile_grid, "compact", compact);
-            _tile_grid.min_children_per_line = compact ? 4 : 2;
-            _tile_grid.max_children_per_line = compact ? 4 : 2;
-            _inactive_tile_grid.min_children_per_line = compact ? 4 : 2;
-            _inactive_tile_grid.max_children_per_line = compact ? 4 : 2;
+            _tile_grid.min_children_per_line = compact ? 6 : 2;
+            _tile_grid.max_children_per_line = compact ? 6 : 2;
+            _inactive_tile_grid.min_children_per_line = compact ? 6 : 2;
+            _inactive_tile_grid.max_children_per_line = compact ? 6 : 2;
             foreach (var item in _quick_tiles) {
                 item.wrapper.hexpand = !compact;
                 item.wrapper.halign = compact ? Align.CENTER : Align.FILL;
                 item.tile.hexpand = !compact;
                 item.tile.compact = compact;
                 item.wrapper.tooltip_text = compact ? item.tile.title : null;
+                var nav_btn = item.wrapper.get_last_child();
+                if (nav_btn != null && nav_btn.has_css_class("quick-setting-nav-btn"))
+                    nav_btn.visible = !compact;
+                var long_press = item.tile.get_data<GestureLongPress>("quick-setting-long-press");
+                if (long_press != null)
+                    long_press.propagation_phase = compact
+                        ? PropagationPhase.CAPTURE : PropagationPhase.NONE;
             }
         }
 
@@ -821,6 +828,15 @@ namespace Singularity {
                 open_settings_page(page_name);
             });
             wrapper.append(nav_btn);
+            var long_press = new GestureLongPress();
+            long_press.propagation_phase = PropagationPhase.NONE;
+            long_press.pressed.connect((x, y) => {
+                if (_editing_tiles) return;
+                long_press.set_state(EventSequenceState.CLAIMED);
+                open_settings_page(page_name);
+            });
+            tile.add_controller(long_press);
+            tile.set_data<GestureLongPress>("quick-setting-long-press", long_press);
             return wrapper;
         }
 
