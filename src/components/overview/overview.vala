@@ -336,6 +336,12 @@ namespace Singularity {
                     _anim_out_timer = 0;
                     main_box.remove_css_class("animating-out");
                     close_layer_window (this);
+                    // A folder overlay is a separate toplevel layer window, so
+                    // it does not go away with the launcher. Dismiss it now --
+                    // waiting for the idle depopulate below left it on screen
+                    // for IDLE_DEPOPULATE_MS, or indefinitely if the overview
+                    // was reopened before that timer fired and cancelled it.
+                    launcher_grid.close_folder_overlays();
                     PreviewCache.get_default().clear();
                     hidden();
                     // The overview just freed its grid widgets, icon textures
@@ -438,6 +444,9 @@ namespace Singularity {
 
         private void finish_gesture_hide() {
             close_layer_window (this);
+            // Same reason as the animated close path: the folder overlay is its
+            // own toplevel and does not go away with the launcher.
+            launcher_grid.close_folder_overlays();
             PreviewCache.get_default().clear();
             hidden();
             Singularity.trim_heap();

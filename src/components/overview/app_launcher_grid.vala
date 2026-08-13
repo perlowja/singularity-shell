@@ -377,9 +377,22 @@ namespace Singularity {
             return GLib.Source.CONTINUE;
         }
 
-        public void depopulate() {
+        /**
+         * Dismiss any open folder overlay without tearing down the grid.
+         *
+         * A folder overlay is its own toplevel layer-shell window, so hiding
+         * the launcher that spawned it leaves it on screen. Closing the
+         * overlays is cheap; dropping the grid contents is not, which is why
+         * depopulate() stays on its idle timer and this can be called
+         * immediately on close.
+         */
+        public void close_folder_overlays() {
             _folder_overlays.foreach((id, ov) => ov.close_overlay());
             _folder_overlays.remove_all();
+        }
+
+        public void depopulate() {
+            close_folder_overlays();
             Widget? c = grid.get_first_child();
             while (c != null) { Widget nc = c.get_next_sibling(); grid.remove(c); c = nc; }
         }
