@@ -324,6 +324,7 @@ singularity_core_sources = files(
     'src/components/sidebar/pages/performance_page.vala',
     'src/core/display_manager.vala',
     'src/core/hot_corner_manager.vala',
+    'src/core/layer_window.vala',
     'src/core/monitor_osd.vala',
     'src/core/system_components.vala',
     'src/core/debug_manager.vala',

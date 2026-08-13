@@ -158,11 +158,7 @@ namespace Singularity {
             });
             ((Gtk.Widget)this).add_controller(key_controller);
 
-            hide();
-            // Drop the GdkSurface so the next open gets a fresh wl_surface.
-            // Cast required: GtkWindow implements GtkNative, so a bare
-            // unrealize() binds to gtk_native_unrealize, not the widget one.
-            ((Gtk.Widget) this).unrealize();
+            close_layer_window (this);
         }
 
         private void apply_monitor_sizing() {
@@ -273,11 +269,7 @@ namespace Singularity {
                 menu_animation.tick.connect(() => { opacity = menu_animation.value; });
                 menu_animation.done.connect(() => {
                     if (_is_open) return;
-                    hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 });
@@ -341,11 +333,7 @@ namespace Singularity {
                 opacity = target;
                 if (stay_open) search_entry.grab_focus();
                 else {
-                    hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 }
@@ -365,11 +353,7 @@ namespace Singularity {
                 if (menu_animation == animation) menu_animation = null;
                 if (stay_open) search_entry.grab_focus();
                 else {
-                    hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 }

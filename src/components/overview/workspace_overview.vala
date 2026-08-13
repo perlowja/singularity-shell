@@ -135,11 +135,7 @@ namespace Singularity {
             wp_manager.wallpaper_changed.connect(update_wallpaper);
             update_wallpaper();
 
-            hide();
-            // Drop the GdkSurface so the next open gets a fresh wl_surface.
-            // Cast required: GtkWindow implements GtkNative, so a bare
-            // unrealize() binds to gtk_native_unrealize, not the widget one.
-            ((Gtk.Widget) this).unrealize();
+            close_layer_window (this);
         }
 
         private void update_wallpaper() {
@@ -424,11 +420,7 @@ namespace Singularity {
                     _anim_out_timer = 0;
                     opacity = 0;
                     anim_box.remove_css_class("animating-out");
-                    hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     // Free all window preview textures - they'll be re-captured on next open
                     clear_overview_content();
                     hidden();
@@ -506,11 +498,7 @@ namespace Singularity {
                     || Math.fabs(opacity - target) < 0.001) {
                 opacity = target;
                 if (!stay_open) {
-                    hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     clear_overview_content();
                     hidden();
                 }
@@ -529,11 +517,7 @@ namespace Singularity {
                 opacity = target;
                 if (_gesture_animation == animation) _gesture_animation = null;
                 if (!stay_open) {
-                    hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     clear_overview_content();
                     hidden();
                 }

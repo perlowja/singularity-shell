@@ -241,11 +241,7 @@ namespace Singularity {
                 }
                 if (key == "panel-fusion") {
                     update_fusion();
-                    ((Gtk.Widget) this).hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     update_visibility_mode();
                     pulse_frame_clock();
                 }
@@ -261,11 +257,7 @@ namespace Singularity {
                 if (key == "dock-enabled") {
                     _enabled = _settings.get_boolean("dock-enabled");
                     if (!_enabled) {
-                        ((Gtk.Widget) this).hide();
-                        // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                        // Cast required: GtkWindow implements GtkNative, so a bare
-                        // unrealize() binds to gtk_native_unrealize, not the widget one.
-                        ((Gtk.Widget) this).unrealize();
+                        close_layer_window (this);
                         set_exclusive_zone(this, 0);
                         app_system.shell_dock_height = 0;
                         _set_reveal_barrier_active(false);
@@ -935,11 +927,7 @@ namespace Singularity {
                     queue_draw();
                     break;
                 case "remap":
-                    hide();
-                    // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                    // Cast required: GtkWindow implements GtkNative, so a bare
-                    // unrealize() binds to gtk_native_unrealize, not the widget one.
-                    ((Gtk.Widget) this).unrealize();
+                    close_layer_window (this);
                     present();
                     queue_draw();
                     break;
@@ -1048,11 +1036,7 @@ namespace Singularity {
                 // is live right after the remap (and we pulse it), so the content
                 // transform is presented reliably without moving the surface.
                 set_body_class("dock-reveal-offset", true);
-                ((Gtk.Widget) this).hide();
-                // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                // Cast required: GtkWindow implements GtkNative, so a bare
-                // unrealize() binds to gtk_native_unrealize, not the widget one.
-                ((Gtk.Widget) this).unrealize();
+                close_layer_window (this);
                 present();
                 start_content_slide();
             }
@@ -1156,11 +1140,7 @@ namespace Singularity {
                 return;
             }
             if (!_enabled) {
-                ((Gtk.Widget) this).hide();
-                // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                // Cast required: GtkWindow implements GtkNative, so a bare
-                // unrealize() binds to gtk_native_unrealize, not the widget one.
-                ((Gtk.Widget) this).unrealize();
+                close_layer_window (this);
                 set_exclusive_zone(this, 0);
                 app_system.shell_dock_height = 0;
                 _set_reveal_barrier_active(false);
@@ -1177,11 +1157,7 @@ namespace Singularity {
                 // Re-trigger size_allocate to restore the correct exclusive zone
                 queue_resize();
             } else if (visibility_mode == "overview-only") {
-                hide();
-                // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                // Cast required: GtkWindow implements GtkNative, so a bare
-                // unrealize() binds to gtk_native_unrealize, not the widget one.
-                ((Gtk.Widget) this).unrealize();
+                close_layer_window (this);
                 set_exclusive_zone(this, 0);
             }
             update_autohide_state();
@@ -1231,11 +1207,7 @@ namespace Singularity {
                 // window covering it) is not composited until a frame is
                 // committed, so closing a focused fullscreen window left the
                 // dock buried. Remap to force a fresh buffer and present.
-                ((Gtk.Widget) this).hide();
-                // Drop the GdkSurface so the next open gets a fresh wl_surface.
-                // Cast required: GtkWindow implements GtkNative, so a bare
-                // unrealize() binds to gtk_native_unrealize, not the widget one.
-                ((Gtk.Widget) this).unrealize();
+                close_layer_window (this);
                 present();
                 update_visibility_mode();
                 pulse_frame_clock();

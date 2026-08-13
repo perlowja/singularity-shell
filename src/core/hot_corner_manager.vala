@@ -224,11 +224,7 @@ namespace Singularity {
             hint.add_overlay(badge);
 
             set_child(hint);
-            hide();
-            // Drop the GdkSurface so the next open gets a fresh wl_surface.
-            // Cast required: GtkWindow implements GtkNative, so a bare
-            // unrealize() binds to gtk_native_unrealize, not the widget one.
-            ((Gtk.Widget) this).unrealize();
+            close_layer_window (this);
         }
 
         public void show_hint(string action) {
@@ -239,11 +235,7 @@ namespace Singularity {
 
         public void hide_hint() {
             hint.remove_css_class("visible");
-            hide();
-            // Drop the GdkSurface so the next open gets a fresh wl_surface.
-            // Cast required: GtkWindow implements GtkNative, so a bare
-            // unrealize() binds to gtk_native_unrealize, not the widget one.
-            ((Gtk.Widget) this).unrealize();
+            close_layer_window (this);
         }
 
         private static string icon_for_action(string? action) {
