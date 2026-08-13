@@ -335,7 +335,7 @@ namespace Singularity {
                 _anim_out_timer = GLib.Timeout.add(180, () => {
                     _anim_out_timer = 0;
                     main_box.remove_css_class("animating-out");
-                    hide();
+                    close_layer_window (this);
                     PreviewCache.get_default().clear();
                     hidden();
                     // The overview just freed its grid widgets, icon textures
@@ -437,7 +437,7 @@ namespace Singularity {
         }
 
         private void finish_gesture_hide() {
-            hide();
+            close_layer_window (this);
             PreviewCache.get_default().clear();
             hidden();
             Singularity.trim_heap();

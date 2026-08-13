@@ -158,7 +158,7 @@ namespace Singularity {
             });
             ((Gtk.Widget)this).add_controller(key_controller);
 
-            hide();
+            close_layer_window (this);
         }
 
         private void apply_monitor_sizing() {
@@ -271,7 +271,7 @@ namespace Singularity {
                 menu_animation.tick.connect(() => { opacity = menu_animation.value; });
                 menu_animation.done.connect(() => {
                     if (_is_open) return;
-                    hide();
+                    close_layer_window (this);
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 });
@@ -346,7 +346,7 @@ namespace Singularity {
                 content_stack.margin_top = 0;
                 if (stay_open) search_entry.grab_focus();
                 else {
-                    hide();
+                    close_layer_window (this);
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 }
@@ -370,7 +370,7 @@ namespace Singularity {
                 if (menu_animation == animation) menu_animation = null;
                 if (stay_open) search_entry.grab_focus();
                 else {
-                    hide();
+                    close_layer_window (this);
                     if (widgets_grid != null) widgets_grid.depopulate();
                     hidden();
                 }

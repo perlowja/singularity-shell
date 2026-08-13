@@ -75,7 +75,7 @@ namespace Singularity {
                 toggle_settings();
             });
             system_view.hide_sidebar.connect(() => {
-                hide();
+                close_layer_window (this);
             });
             system_view.open_settings_page.connect((page) => {
                 open_page(page);
@@ -90,7 +90,7 @@ namespace Singularity {
             main_stack.notify["visible-child-name"].connect(() => update_vertical_anchor());
             update_vertical_anchor();
 
-            hide();
+            close_layer_window (this);
 
             // Close on Escape key
             var key_controller = new Gtk.EventControllerKey();
@@ -98,7 +98,7 @@ namespace Singularity {
                 if (keyval == Gdk.Key.Escape) {
                     if (!Singularity.DebugManager.get_default().sidebar_pinned) {
                         desktop_settings.set_boolean("bar-layout-edit-mode", false);
-                        hide();
+                        close_layer_window (this);
                     }
                     return true;
                 }
@@ -133,7 +133,7 @@ namespace Singularity {
                 _can_close_on_focus_loss = false;
                 opacity = 1;
                 GtkLayerShell.set_margin(this, GtkLayerShell.Edge.RIGHT, 40);
-                hide();
+                close_layer_window (this);
                 return;
             }
             // Null before skip so old done handler sees slide_animation != old_anim
@@ -155,7 +155,7 @@ namespace Singularity {
                     slide_animation = null;
                     _is_closing = false;
                     _can_close_on_focus_loss = false;
-                    hide();
+                    close_layer_window (this);
                 }
             });
             anim.play();

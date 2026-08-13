@@ -135,7 +135,7 @@ namespace Singularity {
             wp_manager.wallpaper_changed.connect(update_wallpaper);
             update_wallpaper();
 
-            hide();
+            close_layer_window (this);
         }
 
         private void update_wallpaper() {
@@ -420,7 +420,7 @@ namespace Singularity {
                     _anim_out_timer = 0;
                     opacity = 0;
                     anim_box.remove_css_class("animating-out");
-                    hide();
+                    close_layer_window (this);
                     // Free all window preview textures - they'll be re-captured on next open
                     clear_overview_content();
                     hidden();
@@ -503,7 +503,7 @@ namespace Singularity {
                 window_stack.opacity = target;
                 window_stack.margin_top = 0;
                 if (!stay_open) {
-                    hide();
+                    close_layer_window (this);
                     clear_overview_content();
                     hidden();
                 }
@@ -524,7 +524,7 @@ namespace Singularity {
                 window_stack.margin_top = 0;
                 if (_gesture_animation == animation) _gesture_animation = null;
                 if (!stay_open) {
-                    hide();
+                    close_layer_window (this);
                     clear_overview_content();
                     hidden();
                 }

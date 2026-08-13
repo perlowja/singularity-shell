@@ -224,7 +224,7 @@ namespace Singularity {
             hint.add_overlay(badge);
 
             set_child(hint);
-            hide();
+            close_layer_window (this);
         }
 
         public void show_hint(string action) {
@@ -235,7 +235,7 @@ namespace Singularity {
 
         public void hide_hint() {
             hint.remove_css_class("visible");
-            hide();
+            close_layer_window (this);
         }
 
         private static string icon_for_action(string? action) {

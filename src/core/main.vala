@@ -765,7 +765,16 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
 
     private void sync_bar_layout_edit_mode() {
         if (settings.get_boolean("bar-layout-edit-mode")) {
-            sidebar?.hide();
+            if (sidebar != null) {
+                sidebar.hide();
+                // Drop the GdkSurface here too. This is the one close path that
+                // lives OUTSIDE Sidebar, so the in-class resets do not cover it,
+                // and re-opening via a panel or dock toggle calls present() on
+                // the old surface -- the same stale-buffer fault.
+                // Cast required: GtkWindow implements GtkNative, so a bare
+                // unrealize() binds to gtk_native_unrealize, not the widget one.
+                ((Gtk.Widget) sidebar).unrealize();
+            }
             settings_window?.hide();
             if (bar_layout_edit_overlay == null) {
                 bar_layout_edit_overlay = new Singularity.BarLayoutEditOverlay(this);

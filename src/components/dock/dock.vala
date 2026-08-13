@@ -241,7 +241,7 @@ namespace Singularity {
                 }
                 if (key == "panel-fusion") {
                     update_fusion();
-                    ((Gtk.Widget) this).hide();
+                    close_layer_window (this);
                     update_visibility_mode();
                     pulse_frame_clock();
                 }
@@ -259,7 +259,7 @@ namespace Singularity {
                 if (key == "dock-enabled") {
                     _enabled = _settings.get_boolean("dock-enabled");
                     if (!_enabled) {
-                        ((Gtk.Widget) this).hide();
+                        close_layer_window (this);
                         set_exclusive_zone(this, 0);
                         app_system.shell_dock_height = 0;
                         _set_reveal_barrier_active(false);
@@ -932,7 +932,7 @@ namespace Singularity {
                     queue_draw();
                     break;
                 case "remap":
-                    hide();
+                    close_layer_window (this);
                     present();
                     queue_draw();
                     break;
@@ -980,9 +980,13 @@ namespace Singularity {
             var fc = get_frame_clock();
             if (fc == null) return;
             fc.begin_updating();
+            // End the clock we began, not whatever get_frame_clock() returns
+            // 350ms later: closing a layer window now drops the GdkSurface, so
+            // the next present allocates a NEW frame clock. Re-fetching here
+            // would leave the original permanently updating and double-end the
+            // new one on a quick pointer leave/re-enter.
             GLib.Timeout.add(350, () => {
-                var f = get_frame_clock();
-                if (f != null) f.end_updating();
+                fc.end_updating();
                 return GLib.Source.REMOVE;
             });
         }
@@ -1041,7 +1045,7 @@ namespace Singularity {
                 // is live right after the remap (and we pulse it), so the content
                 // transform is presented reliably without moving the surface.
                 set_body_class("dock-reveal-offset", true);
-                ((Gtk.Widget) this).hide();
+                close_layer_window (this);
                 present();
                 start_content_slide();
             }
@@ -1145,7 +1149,7 @@ namespace Singularity {
                 return;
             }
             if (!_enabled) {
-                ((Gtk.Widget) this).hide();
+                close_layer_window (this);
                 set_exclusive_zone(this, 0);
                 app_system.shell_dock_height = 0;
                 _set_reveal_barrier_active(false);
@@ -1162,7 +1166,7 @@ namespace Singularity {
                 // Re-trigger size_allocate to restore the correct exclusive zone
                 queue_resize();
             } else if (visibility_mode == "overview-only") {
-                hide();
+                close_layer_window (this);
                 set_exclusive_zone(this, 0);
             }
             update_autohide_state();
@@ -1212,7 +1216,7 @@ namespace Singularity {
                 // window covering it) is not composited until a frame is
                 // committed, so closing a focused fullscreen window left the
                 // dock buried. Remap to force a fresh buffer and present.
-                ((Gtk.Widget) this).hide();
+                close_layer_window (this);
                 present();
                 update_visibility_mode();
                 pulse_frame_clock();
