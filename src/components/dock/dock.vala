@@ -975,9 +975,13 @@ namespace Singularity {
             var fc = get_frame_clock();
             if (fc == null) return;
             fc.begin_updating();
+            // End the clock we began, not whatever get_frame_clock() returns
+            // 350ms later: closing a layer window now drops the GdkSurface, so
+            // the next present allocates a NEW frame clock. Re-fetching here
+            // would leave the original permanently updating and double-end the
+            // new one on a quick pointer leave/re-enter.
             GLib.Timeout.add(350, () => {
-                var f = get_frame_clock();
-                if (f != null) f.end_updating();
+                fc.end_updating();
                 return GLib.Source.REMOVE;
             });
         }
