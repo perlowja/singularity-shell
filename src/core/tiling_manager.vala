@@ -100,6 +100,8 @@ namespace Singularity {
             new HashMap<string, ScrollingGroup>();
         private HashMap<AppSystem.Window, AppSystem.Window> insertion_anchors =
             new HashMap<AppSystem.Window, AppSystem.Window>();
+        private HashSet<AppSystem.Window> startup_windows =
+            new HashSet<AppSystem.Window>();
         private AppSystem.Window? last_scrolling_focus;
         private ScrollingGroup? gesture_group;
         private AppSystem.Window? gesture_start_window;
@@ -130,6 +132,10 @@ namespace Singularity {
             settings = new GLib.Settings("dev.sinty.desktop");
             setup_close_gesture_indicator();
             enabled = settings.get_boolean("tiling-enabled");
+            if (scrolling_active()) {
+                foreach (var win in app_system.get_windows())
+                    startup_windows.add(win);
+            }
             settings.changed["tiling-enabled"].connect(on_mode_changed);
             settings.changed["tiling-layout"].connect(on_mode_changed);
             settings.changed["tiling-column-width"].connect(() => {
@@ -385,12 +391,13 @@ namespace Singularity {
             scrolling_position_changed(null, 0, 1, false);
         }
 
-        private void release_inactive_scrolling_windows(
+        private void release_untileable_scrolling_windows(
                 ArrayList<AppSystem.Window> tileable) {
-            var active = new HashSet<AppSystem.Window>();
-            foreach (var win in tileable) active.add(win);
-            foreach (var win in app_system.get_windows()) {
-                if (!win.scrolling_tiled || active.contains(win)) continue;
+            var tileable_set = new HashSet<AppSystem.Window>();
+            foreach (var win in tileable) tileable_set.add(win);
+            foreach (var win in app_system.get_active_workspace_windows()) {
+                if (!win.scrolling_tiled || tileable_set.contains(win))
+                    continue;
                 Singularity.wayland_set_tiled(win.handle, 0);
                 win.scrolling_tiled = false;
             }
@@ -456,6 +463,29 @@ namespace Singularity {
             int available = int.max(1, group.area.width - 2 * gap);
             int width = group.area.width
                 * settings.get_int("tiling-column-width") / 100;
+            return int.min(available, int.max(MIN_COLUMN_WIDTH, width));
+        }
+
+        private int initial_column_width(ScrollingGroup group,
+                                         AppSystem.Window win) {
+            int fallback = default_column_width(group);
+            if (!win.scrolling_tiled && !startup_windows.contains(win))
+                return fallback;
+            int x, y, width, height, maximized, fullscreen;
+            string? connector;
+            if (!Singularity.wayland_get_window_geometry(win.handle,
+                    out x, out y, out width, out height,
+                    out maximized, out fullscreen, out connector))
+                return fallback;
+            startup_windows.remove(win);
+            if (width <= 0 || height <= 0 || maximized != 0 || fullscreen != 0
+                    || x + width <= group.area.x
+                    || x >= group.area.x + group.area.width
+                    || y + height <= group.area.y
+                    || y >= group.area.y + group.area.height)
+                return fallback;
+            int available = int.max(MIN_COLUMN_WIDTH,
+                group.area.width - 2 * scroll_gap());
             return int.min(available, int.max(MIN_COLUMN_WIDTH, width));
         }
 
@@ -675,7 +705,8 @@ namespace Singularity {
             remove_empty_columns(group);
             foreach (var win in candidates) {
                 if (column_for_window(group, win) != null) continue;
-                var column = new ScrollingColumn(default_column_width(group));
+                var column = new ScrollingColumn(
+                    initial_column_width(group, win));
                 column.windows.add(win);
                 var insertion_anchor = insertion_anchors.get(win);
                 var anchor_column = insertion_anchor != null
@@ -1339,7 +1370,7 @@ namespace Singularity {
             if (scrolling_active() && shell_overview_active) return;
             var tileable = get_tileable_windows();
             if (scrolling_active()) {
-                release_inactive_scrolling_windows(tileable);
+                release_untileable_scrolling_windows(tileable);
                 apply_scrolling_layout(tileable);
             } else {
                 release_scrolling_windows();
