@@ -109,6 +109,33 @@ namespace Singularity {
                 ? monitor.cpu_millidegrees
                 : monitor.system_millidegrees;
 
+            // Colour the chip on the bar, not only the rows inside the
+            // popover. A temperature that needs attention is worth noticing
+            // WITHOUT opening anything -- a popover nobody opens conveys
+            // nothing. The severity shown is the one belonging to the sensor
+            // whose number is displayed, so the colour and the figure always
+            // describe the same sensor.
+            SensorKind primary_kind = monitor.cpu_millidegrees >= 0
+                ? SensorKind.CPU
+                : SensorKind.SYSTEM;
+            Severity primary_severity = Severity.NORMAL;
+            foreach (SensorReading reading in monitor.readings()) {
+                if (reading.kind == primary_kind
+                    && reading.millidegrees == primary) {
+                    primary_severity = reading.severity;
+                    break;
+                }
+            }
+            // Drop whatever the last tick set before setting this one:
+            // add_css_class is additive, so an unremoved "error" would stay
+            // red for the rest of the session once the machine had been hot.
+            summary_label.remove_css_class("warning");
+            summary_label.remove_css_class("error");
+            string? summary_css = severity_css(primary_severity);
+            if (summary_css != null && summary_css != "dim-label") {
+                summary_label.add_css_class(summary_css);
+            }
+
             StringBuilder text = new StringBuilder();
             if (primary >= 0) {
                 text.append(format_celsius(primary));
@@ -135,14 +162,41 @@ namespace Singularity {
             detail_box.append(heading);
         }
 
-        private void add_row(string name, string value) {
+        /**
+         * CSS class for a severity, or null to leave the label unstyled.
+         *
+         * These are GTK stock classes, not a palette of our own. A hand-picked
+         * amber and red would collide with whatever accent the user's theme
+         * uses and would need maintaining for light and dark separately;
+         * "warning" and "error" are already defined by every GTK theme and
+         * already legible on its background.
+         *
+         * NORMAL keeps the dim treatment the rows have always had, and WARM
+         * deliberately gets NOTHING -- undimming to the ordinary foreground is
+         * the first step of the ramp. Colour is spent only where it means
+         * something: dim, plain, amber, red.
+         */
+        private static string? severity_css(Severity severity) {
+            switch (severity) {
+                case Severity.CRITICAL: return "error";
+                case Severity.HOT:      return "warning";
+                case Severity.WARM:     return null;
+                default:                return "dim-label";
+            }
+        }
+
+        private void add_row(string name, string value,
+                             Severity severity = Severity.NORMAL) {
             Box row = new Box(Orientation.HORIZONTAL, 12);
             Label name_label = new Label(name);
             name_label.halign = Align.START;
             name_label.hexpand = true;
             Label value_label = new Label(value);
             value_label.halign = Align.END;
-            value_label.add_css_class("dim-label");
+            string? css = severity_css(severity);
+            if (css != null) {
+                value_label.add_css_class(css);
+            }
             row.append(name_label);
             row.append(value_label);
             detail_box.append(row);
@@ -171,7 +225,8 @@ namespace Singularity {
                     continue;
                 }
                 if (shown < MAX_ROWS_PER_GROUP) {
-                    add_row(reading.label, format_celsius(reading.millidegrees));
+                    add_row(reading.label, format_celsius(reading.millidegrees),
+                            reading.severity);
                     shown++;
                 } else {
                     hidden++;
@@ -194,11 +249,22 @@ namespace Singularity {
             add_group(SensorKind.GPU, _("GPU"));
             add_group(SensorKind.SYSTEM, _("System"));
 
-            int[] clocks = monitor.clocks_khz();
+            // Clocks are NOT colour-coded. A core at its maximum is doing its
+            // job, not overheating, and painting it red would train the user to
+            // ignore the colour that does mean something. They are shown
+            // against their own ceiling instead, because that ceiling is not
+            // one number per machine: CIX Sky1 has five cpufreq policies with
+            // five different maxima, so "1.4 GHz" is nearly flat out on one
+            // cluster and near idle on another.
+            ClockReading[] clocks = monitor.clocks();
             if (clocks.length > 0) {
                 add_heading(_("Clocks"));
                 for (int i = 0; i < clocks.length; i++) {
-                    add_row(_("Core group %d").printf(i + 1), format_clock(clocks[i]));
+                    string value = clocks[i].max_khz > 0
+                        ? "%s / %s".printf(format_clock(clocks[i].khz),
+                                           format_clock(clocks[i].max_khz))
+                        : format_clock(clocks[i].khz);
+                    add_row(_("Core group %d").printf(i + 1), value);
                 }
             }
         }
