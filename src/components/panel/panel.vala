@@ -51,6 +51,28 @@ namespace Singularity {
             popover.child = detail_box;
             button.popover = popover;
 
+            // Populate the moment the popover opens, not on the next tick.
+            //
+            // rebuild_details() runs only from on_updated(), and only when the
+            // popover is ALREADY visible -- so the first open showed an empty
+            // box and stayed empty until the timer next fired. With the
+            // default two-second interval that reads as "the sensors take a
+            // few tries to appear", which is exactly how it was reported from
+            // the machine. Refreshing here also means the figures shown are
+            // the ones at the instant of opening rather than up to a full
+            // interval stale.
+            //
+            // refresh() publishes synchronously for the sysfs sources and then
+            // emits updated(), so the existing on_updated() path does the
+            // rebuild; there is no second code path to keep in step. The
+            // NVIDIA query stays asynchronous and lands on a later tick as
+            // before.
+            popover.notify["visible"].connect(() => {
+                if (popover.visible) {
+                    monitor.refresh();
+                }
+            });
+
             monitor = SystemMonitor.get_default().sensors;
 
             // Every settings read is guarded: this widget and the schema can
