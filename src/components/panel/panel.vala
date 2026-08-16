@@ -207,19 +207,98 @@ namespace Singularity {
             }
         }
 
+        /**
+         * The heat bar, drawn rather than themed.
+         *
+         * This started as a Gtk.LevelBar and that was wrong. GTK gives a
+         * LevelBar its own offset classes (level-low / level-high / level-full)
+         * and the theme styles them with BATTERY semantics, where low means
+         * trouble and is painted red. The result on real hardware was every
+         * sensor showing a short red bar regardless of temperature -- a 46 C
+         * CPU rendered exactly as alarming as a hot drive, which is worse than
+         * no bar at all. Overriding it meant fighting theme rules on a widget
+         * whose whole purpose is to be themed.
+         *
+         * A DrawingArea owns its pixels. No theme rule can reach it, the ramp
+         * means the same thing on every machine, and the colours are the ones
+         * chosen here rather than whatever "low" happens to mean to a theme.
+         */
+        private const double[] HEAT_STOPS = { 0.40, 0.55, 0.70, 0.85 };
+
+        private static void heat_rgb(double f, out double r, out double g, out double b) {
+            // cool blue -> green -> amber -> orange -> red
+            if (f < HEAT_STOPS[0])      { r = 0.29; g = 0.56; b = 0.85; }
+            else if (f < HEAT_STOPS[1]) { r = 0.20; g = 0.63; b = 0.44; }
+            else if (f < HEAT_STOPS[2]) { r = 0.83; g = 0.63; b = 0.09; }
+            else if (f < HEAT_STOPS[3]) { r = 0.88; g = 0.42; b = 0.12; }
+            else                        { r = 0.84; g = 0.24; b = 0.24; }
+        }
+
+        private Gtk.DrawingArea make_heat_bar(double heat) {
+            var area = new Gtk.DrawingArea();
+            area.content_width = 72;
+            area.content_height = 6;
+            area.valign = Align.CENTER;
+            double f = heat.clamp(0.0, 1.0);
+            area.set_draw_func((a, cr, w, h) => {
+                double radius = h / 2.0;
+                // Trough: a faint neutral track, so an almost-empty bar still
+                // reads as a bar and not as a rendering glitch.
+                cr.set_source_rgba(0.5, 0.5, 0.5, 0.25);
+                rounded_rect(cr, 0, 0, w, h, radius);
+                cr.fill();
+                if (f <= 0.0) {
+                    return;
+                }
+                double fill_w = double.max(h, w * f);
+                double r, g, b;
+                heat_rgb(f, out r, out g, out b);
+                cr.set_source_rgb(r, g, b);
+                rounded_rect(cr, 0, 0, fill_w, h, radius);
+                cr.fill();
+            });
+            return area;
+        }
+
+        private static void rounded_rect(Cairo.Context cr, double x, double y,
+                                         double w, double h, double r) {
+            cr.new_sub_path();
+            cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+            cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+            cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+            cr.arc(x + r, y + r, r, Math.PI, 3 * Math.PI / 2);
+            cr.close_path();
+        }
+
         private void add_row(string name, string value,
-                             Severity severity = Severity.NORMAL) {
+                             Severity severity = Severity.NORMAL,
+                             double heat = -1.0) {
             Box row = new Box(Orientation.HORIZONTAL, 12);
             Label name_label = new Label(name);
             name_label.halign = Align.START;
             name_label.hexpand = true;
+            // Long sensor names must not push the reading off the popover.
+            name_label.ellipsize = Pango.EllipsizeMode.END;
+            name_label.max_width_chars = 22;
+            name_label.tooltip_text = name;
+            row.append(name_label);
+
+            // The bar carries the MAGNITUDE, the label colour carries the
+            // ALARM. They are different questions: on a healthy machine every
+            // sensor is NORMAL and the labels say nothing, while the bars
+            // still show which part of the board is warmest. Measured on O6N:
+            // 20 readings, 19 of them NORMAL, and the NVMe at 0.74 is the only
+            // one that stands out -- but only because of the bar.
+            if (heat >= 0.0) {
+                row.append(make_heat_bar(heat));
+            }
+
             Label value_label = new Label(value);
             value_label.halign = Align.END;
             string? css = severity_css(severity);
             if (css != null) {
                 value_label.add_css_class(css);
             }
-            row.append(name_label);
             row.append(value_label);
             detail_box.append(row);
         }
@@ -248,7 +327,7 @@ namespace Singularity {
                 }
                 if (shown < MAX_ROWS_PER_GROUP) {
                     add_row(reading.label, format_celsius(reading.millidegrees),
-                            reading.severity);
+                            reading.severity, reading.heat_fraction);
                     shown++;
                 } else {
                     hidden++;
@@ -267,9 +346,23 @@ namespace Singularity {
                 child = detail_box.get_first_child();
             }
 
-            add_group(SensorKind.CPU, _("CPU"));
-            add_group(SensorKind.GPU, _("GPU"));
-            add_group(SensorKind.SYSTEM, _("System"));
+            // Every kind the backend can name, hottest-silicon first and the
+            // board last. add_group() skips a kind with no sensors, so a PC
+            // that reports only CPU and GPU still shows exactly two headings.
+            //
+            // This list previously stopped at SYSTEM, which meant the wider
+            // kinds were classified and then silently dropped -- on Sky1 that
+            // hid eleven of nineteen readings, including the NVMe that was the
+            // only one worth looking at.
+            add_group(SensorKind.CPU,     _("CPU"));
+            add_group(SensorKind.GPU,     _("GPU"));
+            add_group(SensorKind.NPU,     _("NPU"));
+            add_group(SensorKind.VPU,     _("VPU"));
+            add_group(SensorKind.MEMORY,  _("Memory"));
+            add_group(SensorKind.STORAGE, _("Storage"));
+            add_group(SensorKind.NETWORK, _("Network"));
+            add_group(SensorKind.BOARD,   _("Board"));
+            add_group(SensorKind.SYSTEM,  _("System"));
 
             // Clocks are NOT colour-coded. A core at its maximum is doing its
             // job, not overheating, and painting it red would train the user to
