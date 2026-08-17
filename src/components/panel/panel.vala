@@ -104,6 +104,14 @@ namespace Singularity {
             }
 
             monitor.updated.connect(on_updated);
+            // A never-started monitor has no readings, so on_updated() below
+            // would see monitor.available == false and set visible = false --
+            // and GTK never maps an invisible widget, so the map handler that
+            // would otherwise start polling never fires. One synchronous
+            // refresh (already used the same way when the popover opens)
+            // establishes real availability before that first visibility
+            // decision, so a fresh shell doesn't self-hide permanently.
+            monitor.refresh();
             on_updated();
 
             // Poll only while actually on screen. An unmapped or hidden panel
