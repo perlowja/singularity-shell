@@ -303,6 +303,15 @@ namespace Singularity {
         }
 
         private void on_window_output_changed(void* handle) {
+            if (scrolling_active()) {
+                var win = app_system.get_window_by_handle(handle);
+                var group = win != null ? group_for_window(win) : null;
+                int x = 0, y = 0, width = 0, height = 0;
+                if (group != null && get_workarea(win,
+                        out x, out y, out width, out height)
+                        && workarea_key(x, y, width, height) == group.key)
+                    return;
+            }
             if (enabled) schedule_apply_layout();
         }
 
@@ -416,7 +425,9 @@ namespace Singularity {
                                   out int width, out int height) {
             if (Singularity.wayland_get_window_workarea(win.handle,
                     out x, out y, out width, out height)) {
-                adjust_workarea_for_dock(win, ref x, ref y, ref width, ref height);
+                var monitor = monitor_for_workarea(x, y, width, height);
+                adjust_workarea_for_dock(monitor,
+                    ref x, ref y, ref width, ref height);
                 return width > 0 && height > 0;
             }
             var monitor = Singularity.wayland_get_window_monitor(win.handle);
@@ -429,17 +440,36 @@ namespace Singularity {
             y = geometry.y;
             width = geometry.width;
             height = geometry.height;
-            adjust_workarea_for_dock(win, ref x, ref y, ref width, ref height);
+            adjust_workarea_for_dock(monitor,
+                ref x, ref y, ref width, ref height);
             return width > 0 && height > 0;
         }
 
-        private void adjust_workarea_for_dock(AppSystem.Window win,
+        private Gdk.Monitor? monitor_for_workarea(int x, int y,
+                                                  int width, int height) {
+            var display = Gdk.Display.get_default();
+            if (display == null) return null;
+            int center_x = x + width / 2;
+            int center_y = y + height / 2;
+            var monitors = display.get_monitors();
+            for (uint i = 0; i < monitors.get_n_items(); i++) {
+                var monitor = monitors.get_item(i) as Gdk.Monitor;
+                if (monitor == null) continue;
+                var geometry = monitor.get_geometry();
+                if (center_x >= geometry.x
+                        && center_x < geometry.x + geometry.width
+                        && center_y >= geometry.y
+                        && center_y < geometry.y + geometry.height)
+                    return monitor;
+            }
+            return null;
+        }
+
+        private void adjust_workarea_for_dock(Gdk.Monitor? monitor,
                                               ref int x, ref int y,
                                               ref int width, ref int height) {
             int dock = app_system.shell_dock_height;
-            if (dock <= 0) return;
-            var monitor = Singularity.wayland_get_window_monitor(win.handle);
-            if (monitor == null) return;
+            if (dock <= 0 || monitor == null) return;
             var geometry = monitor.get_geometry();
             string position = settings.get_string("dock-position");
             if (position == "bottom"
@@ -751,7 +781,7 @@ namespace Singularity {
                     continue;
                 string key = workarea_key(x, y, width, height);
                 ScrollingGroup? group = scrolling_groups[key];
-                var monitor = Singularity.wayland_get_window_monitor(win.handle);
+                var monitor = monitor_for_workarea(x, y, width, height);
                 if (group == null) {
                     group = new ScrollingGroup(key,
                         new ScrollingWorkarea(x, y, width, height), monitor);
