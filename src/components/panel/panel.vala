@@ -87,11 +87,20 @@ namespace Singularity {
             if (schema != null && schema.has_key("sensors-show-frequency")) {
                 show_frequency = settings.get_boolean("sensors-show-frequency");
             }
+            // Only override when the user has actually configured a zone name.
+            // The schema's portable default for these keys is an empty string,
+            // and monitor.gpu_hint/cpu_hint already carry the platform-specific
+            // TZGT/TZ hints SystemMonitor.sensors set up before this ran (the
+            // only way to identify CPU/GPU on the shipping Sky1 ACPI topology).
+            // Assigning unconditionally on "has_key" clobbered those hints with
+            // an empty string on every load with default settings.
             if (schema != null && schema.has_key("sensors-gpu-zone")) {
-                monitor.gpu_hint = settings.get_string("sensors-gpu-zone");
+                string gpu_zone = settings.get_string("sensors-gpu-zone");
+                if (gpu_zone != "") monitor.gpu_hint = gpu_zone;
             }
             if (schema != null && schema.has_key("sensors-cpu-zone")) {
-                monitor.cpu_hint = settings.get_string("sensors-cpu-zone");
+                string cpu_zone = settings.get_string("sensors-cpu-zone");
+                if (cpu_zone != "") monitor.cpu_hint = cpu_zone;
             }
 
             monitor.updated.connect(on_updated);
@@ -1021,7 +1030,13 @@ namespace Singularity {
             // Registered unconditionally so the greeter panel gets it too:
             // Panel is constructed with greeter_mode for the login screen and
             // shares this layout_items map. Registering an item does NOT show
-            // it -- placement comes from panel-layout-*, so it stays opt-in.
+            // it directly -- placement comes from panel-layout-*. It IS in
+            // default_center below, same as system/notifications/clock, so it
+            // shows by default on a fresh install; existing installs pick it
+            // up on upgrade via BarLayout's append-missing-allowed-items pass,
+            // same mechanism every previously-added default item went through.
+            // Users remove it the same way as any other default item, via the
+            // panel customization settings.
             layout_items["sensors"] = new SensorsIndicator(_settings);
 
             reload_bar_layout();
@@ -1392,7 +1407,7 @@ namespace Singularity {
                 item_ids,
                 { "overview", "workspaces", "app-title", "global-menu" },
                 { "tiling-position" },
-                { "system", "notifications", "clock" },
+                { "system", "notifications", "clock", "sensors" },
                 _settings.get_strv("panel-layout-left"),
                 _settings.get_strv("panel-layout-center"),
                 _settings.get_strv("panel-layout-right")
