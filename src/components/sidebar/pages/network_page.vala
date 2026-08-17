@@ -39,13 +39,10 @@ namespace Singularity {
             header.append(scan_btn);
             add_group(wifi_group);
             var wired_group = new PreferencesGroup(_("Wired"));
-            var wired_status_row = new ActionRow(_("Wired Connection"));
-            var wired_status_label = new Label(network.is_wired_connected ? _("Connected") : _("Not Connected"));
-            wired_status_label.add_css_class("dim-label");
-            wired_status_row.add_suffix(wired_status_label);
-            wired_group.add_row(wired_status_row);
-            network.state_changed.connect(() => {
-                wired_status_label.label = network.is_wired_connected ? _("Connected") : _("Not Connected");
+            var wired_rows = new List<Widget>();
+            update_wired_list(wired_group, ref wired_rows, network);
+            network.ethernet_ports_changed.connect(() => {
+                update_wired_list(wired_group, ref wired_rows, network);
             });
             add_group(wired_group);
 
@@ -288,6 +285,49 @@ namespace Singularity {
                     }
                 });
                 row.add_controller(gesture);
+                group.add_row(row);
+                rows.append(row);
+            }
+        }
+
+        // One row per physical wired port, cable in or out -- a board can
+        // have several (O6N: two 2.5GbE Realtek ports), and a single
+        // "Connected"/"Not Connected" summary hid every port but whichever
+        // one happened to be up.
+        private void update_wired_list(PreferencesGroup group, ref List<Widget> rows, NetworkManagerWrapper network) {
+            foreach (var row in rows) {
+                group.remove_row(row);
+            }
+            rows = new List<Widget>();
+            var ports = network.ethernet_ports();
+            if (ports.length == 0) {
+                var lbl_row = new PreferencesRow();
+                var lbl = new Label(_("No wired ports found"));
+                lbl.add_css_class("dim-label");
+                lbl.margin_top = 12;
+                lbl.margin_bottom = 12;
+                lbl_row.set_child(lbl);
+                group.add_row(lbl_row);
+                rows.append(lbl_row);
+                return;
+            }
+            for (int i = 0; i < ports.length; i++) {
+                var port = ports.get(i);
+                string icon_name = port.connected
+                    ? "network-wired-symbolic" : "network-wired-disconnected-symbolic";
+                var row = new ActionRow(port.iface, null, icon_name);
+                string chipset = port.chipset != "" ? port.chipset : _("Detecting…");
+                string subtitle = port.capability != ""
+                    ? "%s · %s".printf(chipset, port.capability) : chipset;
+                row.subtitle = subtitle;
+                if (port.connected) {
+                    row.add_suffix(new Label(_("Connected")));
+                    row.add_css_class("selected");
+                } else {
+                    var lbl = new Label(_("Not Connected"));
+                    lbl.add_css_class("dim-label");
+                    row.add_suffix(lbl);
+                }
                 group.add_row(row);
                 rows.append(row);
             }
