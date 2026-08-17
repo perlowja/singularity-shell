@@ -27,6 +27,10 @@ namespace Singularity {
         private Box detail_box;
         private SensorMonitor monitor;
         private bool show_frequency = true;
+        // Set when on_updated() hides the chip because no sensors are
+        // readable, so the unmap handler can tell a self-inflicted unmap
+        // (must keep polling, or recovery is never observed) from a real one.
+        private bool hidden_for_unavailable = false;
 
         public SensorsIndicator(GLib.Settings settings) {
             Object(orientation: Orientation.HORIZONTAL, spacing: 0);
@@ -140,7 +144,10 @@ namespace Singularity {
             // when already in the requested state (SensorMonitor.start/stop),
             // so map/unmap can call them freely without tracking state here.
             map.connect(() => monitor.start(interval));
-            unmap.connect(() => monitor.stop());
+            unmap.connect(() => {
+                if (hidden_for_unavailable) return;
+                monitor.stop();
+            });
             if (get_mapped()) monitor.start(interval);
         }
 
@@ -163,9 +170,21 @@ namespace Singularity {
         private void on_updated() {
             if (!monitor.available) {
                 // Nothing readable on this hardware: hide rather than show zeros.
+                //
+                // Availability must not switch off the mechanism that detects
+                // availability. Hiding unmaps the widget, which fires the
+                // unmap handler below and would stop the poll timer -- after
+                // which nothing can ever observe the sensors coming back, so
+                // a momentary gap (hwmon driver reloading, a GPU power-gated,
+                // a sensor hot-unplugged) would remove the chip until the
+                // shell restarted. The flag tells the unmap handler this
+                // particular unmap is self-inflicted and polling must survive
+                // it; a real unmap (panel genuinely off screen) still stops.
+                hidden_for_unavailable = true;
                 visible = false;
                 return;
             }
+            hidden_for_unavailable = false;
             visible = true;
 
             // Prefer a sensor positively identified as the CPU. The backend
@@ -185,6 +204,27 @@ namespace Singularity {
             SensorKind primary_kind = monitor.cpu_millidegrees >= 0
                 ? SensorKind.CPU
                 : SensorKind.SYSTEM;
+
+            // Last resort: the hottest reading of ANY kind.
+            //
+            // available == true only means SOMETHING is readable, not that a
+            // CPU or SYSTEM reading exists. A machine whose sensors all
+            // classify as GPU/STORAGE/NETWORK leaves both selections above at
+            // -1, and with cpufreq also unavailable the chip renders as an
+            // empty label -- a blank control sitting next to a popover full
+            // of perfectly good temperatures. Showing the hottest reading is
+            // both non-empty and the one worth surfacing; taking its kind too
+            // keeps the colour describing the number, which is the invariant
+            // the severity block below depends on.
+            if (primary < 0) {
+                foreach (SensorReading reading in monitor.readings()) {
+                    if (reading.millidegrees > primary) {
+                        primary = reading.millidegrees;
+                        primary_kind = reading.kind;
+                    }
+                }
+            }
+
             Severity primary_severity = Severity.NORMAL;
             foreach (SensorReading reading in monitor.readings()) {
                 if (reading.kind == primary_kind
@@ -416,7 +456,11 @@ namespace Singularity {
             // one number per machine: CIX Sky1 has five cpufreq policies with
             // five different maxima, so "1.4 GHz" is nearly flat out on one
             // cluster and near idle on another.
-            ClockReading[] clocks = monitor.clocks();
+            // Honour sensors-show-frequency here too. It previously gated
+            // only the compact summary, so turning frequency "off" still
+            // rendered the entire Clocks section the moment the popover was
+            // opened -- the preference silently did half of what it says.
+            ClockReading[] clocks = show_frequency ? monitor.clocks() : new ClockReading[0];
             if (clocks.length > 0) {
                 add_heading(_("Clocks"));
                 // Same cap-and-count convention as add_group() above: a

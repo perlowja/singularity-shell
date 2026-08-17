@@ -99,16 +99,27 @@ namespace Singularity {
                 "/sys/firmware/devicetree/base/compatible",
             };
             foreach (string path in dt_probes) {
-                string contents;
+                // "compatible" is a NUL-SEPARATED list, conventionally most
+                // specific first: "radxa,<board>\0cix,sky1". Reading it into a
+                // Vala string and matching that stops at the first NUL, so
+                // only the board entry is ever examined and the "cix,sky1"
+                // that identifies the SoC is missed -- on precisely the
+                // DT-booted configuration this fallback exists to catch.
+                // load_contents() returns the real byte array, so every entry
+                // is inspected.
+                uint8[] raw;
                 try {
-                    if (!FileUtils.get_contents(path, out contents)) {
+                    if (!File.new_for_path(path).load_contents(null, out raw, null)) {
                         continue;
                     }
-                } catch (FileError e) {
+                } catch (Error e) {
                     continue;
                 }
-                // "compatible" is NUL-separated, so match the raw buffer.
-                string lowered = contents.down();
+                var joined = new StringBuilder();
+                foreach (uint8 b in raw) {
+                    joined.append_c(b == 0 ? ' ' : (char) b);
+                }
+                string lowered = joined.str.down();
                 if (lowered.contains("cix") || lowered.contains("sky1")) {
                     return true;
                 }
