@@ -104,8 +104,19 @@ namespace Singularity {
             }
 
             monitor.updated.connect(on_updated);
-            monitor.start(interval);
             on_updated();
+
+            // Poll only while actually on screen. An unmapped or hidden panel
+            // (e.g. a secondary output's panel that isn't currently shown)
+            // has no visible reading, so a running timer there is pure sysfs
+            // churn and, on boards with an async NVIDIA query, wasted work on
+            // every tick -- exactly the idle cost this feature's interval
+            // setting exists to bound. start()/stop() are idempotent no-ops
+            // when already in the requested state (SensorMonitor.start/stop),
+            // so map/unmap can call them freely without tracking state here.
+            map.connect(() => monitor.start(interval));
+            unmap.connect(() => monitor.stop());
+            if (get_mapped()) monitor.start(interval);
         }
 
         public override void dispose() {
@@ -383,12 +394,20 @@ namespace Singularity {
             ClockReading[] clocks = monitor.clocks();
             if (clocks.length > 0) {
                 add_heading(_("Clocks"));
-                for (int i = 0; i < clocks.length; i++) {
+                // Same cap-and-count convention as add_group() above: a
+                // per-CPU cpufreq policy (one entry per core on some x86
+                // layouts) can run past a hundred, and the popover has no
+                // scroll container, so an uncapped list grows off-screen.
+                int shown = int.min(clocks.length, MAX_ROWS_PER_GROUP);
+                for (int i = 0; i < shown; i++) {
                     string value = clocks[i].max_khz > 0
                         ? "%s / %s".printf(format_clock(clocks[i].khz),
                                            format_clock(clocks[i].max_khz))
                         : format_clock(clocks[i].khz);
                     add_row(_("Core group %d").printf(i + 1), value);
+                }
+                if (clocks.length > shown) {
+                    add_row(_("%d more").printf(clocks.length - shown), "");
                 }
             }
         }
