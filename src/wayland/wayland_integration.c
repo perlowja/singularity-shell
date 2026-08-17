@@ -76,6 +76,19 @@ struct SingularityWaylandContext {
 static struct SingularityWaylandContext ctx;
 static GHashTable *toplevel_output_map = NULL;
 static GHashTable *geometry_map = NULL;
+static struct {
+    int x, y, w, h;
+    int got;
+    int done;
+} layout_workarea;
+static struct {
+    int x, y, w, h;
+} layout_output_workareas[32];
+static int layout_output_workarea_count;
+static struct {
+    int x, y;
+    int got;
+} cursor_position;
 static void invalidate_toplevel_tileable(void *handle);
 /* Maps wl_output* (our binding), connector name (heap string, owned) */
 static GHashTable *output_connector_map = NULL;
@@ -1064,6 +1077,40 @@ static void tiling_handle_tileable(void *data,
     e->tileable_got = 1;
 }
 
+static void tiling_handle_layout_workarea(void *data,
+        struct zsingularity_tiling_manager_v1 *mgr,
+        int32_t x, int32_t y, int32_t width, int32_t height) {
+    layout_workarea.x = x;
+    layout_workarea.y = y;
+    layout_workarea.w = width;
+    layout_workarea.h = height;
+    layout_workarea.got = 1;
+}
+
+static void tiling_handle_layout_output_workarea(void *data,
+        struct zsingularity_tiling_manager_v1 *mgr,
+        int32_t x, int32_t y, int32_t width, int32_t height) {
+    if (layout_output_workarea_count >= 32) return;
+    int index = layout_output_workarea_count++;
+    layout_output_workareas[index].x = x;
+    layout_output_workareas[index].y = y;
+    layout_output_workareas[index].w = width;
+    layout_output_workareas[index].h = height;
+}
+
+static void tiling_handle_layout_workarea_done(void *data,
+        struct zsingularity_tiling_manager_v1 *mgr) {
+    layout_workarea.done = 1;
+}
+
+static void tiling_handle_cursor_position(void *data,
+        struct zsingularity_tiling_manager_v1 *mgr,
+        int32_t x, int32_t y) {
+    cursor_position.x = x;
+    cursor_position.y = y;
+    cursor_position.got = 1;
+}
+
 static void tiling_handle_interaction(void *data,
         struct zsingularity_tiling_manager_v1 *mgr,
         struct zwlr_foreign_toplevel_handle_v1 *toplevel,
@@ -1083,6 +1130,10 @@ static const struct zsingularity_tiling_manager_v1_listener tiling_listener = {
     .workarea = tiling_handle_workarea,
     .interaction = tiling_handle_interaction,
     .tileable = tiling_handle_tileable,
+    .layout_workarea = tiling_handle_layout_workarea,
+    .layout_output_workarea = tiling_handle_layout_output_workarea,
+    .layout_workarea_done = tiling_handle_layout_workarea_done,
+    .cursor_position = tiling_handle_cursor_position,
 };
 
 static void gesture_handle_begin(void *data,
@@ -1146,7 +1197,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         ctx.output_manager = wl_registry_bind(registry, name, &zwlr_output_manager_v1_interface, 4);
         zwlr_output_manager_v1_add_listener(ctx.output_manager, &output_manager_listener, NULL);
     } else if (strcmp(interface, zsingularity_tiling_manager_v1_interface.name) == 0) {
-        uint32_t v = version < 7 ? version : 7;
+        uint32_t v = version < 10 ? version : 10;
         ctx.tiling_manager = wl_registry_bind(registry, name, &zsingularity_tiling_manager_v1_interface, v);
         if (v >= 2)
             zsingularity_tiling_manager_v1_add_listener(ctx.tiling_manager, &tiling_listener, NULL);
@@ -1509,6 +1560,60 @@ int singularity_wayland_get_window_workarea(void *toplevel_handle,
     if (y) *y = e->work_y;
     if (w) *w = e->work_w;
     if (h) *h = e->work_h;
+    return 1;
+}
+
+int singularity_wayland_get_layout_workarea(int *x, int *y, int *w, int *h) {
+    if (x) *x = 0;
+    if (y) *y = 0;
+    if (w) *w = 0;
+    if (h) *h = 0;
+    if (!ctx.tiling_manager || !ctx.display) return 0;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 9)
+        return 0;
+
+    layout_workarea.got = 0;
+    layout_workarea.done = 0;
+    layout_output_workarea_count = 0;
+    zsingularity_tiling_manager_v1_get_layout_workarea(ctx.tiling_manager);
+    wl_display_roundtrip(ctx.display);
+    if (!layout_workarea.got || !layout_workarea.done
+            || layout_workarea.w < 1
+            || layout_workarea.h < 1) return 0;
+    if (x) *x = layout_workarea.x;
+    if (y) *y = layout_workarea.y;
+    if (w) *w = layout_workarea.w;
+    if (h) *h = layout_workarea.h;
+    return 1;
+}
+
+int singularity_wayland_get_layout_output_count(void) {
+    return layout_workarea.done ? layout_output_workarea_count : 0;
+}
+
+int singularity_wayland_get_layout_output_workarea(int index,
+        int *x, int *y, int *w, int *h) {
+    if (index < 0 || index >= singularity_wayland_get_layout_output_count())
+        return 0;
+    if (x) *x = layout_output_workareas[index].x;
+    if (y) *y = layout_output_workareas[index].y;
+    if (w) *w = layout_output_workareas[index].w;
+    if (h) *h = layout_output_workareas[index].h;
+    return 1;
+}
+
+int singularity_wayland_get_cursor_position(int *x, int *y) {
+    if (x) *x = 0;
+    if (y) *y = 0;
+    if (!ctx.tiling_manager || !ctx.display) return 0;
+    if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 10)
+        return 0;
+    cursor_position.got = 0;
+    zsingularity_tiling_manager_v1_get_cursor_position(ctx.tiling_manager);
+    wl_display_roundtrip(ctx.display);
+    if (!cursor_position.got) return 0;
+    if (x) *x = cursor_position.x;
+    if (y) *y = cursor_position.y;
     return 1;
 }
 

@@ -254,8 +254,11 @@ namespace Singularity {
                     intellihide = _settings.get_boolean("dock-intellihide");
                     update_autohide_state();
                 }
-                if (key == "tiling-enabled" || key == "tiling-layout")
+                if (key == "tiling-enabled" || key == "tiling-layout") {
+                    update_visibility_mode();
                     update_dock_reservation();
+                    schedule_refresh();
+                }
                 if (key == "dock-enabled") {
                     _enabled = _settings.get_boolean("dock-enabled");
                     if (!_enabled) {
@@ -801,9 +804,21 @@ namespace Singularity {
         public signal void system_clicked();
         public signal void dock_visibility_changed(bool hidden);
 
-        private void update_dock_reservation() {
-            bool scrolling_tiling = _settings.get_boolean("tiling-enabled")
+        private bool scrolling_tiling_active() {
+            return _settings.get_boolean("tiling-enabled")
                 && _settings.get_string("tiling-layout") == "scrolling";
+        }
+
+        private bool hidden_by_scrolling_tiling() {
+            return !is_primary && scrolling_tiling_active();
+        }
+
+        private void update_dock_reservation() {
+            if (hidden_by_scrolling_tiling()) {
+                set_exclusive_zone(this, 0);
+                return;
+            }
+            bool scrolling_tiling = scrolling_tiling_active();
             bool reserve = _enabled
                 && !_hidden
                 && !_hidden_for_fullscreen
@@ -817,6 +832,10 @@ namespace Singularity {
         }
 
         private void update_autohide_state() {
+            if (hidden_by_scrolling_tiling()) {
+                _set_reveal_barrier_active(false);
+                return;
+            }
             if (_settings.get_boolean("bar-layout-edit-mode")) {
                 if (_hidden) {
                     _hidden = false;
@@ -1142,6 +1161,12 @@ namespace Singularity {
         }
 
         private void update_visibility_mode() {
+            if (hidden_by_scrolling_tiling()) {
+                close_layer_window(this);
+                set_exclusive_zone(this, 0);
+                _set_reveal_barrier_active(false);
+                return;
+            }
             if (_settings.get_boolean("bar-layout-edit-mode")) {
                 set_layer(this, GtkLayerShell.Layer.OVERLAY);
                 present();
@@ -1198,6 +1223,7 @@ namespace Singularity {
         }
 
         private void update_fullscreen_mode() {
+            if (hidden_by_scrolling_tiling()) return;
             bool fs = is_any_window_fullscreen_on_my_monitor();
             if (_settings.get_boolean("bar-layout-edit-mode")) {
                 _hidden_for_fullscreen = fs;
@@ -1226,6 +1252,8 @@ namespace Singularity {
         public void set_overview_mode(bool visible) {
             _overview_active = visible;
             set_body_class("transparent", visible);
+
+            if (hidden_by_scrolling_tiling()) return;
 
             if (visibility_mode == "overview-only") {
                 if (visible) present();
@@ -2973,7 +3001,8 @@ namespace Singularity {
         // at least one window NOT on a known secondary dock monitor.
 
         private bool app_visible_on_primary(string app_id, Gee.List<Gdk.Monitor> secondary_monitors) {
-            if (secondary_monitors.is_empty) return true;
+            if (scrolling_tiling_active() || secondary_monitors.is_empty)
+                return true;
             foreach (var win in app_system.get_windows()) {
                 if (win.app_id != app_id) continue;
                 var wmon = Singularity.wayland_get_window_monitor(win.handle);

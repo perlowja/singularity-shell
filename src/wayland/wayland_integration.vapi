@@ -96,6 +96,20 @@ namespace Singularity {
     public bool wayland_get_window_workarea(void* toplevel_handle,
         out int x, out int y, out int width, out int height);
 
+    [CCode (cname = "singularity_wayland_get_layout_workarea", cheader_filename = "wayland_integration.h")]
+    public bool wayland_get_layout_workarea(out int x, out int y,
+        out int width, out int height);
+
+    [CCode (cname = "singularity_wayland_get_layout_output_count", cheader_filename = "wayland_integration.h")]
+    public int wayland_get_layout_output_count();
+
+    [CCode (cname = "singularity_wayland_get_layout_output_workarea", cheader_filename = "wayland_integration.h")]
+    public bool wayland_get_layout_output_workarea(int index,
+        out int x, out int y, out int width, out int height);
+
+    [CCode (cname = "singularity_wayland_get_cursor_position", cheader_filename = "wayland_integration.h")]
+    public bool wayland_get_cursor_position(out int x, out int y);
+
     [CCode (cname = "singularity_wayland_window_is_tileable", cheader_filename = "wayland_integration.h")]
     public bool wayland_window_is_tileable(void* toplevel_handle);
 

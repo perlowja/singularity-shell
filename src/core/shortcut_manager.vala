@@ -260,6 +260,7 @@ namespace Singularity {
             string button_layout = translate_button_layout();
             xml.append("  <theme>\n");
             xml.append_printf("    <name>%s</name>\n", dark ? "Singularity" : "Adwaita");
+            xml.append("    <cornerRadius>12</cornerRadius>\n");
             xml.append("    <titlebar>\n");
             xml.append_printf("      <layout>%s</layout>\n", button_layout);
             xml.append("    </titlebar>\n");

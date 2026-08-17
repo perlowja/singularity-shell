@@ -302,6 +302,8 @@ namespace Singularity {
                     if (get_parent() == null) return GLib.Source.REMOVE;
                     int h = get_allocated_height();
                     if (h > 0) app_system.shell_panel_height = h;
+                    var tiling = TilingManager.get_default();
+                    if (tiling != null) tiling.workarea_changed();
                     return GLib.Source.REMOVE;
                 });
             });
@@ -824,6 +826,8 @@ namespace Singularity {
                 present();
                 auto_exclusive_zone_enable(this);
             }
+            var tiling = TilingManager.get_default();
+            if (tiling != null) tiling.workarea_changed();
         }
 
         private bool update_clock() {
