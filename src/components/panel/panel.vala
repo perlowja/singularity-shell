@@ -48,7 +48,24 @@ namespace Singularity {
             detail_box.margin_start = 12;
             detail_box.margin_end = 12;
             Popover popover = new Popover();
-            popover.child = detail_box;
+            // Bound the WHOLE popover, not just each group.
+            //
+            // The per-group cap (MAX_ROWS_PER_GROUP) limits any single
+            // section, but nine sensor kinds plus headings plus the clock
+            // section still add up: on the 55-sensor Qualcomm topology this
+            // change explicitly targets, the aggregate reaches roughly 70
+            // rows and runs off the bottom of the screen, making the lower
+            // groups unreachable -- capped or not. propagate_natural_height
+            // keeps small machines rendering exactly as before (the popover
+            // shrinks to fit two or three groups); only once the content
+            // genuinely exceeds max_content_height does it start scrolling.
+            var detail_scroller = new ScrolledWindow();
+            detail_scroller.child = detail_box;
+            detail_scroller.propagate_natural_height = true;
+            detail_scroller.propagate_natural_width = true;
+            detail_scroller.max_content_height = 600;
+            detail_scroller.hscrollbar_policy = PolicyType.NEVER;
+            popover.child = detail_scroller;
             button.popover = popover;
 
             // Populate the moment the popover opens, not on the next tick.

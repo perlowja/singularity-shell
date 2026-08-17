@@ -47,11 +47,73 @@ namespace Singularity {
             get {
                 if (_sensors == null) {
                     _sensors = new SensorMonitor();
-                    _sensors.gpu_hint = "TZGT";
-                    _sensors.cpu_hint = "TZ";
+                    // Scope these to the hardware they were measured on.
+                    //
+                    // These are four-character ACPI names specific to the CIX
+                    // Sky1 topology, not general heuristics, so applying them
+                    // on every platform makes a Sky1 quirk everyone else's
+                    // problem. The substring match is case-sensitive, so the
+                    // lowercase x86 "acpitz" chip does not in fact collide
+                    // with "TZ" -- but relying on that is a coincidence, not
+                    // a design, and it would break the moment any platform
+                    // exposed an uppercase label containing TZ. Gate on the
+                    // actual board instead: inert everywhere else by
+                    // construction rather than by luck.
+                    if (is_cix_sky1()) {
+                        _sensors.gpu_hint = "TZGT";
+                        _sensors.cpu_hint = "TZ";
+                    }
                 }
                 return _sensors;
             }
+        }
+
+        /**
+         * True on CIX Sky1 boards (Radxa Orion O6/O6N, cixmini).
+         *
+         * Detects the SoC by its own ACPI hardware IDs rather than by board
+         * branding. MEASURED on an O6N running the shipping ACPI kernel:
+         * there is no devicetree at all, and every DMI vendor/product string
+         * says "Radxa ... Orion O6N" -- not "CIX" and not "Sky1" -- so a
+         * vendor-string match reports FALSE on the exact hardware these
+         * hints exist for, silently restoring the cpu=-1/gpu=-1 bug they
+         * were added to fix. The CIXH* HIDs are the SoC's, not the board
+         * vendor's: 163 of them enumerate on that same machine. Devicetree
+         * is still checked so a DT-booted Sky1 is covered too.
+         */
+        private static bool is_cix_sky1() {
+            try {
+                Dir acpi = Dir.open("/sys/bus/acpi/devices", 0);
+                string? name;
+                while ((name = acpi.read_name()) != null) {
+                    if (name.has_prefix("CIXH")) {
+                        return true;
+                    }
+                }
+            } catch (FileError e) {
+                // No ACPI bus (a DT-only kernel); fall through.
+            }
+
+            string[] dt_probes = {
+                "/proc/device-tree/compatible",
+                "/sys/firmware/devicetree/base/compatible",
+            };
+            foreach (string path in dt_probes) {
+                string contents;
+                try {
+                    if (!FileUtils.get_contents(path, out contents)) {
+                        continue;
+                    }
+                } catch (FileError e) {
+                    continue;
+                }
+                // "compatible" is NUL-separated, so match the raw buffer.
+                string lowered = contents.down();
+                if (lowered.contains("cix") || lowered.contains("sky1")) {
+                    return true;
+                }
+            }
+            return false;
         }
         public CallMonitor call_monitor { get { if (_call_monitor == null) _call_monitor = new CallMonitor(audio); return _call_monitor; } }
 
