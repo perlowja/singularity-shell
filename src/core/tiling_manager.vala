@@ -639,60 +639,85 @@ namespace Singularity {
             return new ScrollingRect(x, y, width, height);
         }
 
-        private double visible_offset(ScrollingGroup group,
-                                      AppSystem.Window win,
-                                      int cursor_x = int.MIN,
-                                      int cursor_y = int.MIN,
-                                      bool use_current_geometry = false) {
+        private ScrollingRect? offset_rect(ScrollingGroup group,
+                                           AppSystem.Window win,
+                                           bool use_current_geometry) {
             var rect = use_current_geometry
                 ? current_rect_for_window(win) : null;
-            if (rect == null) rect = rect_for_window(group, win);
-            if (rect == null) return group.offset;
-            ScrollingWorkarea? target = null;
+            return rect ?? rect_for_window(group, win);
+        }
+
+        private ScrollingWorkarea? area_for_rect(ScrollingGroup group,
+                                                 ScrollingRect rect,
+                                                 int cursor_x,
+                                                 int cursor_y) {
             if (cursor_x != int.MIN && cursor_y != int.MIN) {
                 foreach (var area in group.output_areas) {
                     if (cursor_x >= area.x
                             && cursor_x < area.x + area.width
                             && cursor_y >= area.y
-                            && cursor_y < area.y + area.height) {
-                        target = area;
-                        break;
-                    }
+                            && cursor_y < area.y + area.height)
+                        return area;
                 }
             }
-            if (target != null) {
-                if (rect.x >= target.x
-                        && rect.x + rect.width <= target.x + target.width)
-                    return group.offset;
-            } else {
-                foreach (var area in group.output_areas) {
-                    if (rect.x >= area.x
-                            && rect.x + rect.width <= area.x + area.width)
-                        return group.offset;
-                }
-            }
+            ScrollingWorkarea? target = null;
             int best_overlap = -1;
             double best_distance = double.MAX;
             double center = rect.x + rect.width / 2.0;
-            if (target == null) {
-                foreach (var area in group.output_areas) {
-                    int overlap = int.max(0,
-                        int.min(rect.x + rect.width, area.x + area.width)
-                        - int.max(rect.x, area.x));
-                    double area_center = area.x + area.width / 2.0;
-                    double distance = Math.fabs(center - area_center);
-                    if (overlap > best_overlap
-                            || (overlap == best_overlap
-                                && distance < best_distance)) {
-                        target = area;
-                        best_overlap = overlap;
-                        best_distance = distance;
-                    }
+            foreach (var area in group.output_areas) {
+                int overlap = int.max(0,
+                    int.min(rect.x + rect.width, area.x + area.width)
+                    - int.max(rect.x, area.x));
+                double distance = Math.fabs(center
+                    - (area.x + area.width / 2.0));
+                if (overlap > best_overlap
+                        || (overlap == best_overlap
+                            && distance < best_distance)) {
+                    target = area;
+                    best_overlap = overlap;
+                    best_distance = distance;
                 }
             }
+            return target;
+        }
+
+        private double visible_offset(ScrollingGroup group,
+                                      AppSystem.Window win,
+                                      int cursor_x = int.MIN,
+                                      int cursor_y = int.MIN,
+                                      bool use_current_geometry = false) {
+            var rect = offset_rect(group, win, use_current_geometry);
+            if (rect == null) return group.offset;
+            var target = area_for_rect(group, rect, cursor_x, cursor_y);
             if (target == null) return group.offset;
-            return group.offset + center
+            if (rect.x >= target.x
+                    && rect.x + rect.width <= target.x + target.width)
+                return group.offset;
+            return group.offset + rect.x + rect.width / 2.0
                 - (target.x + target.width / 2.0);
+        }
+
+        private double reveal_offset(ScrollingGroup group,
+                                     AppSystem.Window win,
+                                     int cursor_x = int.MIN,
+                                     int cursor_y = int.MIN,
+                                     bool use_current_geometry = false) {
+            var rect = offset_rect(group, win, use_current_geometry);
+            if (rect == null) return group.offset;
+            var target = area_for_rect(group, rect, cursor_x, cursor_y);
+            if (target == null) return group.offset;
+            if (rect.width >= target.width || rect.x < target.x)
+                return group.offset + rect.x - target.x;
+            if (rect.x + rect.width > target.x + target.width)
+                return group.offset + rect.x + rect.width
+                    - (target.x + target.width);
+            return group.offset;
+        }
+
+        private double snap_offset(ScrollingGroup group,
+                                   AppSystem.Window win) {
+            return group.output_areas.size > 1
+                ? reveal_offset(group, win) : visible_offset(group, win);
         }
 
         private void scroll_drag_viewport(ScrollingGroup group,
@@ -972,7 +997,7 @@ namespace Singularity {
                     cursor_x = pointer_focus_x;
                     cursor_y = pointer_focus_y;
                 }
-                double target = visible_offset(group, group.focused,
+                double target = reveal_offset(group, group.focused,
                     cursor_x, cursor_y, true);
                 pointer_focus_window = null;
                 bool animate = group.initialized
@@ -1016,7 +1041,7 @@ namespace Singularity {
             group.columns.remove_at(index);
             group.columns.insert(target, column);
             group.focused = win;
-            if (animate_offset(group, visible_offset(group, win))) return true;
+            if (animate_offset(group, snap_offset(group, win))) return true;
             layout_group(group);
             return true;
         }
@@ -1151,7 +1176,7 @@ namespace Singularity {
                     }
                     if (target != null) {
                         group.focused = target;
-                        target_offset = visible_offset(group, target);
+                        target_offset = snap_offset(group, target);
                     }
                 }
                 gesture_group = null;
@@ -1520,7 +1545,7 @@ namespace Singularity {
             group.stack_target = null;
             if (organized) {
                 group.focused = win;
-                if (animate_offset(group, visible_offset(group, win)))
+                if (animate_offset(group, snap_offset(group, win)))
                     return;
                 layout_group(group);
             } else if (float_candidate) {
@@ -1529,7 +1554,7 @@ namespace Singularity {
                 if (stack_target != null)
                     move_to_stack(group, win, stack_target);
                 group.focused = win;
-                if (animate_offset(group, visible_offset(group, win)))
+                if (animate_offset(group, snap_offset(group, win)))
                     return;
                 layout_group(group);
             }
