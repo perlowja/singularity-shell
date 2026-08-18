@@ -14,6 +14,7 @@ typedef void (*WorkspaceCreatedCallback)(void* handle, const char* name, void* d
 typedef void (*WorkspaceDestroyedCallback)(void* handle, void* data);
 typedef void (*WorkspaceStateCallback)(void* handle, uint32_t state, void* data);
 typedef void (*WindowOutputChangedCallback)(void* handle, void* data);
+typedef void (*WindowGroupChangedCallback)(void* handle, void* data);
 typedef void (*DesktopGestureCallback)(uint32_t phase, uint32_t fingers,
     uint32_t direction,
     double dx, double dy, int cancelled, int committed, void* data);
@@ -34,6 +35,14 @@ void singularity_wayland_init(
     void* user_data
 );
 void singularity_wayland_set_window_output_changed_callback(WindowOutputChangedCallback cb, void* user_data);
+void singularity_wayland_set_window_group_changed_callback(WindowGroupChangedCallback cb, void* user_data);
+int singularity_wayland_get_window_group(void* toplevel_handle,
+    unsigned* group_id, unsigned* active, unsigned* index,
+    unsigned* members, unsigned* spread);
+void singularity_wayland_group_join(void* toplevel_handle, void* target_handle);
+void singularity_wayland_group_leave(void* toplevel_handle);
+void singularity_wayland_group_activate(void* toplevel_handle);
+void singularity_wayland_group_set_spread(void* toplevel_handle, int spread);
 void singularity_wayland_set_desktop_gesture_callback(DesktopGestureCallback cb,
     void* user_data);
 void singularity_wayland_toggle_desktop_reveal(void);
