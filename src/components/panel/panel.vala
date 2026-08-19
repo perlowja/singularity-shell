@@ -27,6 +27,8 @@ namespace Singularity {
         private Box detail_box;
         private SensorMonitor monitor;
         private bool show_frequency = true;
+        private bool show_utilization = true;
+        private UtilizationMonitor util;
         // Set when on_updated() hides the chip because no sensors are
         // readable, so the unmap handler can tell a self-inflicted unmap
         // (must keep polling, or recovery is never observed) from a real one.
@@ -95,6 +97,7 @@ namespace Singularity {
             });
 
             monitor = SystemMonitor.get_default().sensors;
+            util = SystemMonitor.get_default().utilization;
 
             // Every settings read is guarded: this widget and the schema can
             // ship from different packages, and an unguarded read of a missing
@@ -107,6 +110,9 @@ namespace Singularity {
             }
             if (schema != null && schema.has_key("sensors-show-frequency")) {
                 show_frequency = settings.get_boolean("sensors-show-frequency");
+            }
+            if (schema != null && schema.has_key("sensors-show-utilization")) {
+                show_utilization = settings.get_boolean("sensors-show-utilization");
             }
             // Only override when the user has actually configured a zone name.
             // The schema's portable default for these keys is an empty string,
@@ -125,6 +131,8 @@ namespace Singularity {
             }
 
             monitor.updated.connect(on_updated);
+            util.interval_seconds = interval;
+            util.updated.connect(on_updated);
             // A never-started monitor has no readings, so on_updated() below
             // would see monitor.available == false and set visible = false --
             // and GTK never maps an invisible widget, so the map handler that
@@ -143,17 +151,26 @@ namespace Singularity {
             // setting exists to bound. start()/stop() are idempotent no-ops
             // when already in the requested state (SensorMonitor.start/stop),
             // so map/unmap can call them freely without tracking state here.
-            map.connect(() => monitor.start(interval));
+            map.connect(() => {
+                monitor.start(interval);
+                if (show_utilization) util.start();
+            });
             unmap.connect(() => {
                 if (hidden_for_unavailable) return;
                 monitor.stop();
+                util.stop();
             });
-            if (get_mapped()) monitor.start(interval);
+            if (get_mapped()) {
+                monitor.start(interval);
+                if (show_utilization) util.start();
+            }
         }
 
         public override void dispose() {
             monitor.updated.disconnect(on_updated);
             monitor.stop();
+            util.updated.disconnect(on_updated);
+            util.stop();
             base.dispose();
         }
 
@@ -167,8 +184,68 @@ namespace Singularity {
                 : "%d MHz".printf(khz / 1000);
         }
 
+        /**
+         * True when utilisation has something real to show.
+         *
+         * Memory is the probe because it is the one figure that is available
+         * on the FIRST sample -- CPU and disk are rates and read -1.0 until a
+         * second one lands, so testing those would report "unavailable" for
+         * one interval on every start.
+         */
+        private bool utilization_available() {
+            return show_utilization && util.memory_fraction >= 0.0;
+        }
+
+        private static int percent_of(double fraction) {
+            int p = (int) Math.round(fraction * 100.0);
+            if (p < 0) return 0;
+            return p > 100 ? 100 : p;
+        }
+
+        /**
+         * Binary units, because that is what a filesystem reports.
+         *
+         * GIO's filesystem::size is the block count times the block size, so
+         * dividing by 1000 would disagree with df on the same mount and make
+         * the panel look wrong rather than merely differently-rounded.
+         */
+        private static string format_bytes(uint64 bytes) {
+            const double K = 1024.0;
+            double v = (double) bytes;
+            if (v < K) return "%.0f B".printf(v);
+            v /= K;
+            if (v < K) return "%.0f KiB".printf(v);
+            v /= K;
+            if (v < K) return "%.0f MiB".printf(v);
+            v /= K;
+            if (v < K) return "%.1f GiB".printf(v);
+            return "%.1f TiB".printf(v / K);
+        }
+
+        /**
+         * Colour a FILLED resource, but never a BUSY one.
+         *
+         * The same reasoning the Clocks section documents: a core pinned at
+         * 100% is doing its job and painting it red trains the user to ignore
+         * the colour. A disk at 100% is a machine about to stop working. So
+         * capacity and memory get severity and CPU/disk-busy do not. The
+         * thresholds match ResourceMonitor's alert points so the panel turns
+         * amber at the same moment the notification fires, rather than at
+         * some second, unrelated number.
+         */
+        private static Severity capacity_severity(double fraction) {
+            if (fraction >= 0.95) return Severity.CRITICAL;
+            if (fraction >= 0.85) return Severity.HOT;
+            return Severity.NORMAL;
+        }
+
         private void on_updated() {
-            if (!monitor.available) {
+            // Temperatures being unreadable no longer hides the whole chip.
+            // /proc/stat and /proc/meminfo exist on every Linux machine,
+            // including the many with no hwmon at all and VMs that expose no
+            // thermal zones; on those the old test hid a control that had
+            // perfectly good CPU and memory figures to show.
+            if (!monitor.available && !utilization_available()) {
                 // Nothing readable on this hardware: hide rather than show zeros.
                 //
                 // Availability must not switch off the mechanism that detects
@@ -252,6 +329,23 @@ namespace Singularity {
                     text.append(" · ");
                 }
                 text.append(format_clock(monitor.cpu_khz));
+            }
+            // Utilisation in the compact chip, not only in the popover.
+            //
+            // Every fraction is checked against < 0 before it is formatted.
+            // The monitor reports -1.0 for "not known yet" (a rate needs two
+            // samples) and for "no swap configured", and multiplying that by
+            // 100 renders a confident "-100%" -- observed on cixmini, which
+            // has no swap.
+            if (show_utilization) {
+                if (util.cpu_fraction >= 0.0) {
+                    if (text.len > 0) text.append(" \u00b7 ");
+                    text.append(_("CPU %d%%").printf(percent_of(util.cpu_fraction)));
+                }
+                if (util.memory_fraction >= 0.0) {
+                    if (text.len > 0) text.append(" \u00b7 ");
+                    text.append(_("MEM %d%%").printf(percent_of(util.memory_fraction)));
+                }
             }
             summary_label.label = text.str;
 
@@ -388,6 +482,113 @@ namespace Singularity {
             detail_box.append(row);
         }
 
+        /**
+         * Live utilisation: processor, memory, storage.
+         *
+         * Gated on the SAME preference as the compact chip. A setting honoured
+         * in one render path and ignored in the other is how sensors-show-
+         * frequency shipped a half-working toggle.
+         */
+        private void add_utilization_details() {
+            if (!show_utilization) {
+                return;
+            }
+
+            // ---- processor ----
+            UtilizationReading[] cores = util.per_cpu();
+            if (util.cpu_fraction >= 0.0 || cores.length > 0) {
+                add_heading(_("Processor"));
+                if (util.cpu_fraction >= 0.0) {
+                    add_row(_("Total"), "%d%%".printf(percent_of(util.cpu_fraction)),
+                            Severity.NORMAL, util.cpu_fraction);
+                }
+                // Same cap-and-count convention as add_group(). Sky1 has 12
+                // cores and server parts have far more; the popover scrolls,
+                // but an unbounded list still buries the temperatures under
+                // it.
+                int shown = 0;
+                int hidden = 0;
+                foreach (UtilizationReading core in cores) {
+                    if (core.fraction < 0.0) {
+                        continue;   // first sample: no rate yet
+                    }
+                    if (shown < MAX_ROWS_PER_GROUP) {
+                        add_row(core.label, "%d%%".printf(percent_of(core.fraction)),
+                                Severity.NORMAL, core.fraction);
+                        shown++;
+                    } else {
+                        hidden++;
+                    }
+                }
+                if (hidden > 0) {
+                    add_row(_("%d more").printf(hidden), "");
+                }
+            }
+
+            // ---- memory ----
+            if (util.memory_fraction >= 0.0) {
+                add_heading(_("Memory"));
+                add_row(_("RAM"),
+                        _("%s / %s").printf(format_bytes(util.memory_used_bytes),
+                                            format_bytes(util.memory_total_bytes)),
+                        capacity_severity(util.memory_fraction),
+                        util.memory_fraction);
+                // Omitted entirely when there is no swap. A "Swap 0%" row on a
+                // swapless machine says the swap is empty, not that there is
+                // none, which is a different and misleading claim.
+                if (util.swap_fraction >= 0.0) {
+                    add_row(_("Swap"), "%d%%".printf(percent_of(util.swap_fraction)),
+                            capacity_severity(util.swap_fraction),
+                            util.swap_fraction);
+                }
+            }
+
+            // ---- storage ----
+            CapacityReading[] volumes = util.filesystems();
+            UtilizationReading[] spindles = util.disks();
+            if (volumes.length > 0 || spindles.length > 0) {
+                add_heading(_("Storage"));
+
+                int shown = 0;
+                int hidden = 0;
+                foreach (CapacityReading vol in volumes) {
+                    if (vol.fraction < 0.0) {
+                        continue;
+                    }
+                    if (shown < MAX_ROWS_PER_GROUP) {
+                        add_row(vol.label,
+                                _("%s / %s").printf(format_bytes(vol.used_bytes),
+                                                    format_bytes(vol.total_bytes)),
+                                capacity_severity(vol.fraction), vol.fraction);
+                        shown++;
+                    } else {
+                        hidden++;
+                    }
+                }
+
+                // Busy percentage is a RATE, not a fill level, so it is listed
+                // after capacity and left uncoloured -- a disk at 100% busy is
+                // working, a disk at 100% full is broken, and they must not
+                // look alike.
+                foreach (UtilizationReading disk in spindles) {
+                    if (disk.fraction < 0.0) {
+                        continue;
+                    }
+                    if (shown < MAX_ROWS_PER_GROUP) {
+                        add_row(_("%s activity").printf(disk.label),
+                                "%d%%".printf(percent_of(disk.fraction)),
+                                Severity.NORMAL, disk.fraction);
+                        shown++;
+                    } else {
+                        hidden++;
+                    }
+                }
+                if (hidden > 0) {
+                    add_row(_("%d more").printf(hidden), "");
+                }
+            }
+        }
+
         private void add_group(SensorKind kind, string title) {
             bool any = false;
             foreach (SensorReading reading in monitor.readings()) {
@@ -448,6 +649,8 @@ namespace Singularity {
             add_group(SensorKind.NETWORK, _("Network"));
             add_group(SensorKind.BOARD,   _("Board"));
             add_group(SensorKind.SYSTEM,  _("System"));
+
+            add_utilization_details();
 
             // Clocks are NOT colour-coded. A core at its maximum is doing its
             // job, not overheating, and painting it red would train the user to
