@@ -41,6 +41,12 @@ namespace Singularity {
 
             summary_label = new Label("");
             summary_label.add_css_class("sensors-summary");
+            // Pango markup, not plain text: the compact chip colours each
+            // metric's dot + value independently (temperature by thermal
+            // severity, memory by capacity, CPU/frequency neutral) so a
+            // glance shows WHICH figure needs attention, not just that one
+            // does.
+            summary_label.use_markup = true;
 
             button = new MenuButton();
             button.add_css_class("flat");
@@ -211,6 +217,36 @@ namespace Singularity {
             return show_utilization && util.memory_fraction >= 0.0;
         }
 
+        /**
+         * Resolve a NAMED theme colour (e.g. "success_color") to a hex
+         * string for Pango markup.
+         *
+         * Markup spans take a literal colour, not a CSS variable, so the
+         * value has to be looked up at render time rather than written once
+         * -- this is what keeps it honest across a light/dark theme switch
+         * instead of baking in a colour that only happened to be right when
+         * the code was written. Falls back to the theme's plain text colour
+         * if the named token is ever missing, so a lookup failure degrades
+         * to unstyled text rather than invalid markup.
+         */
+        private string theme_color_hex(string color_name) {
+            Gdk.RGBA rgba;
+            if (!summary_label.lookup_color(color_name, out rgba)) {
+                if (!summary_label.lookup_color("text_color", out rgba)) {
+                    return "#ffffff";
+                }
+            }
+            return "#%02x%02x%02x".printf(
+                (uint) Math.round(rgba.red * 255),
+                (uint) Math.round(rgba.green * 255),
+                (uint) Math.round(rgba.blue * 255));
+        }
+
+        /** One coloured "dot value" segment for the compact chip. */
+        private string markup_segment(string color_hex, string text) {
+            return "<span color='%s'>\u25cf %s</span>".printf(color_hex, Markup.escape_text(text));
+        }
+
         private static int percent_of(double fraction) {
             int p = (int) Math.round(fraction * 100.0);
             if (p < 0) return 0;
@@ -325,25 +361,25 @@ namespace Singularity {
                     break;
                 }
             }
-            // Drop whatever the last tick set before setting this one:
-            // add_css_class is additive, so an unremoved "error" would stay
-            // red for the rest of the session once the machine had been hot.
+            // Drop the whole-label severity class the old plain-text chip
+            // used: each metric below now carries its OWN colour via
+            // markup, which is strictly more informative (which figure is
+            // hot, not just that something is) and would otherwise fight
+            // the per-segment colours for the eye.
             summary_label.remove_css_class("warning");
             summary_label.remove_css_class("error");
-            string? summary_css = severity_css(primary_severity);
-            if (summary_css != null && summary_css != "dim-label") {
-                summary_label.add_css_class(summary_css);
-            }
 
-            StringBuilder text = new StringBuilder();
+            StringBuilder markup = new StringBuilder();
             if (primary >= 0) {
-                text.append(format_celsius(primary));
+                markup.append(markup_segment(theme_color_hex(severity_color_name(primary_severity)),
+                                              format_celsius(primary)));
             }
             if (show_frequency && monitor.cpu_khz > 0) {
-                if (text.len > 0) {
-                    text.append(" · ");
-                }
-                text.append(format_clock(monitor.cpu_khz));
+                if (markup.len > 0) markup.append("  ");
+                // Clock speed is informational, never an alarm colour --
+                // same reasoning as CPU below: running near the maximum is
+                // the CPU doing its job, not a problem to flag red.
+                markup.append(markup_segment(theme_color_hex("accent_color"), format_clock(monitor.cpu_khz)));
             }
             // Utilisation in the compact chip, not only in the popover.
             //
@@ -354,15 +390,23 @@ namespace Singularity {
             // has no swap.
             if (show_utilization) {
                 if (util.cpu_fraction >= 0.0) {
-                    if (text.len > 0) text.append(" \u00b7 ");
-                    text.append(_("CPU %d%%").printf(percent_of(util.cpu_fraction)));
+                    if (markup.len > 0) markup.append("  ");
+                    // CPU busy is never severity-coloured: a core at 100% is
+                    // doing its job, and painting that red would train the
+                    // user to ignore the colour that does mean something --
+                    // the same reasoning the popover's Clocks section and
+                    // capacity_severity() already document.
+                    markup.append(markup_segment(theme_color_hex("accent_color"),
+                                                  _("CPU %d%%").printf(percent_of(util.cpu_fraction))));
                 }
                 if (util.memory_fraction >= 0.0) {
-                    if (text.len > 0) text.append(" \u00b7 ");
-                    text.append(_("MEM %d%%").printf(percent_of(util.memory_fraction)));
+                    if (markup.len > 0) markup.append("  ");
+                    Severity mem_severity = capacity_severity(util.memory_fraction);
+                    markup.append(markup_segment(theme_color_hex(severity_color_name(mem_severity)),
+                                                  _("MEM %d%%").printf(percent_of(util.memory_fraction))));
                 }
             }
-            summary_label.label = text.str;
+            summary_label.label = markup.str;
 
             Popover? popover = button.popover;
             if (popover != null && popover.visible) {
@@ -392,6 +436,25 @@ namespace Singularity {
          * the first step of the ramp. Colour is spent only where it means
          * something: dim, plain, amber, red.
          */
+        /**
+         * Severity -> a named theme colour, for markup (not a CSS class).
+         *
+         * NORMAL reads as success (a calm "this is fine" green) rather than
+         * plain text, matching the standard status-dashboard convention the
+         * graphical chip is going for. WARM stays neutral -- the original
+         * design's severity_css() below also treats WARM as not yet worth
+         * flagging, and this mirrors that rather than inventing a new
+         * threshold.
+         */
+        private string severity_color_name(Severity severity) {
+            switch (severity) {
+                case Severity.CRITICAL: return "error_color";
+                case Severity.HOT:      return "warning_color";
+                case Severity.WARM:     return "text_color";
+                default:                return "success_color";
+            }
+        }
+
         private static string? severity_css(Severity severity) {
             switch (severity) {
                 case Severity.CRITICAL: return "error";
