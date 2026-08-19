@@ -230,9 +230,15 @@ namespace Singularity {
          * to unstyled text rather than invalid markup.
          */
         private string theme_color_hex(string color_name) {
+            // lookup_color lives on StyleContext, not on Widget directly
+            // (deprecated since GTK 4.10, but still the working path -- no
+            // non-deprecated replacement exists for resolving a NAMED CSS
+            // colour at runtime, only get_color() for the resolved `color`
+            // property itself).
+            var style = summary_label.get_style_context();
             Gdk.RGBA rgba;
-            if (!summary_label.lookup_color(color_name, out rgba)) {
-                if (!summary_label.lookup_color("text_color", out rgba)) {
+            if (!style.lookup_color(color_name, out rgba)) {
+                if (!style.lookup_color("text_color", out rgba)) {
                     return "#ffffff";
                 }
             }
