@@ -43,6 +43,23 @@ namespace Singularity {
          * topology, where no chip or label contains "TZ", so one configuration
          * serves both kernels.
          */
+        /**
+         * Live CPU / memory / disk utilisation.
+         *
+         * Separate from `sensors` because it needs start/stop for CORRECTNESS,
+         * not merely to save power: every figure but memory is a rate computed
+         * between two samples, so a monitor left running while nothing reads
+         * it is measuring a window no one asked about.
+         */
+        public UtilizationMonitor utilization {
+            get {
+                if (_utilization == null) {
+                    _utilization = new UtilizationMonitor();
+                }
+                return _utilization;
+            }
+        }
+
         public SensorMonitor sensors {
             get {
                 if (_sensors == null) {
@@ -142,6 +159,7 @@ namespace Singularity {
         private PowerProfilesManager? _power_profiles;
         private ResourceMonitor? _resources;
         private SensorMonitor? _sensors = null;
+        private UtilizationMonitor? _utilization = null;
         private CallMonitor? _call_monitor;
 
         public static SystemMonitor get_default() {
