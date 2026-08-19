@@ -141,6 +141,21 @@ namespace Singularity {
             // establishes real availability before that first visibility
             // decision, so a fresh shell doesn't self-hide permanently.
             monitor.refresh();
+            // Prime utilisation for the SAME reason, and BEFORE the first
+            // visibility decision below.
+            //
+            // utilization_available() probes memory_fraction, which is -1.0
+            // until something has polled. Leaving that to the map handler
+            // rebuilds the exact deadlock the paragraph above describes, one
+            // step further out: on a machine with no readable hwmon but a
+            // perfectly good /proc -- a VM with no thermal zones, or any of
+            // the many boards without an hwmon driver -- monitor.available is
+            // false and utilization_available() is false only because nothing
+            // has looked yet. on_updated() hides the widget, GTK never maps
+            // it, util.start() never runs, and the indicator stays hidden for
+            // the life of the session with CPU and memory figures it could
+            // have shown all along.
+            if (show_utilization) util.poll();
             on_updated();
 
             // Poll only while actually on screen. An unmapped or hidden panel
