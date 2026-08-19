@@ -592,6 +592,7 @@ namespace Singularity {
                 // it.
                 int shown = 0;
                 int hidden = 0;
+                double hidden_sum = 0.0;
                 foreach (UtilizationReading core in cores) {
                     if (core.fraction < 0.0) {
                         continue;   // first sample: no rate yet
@@ -602,10 +603,16 @@ namespace Singularity {
                         shown++;
                     } else {
                         hidden++;
+                        hidden_sum += core.fraction;
                     }
                 }
+                // The overflow row shows the AVERAGE of what got cut, not
+                // just a count with no data in it -- a machine with 64 cores
+                // still tells you roughly how busy the other 58 are, instead
+                // of discarding that information entirely.
                 if (hidden > 0) {
-                    add_row(_("%d more").printf(hidden), "");
+                    add_row(_("%d more").printf(hidden),
+                            "%d%%".printf(percent_of(hidden_sum / hidden)));
                 }
             }
 
@@ -634,7 +641,14 @@ namespace Singularity {
                 add_heading(_("Storage"));
 
                 int shown = 0;
-                int hidden = 0;
+                // Capacity and activity get SEPARATE overflow counters, not
+                // one shared one: they are different quantities (a fill
+                // level vs a busy rate) and averaging them together, or
+                // averaging capacity % across differently-sized volumes,
+                // would blend numbers that don't mean the same thing. Only
+                // the activity overflow gets an average -- it is a rate,
+                // the same class of number CPU busy already is.
+                int hidden_volumes = 0;
                 foreach (CapacityReading vol in volumes) {
                     if (vol.fraction < 0.0) {
                         continue;
@@ -646,14 +660,19 @@ namespace Singularity {
                                 capacity_severity(vol.fraction), vol.fraction);
                         shown++;
                     } else {
-                        hidden++;
+                        hidden_volumes++;
                     }
+                }
+                if (hidden_volumes > 0) {
+                    add_row(_("%d more").printf(hidden_volumes), "");
                 }
 
                 // Busy percentage is a RATE, not a fill level, so it is listed
                 // after capacity and left uncoloured -- a disk at 100% busy is
                 // working, a disk at 100% full is broken, and they must not
                 // look alike.
+                int hidden_disks = 0;
+                double hidden_disk_sum = 0.0;
                 foreach (UtilizationReading disk in spindles) {
                     if (disk.fraction < 0.0) {
                         continue;
@@ -664,11 +683,13 @@ namespace Singularity {
                                 Severity.NORMAL, disk.fraction);
                         shown++;
                     } else {
-                        hidden++;
+                        hidden_disks++;
+                        hidden_disk_sum += disk.fraction;
                     }
                 }
-                if (hidden > 0) {
-                    add_row(_("%d more").printf(hidden), "");
+                if (hidden_disks > 0) {
+                    add_row(_("%d more").printf(hidden_disks),
+                            "%d%%".printf(percent_of(hidden_disk_sum / hidden_disks)));
                 }
             }
         }
@@ -691,6 +712,7 @@ namespace Singularity {
             // so show the first few and state how many were left out.
             int shown = 0;
             int hidden = 0;
+            int64 hidden_millidegrees_sum = 0;
             foreach (SensorReading reading in monitor.readings()) {
                 if (reading.kind != kind) {
                     continue;
@@ -701,10 +723,18 @@ namespace Singularity {
                     shown++;
                 } else {
                     hidden++;
+                    hidden_millidegrees_sum += reading.millidegrees;
                 }
             }
+            // The overflow row shows the AVERAGE temperature of what got
+            // cut, not just a count with no data in it -- same reasoning as
+            // the per-core and per-disk overflow rows below. Deliberately
+            // uncoloured: severity is classified per-sensor against that
+            // sensor's own limit, and averaging across sensors that may have
+            // different limits has no single threshold to colour against.
             if (hidden > 0) {
-                add_row(_("%d more").printf(hidden), "");
+                add_row(_("%d more").printf(hidden),
+                        format_celsius((int) (hidden_millidegrees_sum / hidden)));
             }
         }
 
@@ -750,20 +780,60 @@ namespace Singularity {
             ClockReading[] clocks = show_frequency ? monitor.clocks() : new ClockReading[0];
             if (clocks.length > 0) {
                 add_heading(_("Clocks"));
-                // Same cap-and-count convention as add_group() above: a
-                // per-CPU cpufreq policy (one entry per core on some x86
-                // layouts) can run past a hundred, and the popover has no
-                // scroll container, so an uncapped list grows off-screen.
-                int shown = int.min(clocks.length, MAX_ROWS_PER_GROUP);
-                for (int i = 0; i < shown; i++) {
-                    string value = clocks[i].max_khz > 0
-                        ? "%s / %s".printf(format_clock(clocks[i].khz),
-                                           format_clock(clocks[i].max_khz))
-                        : format_clock(clocks[i].khz);
-                    add_row(_("Core group %d").printf(i + 1), value);
+                // Group by max_khz -- the actual performance-tier signal.
+                // clocks() is one entry per cpufreq POLICY, and a policy is a
+                // clock domain: cores sharing one on a heterogeneous SoC
+                // (Sky1's five policies) are exactly the cores in the same
+                // tier, so an equal max_khz reliably identifies "same tier"
+                // without needing core-type names the backend doesn't have.
+                // On a homogeneous desktop CPU where every core reports the
+                // same max, this collapses a hundred identical rows into
+                // one -- the "N more" cap this replaced was only ever a
+                // symptom of not doing this grouping in the first place.
+                //
+                // Plain parallel arrays + linear scan rather than a Gee map:
+                // tier count is always small (Sky1 has 5 policies at most),
+                // so the O(n*tiers) scan costs nothing, and it avoids any
+                // uncertainty about Gee's generic-boxing behaviour for a
+                // primitive int key.
+                int[] tier_max = {};
+                int64[] tier_khz_sum = {};
+                int[] tier_count = {};
+                foreach (ClockReading c in clocks) {
+                    int idx = -1;
+                    for (int i = 0; i < tier_max.length; i++) {
+                        if (tier_max[i] == c.max_khz) { idx = i; break; }
+                    }
+                    if (idx < 0) {
+                        tier_max += c.max_khz;
+                        tier_khz_sum += (int64) c.khz;
+                        tier_count += 1;
+                    } else {
+                        tier_khz_sum[idx] += c.khz;
+                        tier_count[idx] += 1;
+                    }
                 }
-                if (clocks.length > shown) {
-                    add_row(_("%d more").printf(clocks.length - shown), "");
+                // Fastest tier first: the one most people check first, and
+                // matches how the sensor groups above already read
+                // hottest-first.
+                for (int i = 0; i < tier_max.length; i++) {
+                    for (int j = i + 1; j < tier_max.length; j++) {
+                        if (tier_max[j] > tier_max[i]) {
+                            int tmp_max = tier_max[i]; tier_max[i] = tier_max[j]; tier_max[j] = tmp_max;
+                            int64 tmp_sum = tier_khz_sum[i]; tier_khz_sum[i] = tier_khz_sum[j]; tier_khz_sum[j] = tmp_sum;
+                            int tmp_cnt = tier_count[i]; tier_count[i] = tier_count[j]; tier_count[j] = tmp_cnt;
+                        }
+                    }
+                }
+                for (int i = 0; i < tier_max.length; i++) {
+                    int avg_khz = (int) (tier_khz_sum[i] / tier_count[i]);
+                    string label = tier_count[i] > 1
+                        ? _("%d cores").printf(tier_count[i])
+                        : _("1 core");
+                    string value = tier_max[i] > 0
+                        ? "%s / %s".printf(format_clock(avg_khz), format_clock(tier_max[i]))
+                        : format_clock(avg_khz);
+                    add_row(label, value);
                 }
             }
         }
