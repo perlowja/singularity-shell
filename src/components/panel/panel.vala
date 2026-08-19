@@ -28,16 +28,32 @@ namespace Singularity {
         private SensorMonitor monitor;
         private bool show_frequency = true;
         private bool show_utilization = true;
+        // Whether Clocks groups cpufreq policies that share an EXACT max_khz
+        // into one row, or lists every policy raw. Defaults to grouped.
+        // Persisted so the choice survives a popover close/reopen, but the
+        // toggle itself lives in the popover (see rebuild_details()), not a
+        // settings page -- see the operator's own reasoning: Sky1's five
+        // policies happen to have five DIFFERENT ceilings, so grouped and
+        // ungrouped render almost identically there; the toggle matters on
+        // hardware where policies genuinely share a ceiling (a homogeneous
+        // desktop CPU, or same-tier cores on a hybrid part) and collapsing
+        // is worth seeing happen, or worth turning off to inspect per-policy.
+        private bool clocks_grouped = true;
         private UtilizationMonitor util;
         // Set when on_updated() hides the chip because no sensors are
         // readable, so the unmap handler can tell a self-inflicted unmap
         // (must keep polling, or recovery is never observed) from a real one.
         private bool hidden_for_unavailable = false;
+        // Kept as a field (the constructor previously only took it as a local
+        // parameter) so the Clocks group/ungroup toggle can write the
+        // preference back when clicked, not just read it once at construct.
+        private GLib.Settings settings;
 
         public SensorsIndicator(GLib.Settings settings) {
             Object(orientation: Orientation.HORIZONTAL, spacing: 0);
             valign = Align.CENTER;
             add_css_class("sensors-indicator");
+            this.settings = settings;
 
             summary_label = new Label("");
             summary_label.add_css_class("sensors-summary");
@@ -119,6 +135,9 @@ namespace Singularity {
             }
             if (schema != null && schema.has_key("sensors-show-utilization")) {
                 show_utilization = settings.get_boolean("sensors-show-utilization");
+            }
+            if (schema != null && schema.has_key("sensors-clocks-grouped")) {
+                clocks_grouped = settings.get_boolean("sensors-clocks-grouped");
             }
             // Only override when the user has actually configured a zone name.
             // The schema's portable default for these keys is an empty string,
@@ -426,6 +445,42 @@ namespace Singularity {
             heading.halign = Align.START;
             heading.margin_top = 4;
             detail_box.append(heading);
+        }
+
+        /**
+         * "Clocks" heading with a clickable Grouped/Ungrouped toggle.
+         *
+         * The label doubles as the current state, not just an action verb
+         * ("Grouped" / "Ungrouped"), so glancing at it tells you which mode
+         * you are already in -- an action-only "Group"/"Ungroup" button
+         * would require remembering what you last clicked.
+         */
+        private void add_clocks_heading() {
+            Box row = new Box(Orientation.HORIZONTAL, 6);
+            row.margin_top = 4;
+
+            Label heading = new Label(_("Clocks"));
+            heading.add_css_class("heading");
+            heading.halign = Align.START;
+            heading.hexpand = true;
+            row.append(heading);
+
+            Button toggle = new Button();
+            toggle.has_frame = false;
+            toggle.add_css_class("flat");
+            toggle.add_css_class("dim-label");
+            toggle.label = clocks_grouped ? _("Grouped") : _("Ungrouped");
+            toggle.clicked.connect(() => {
+                clocks_grouped = !clocks_grouped;
+                SettingsSchema? schema = settings.settings_schema;
+                if (schema != null && schema.has_key("sensors-clocks-grouped")) {
+                    settings.set_boolean("sensors-clocks-grouped", clocks_grouped);
+                }
+                rebuild_details();
+            });
+            row.append(toggle);
+
+            detail_box.append(row);
         }
 
         /**
@@ -779,61 +834,82 @@ namespace Singularity {
             // opened -- the preference silently did half of what it says.
             ClockReading[] clocks = show_frequency ? monitor.clocks() : new ClockReading[0];
             if (clocks.length > 0) {
-                add_heading(_("Clocks"));
-                // Group by max_khz -- the actual performance-tier signal.
-                // clocks() is one entry per cpufreq POLICY, and a policy is a
-                // clock domain: cores sharing one on a heterogeneous SoC
-                // (Sky1's five policies) are exactly the cores in the same
-                // tier, so an equal max_khz reliably identifies "same tier"
-                // without needing core-type names the backend doesn't have.
-                // On a homogeneous desktop CPU where every core reports the
-                // same max, this collapses a hundred identical rows into
-                // one -- the "N more" cap this replaced was only ever a
-                // symptom of not doing this grouping in the first place.
-                //
-                // Plain parallel arrays + linear scan rather than a Gee map:
-                // tier count is always small (Sky1 has 5 policies at most),
-                // so the O(n*tiers) scan costs nothing, and it avoids any
-                // uncertainty about Gee's generic-boxing behaviour for a
-                // primitive int key.
-                int[] tier_max = {};
-                int64[] tier_khz_sum = {};
-                int[] tier_count = {};
-                foreach (ClockReading c in clocks) {
-                    int idx = -1;
-                    for (int i = 0; i < tier_max.length; i++) {
-                        if (tier_max[i] == c.max_khz) { idx = i; break; }
-                    }
-                    if (idx < 0) {
-                        tier_max += c.max_khz;
-                        tier_khz_sum += (int64) c.khz;
-                        tier_count += 1;
-                    } else {
-                        tier_khz_sum[idx] += c.khz;
-                        tier_count[idx] += 1;
-                    }
-                }
-                // Fastest tier first: the one most people check first, and
-                // matches how the sensor groups above already read
-                // hottest-first.
-                for (int i = 0; i < tier_max.length; i++) {
-                    for (int j = i + 1; j < tier_max.length; j++) {
-                        if (tier_max[j] > tier_max[i]) {
-                            int tmp_max = tier_max[i]; tier_max[i] = tier_max[j]; tier_max[j] = tmp_max;
-                            int64 tmp_sum = tier_khz_sum[i]; tier_khz_sum[i] = tier_khz_sum[j]; tier_khz_sum[j] = tmp_sum;
-                            int tmp_cnt = tier_count[i]; tier_count[i] = tier_count[j]; tier_count[j] = tmp_cnt;
+                add_clocks_heading();
+
+                if (clocks_grouped) {
+                    // Group by max_khz -- the actual performance-tier
+                    // signal. clocks() is one entry per cpufreq POLICY, and
+                    // a policy is a clock domain: cores sharing one on a
+                    // heterogeneous SoC (Sky1's five policies) are exactly
+                    // the cores in the same tier, so an equal max_khz
+                    // reliably identifies "same tier" without needing
+                    // core-type names the backend doesn't have. On a
+                    // homogeneous desktop CPU where every core reports the
+                    // same max, this collapses a hundred identical rows
+                    // into one. On Sky1 specifically every policy happens
+                    // to have a DIFFERENT ceiling, so grouped and ungrouped
+                    // render almost identically there -- the toggle below
+                    // exists so that is verifiable rather than assumed, and
+                    // so it still collapses rows on hardware where policies
+                    // genuinely do share a ceiling.
+                    //
+                    // Plain parallel arrays + linear scan rather than a Gee
+                    // map: tier count is always small (Sky1 has 5 policies
+                    // at most), so the O(n*tiers) scan costs nothing, and it
+                    // avoids any uncertainty about Gee's generic-boxing
+                    // behaviour for a primitive int key.
+                    int[] tier_max = {};
+                    int64[] tier_khz_sum = {};
+                    int[] tier_count = {};
+                    foreach (ClockReading c in clocks) {
+                        int idx = -1;
+                        for (int i = 0; i < tier_max.length; i++) {
+                            if (tier_max[i] == c.max_khz) { idx = i; break; }
+                        }
+                        if (idx < 0) {
+                            tier_max += c.max_khz;
+                            tier_khz_sum += (int64) c.khz;
+                            tier_count += 1;
+                        } else {
+                            tier_khz_sum[idx] += c.khz;
+                            tier_count[idx] += 1;
                         }
                     }
-                }
-                for (int i = 0; i < tier_max.length; i++) {
-                    int avg_khz = (int) (tier_khz_sum[i] / tier_count[i]);
-                    string label = tier_count[i] > 1
-                        ? _("%d cores").printf(tier_count[i])
-                        : _("1 core");
-                    string value = tier_max[i] > 0
-                        ? "%s / %s".printf(format_clock(avg_khz), format_clock(tier_max[i]))
-                        : format_clock(avg_khz);
-                    add_row(label, value);
+                    // Fastest tier first: the one most people check first,
+                    // and matches how the sensor groups above already read
+                    // hottest-first.
+                    for (int i = 0; i < tier_max.length; i++) {
+                        for (int j = i + 1; j < tier_max.length; j++) {
+                            if (tier_max[j] > tier_max[i]) {
+                                int tmp_max = tier_max[i]; tier_max[i] = tier_max[j]; tier_max[j] = tmp_max;
+                                int64 tmp_sum = tier_khz_sum[i]; tier_khz_sum[i] = tier_khz_sum[j]; tier_khz_sum[j] = tmp_sum;
+                                int tmp_cnt = tier_count[i]; tier_count[i] = tier_count[j]; tier_count[j] = tmp_cnt;
+                            }
+                        }
+                    }
+                    for (int i = 0; i < tier_max.length; i++) {
+                        int avg_khz = (int) (tier_khz_sum[i] / tier_count[i]);
+                        string label = tier_count[i] > 1
+                            ? _("%d cores").printf(tier_count[i])
+                            : _("1 core");
+                        string value = tier_max[i] > 0
+                            ? "%s / %s".printf(format_clock(avg_khz), format_clock(tier_max[i]))
+                            : format_clock(avg_khz);
+                        add_row(label, value);
+                    }
+                } else {
+                    // Raw, one row per cpufreq policy, in whatever order
+                    // clocks() returned them -- no grouping, no averaging.
+                    // The label is the policy's own sysfs directory name
+                    // (e.g. "policy0"), the same identifier a person would
+                    // see if they went and looked at
+                    // /sys/devices/system/cpu/cpufreq/ themselves.
+                    foreach (ClockReading c in clocks) {
+                        string value = c.max_khz > 0
+                            ? "%s / %s".printf(format_clock(c.khz), format_clock(c.max_khz))
+                            : format_clock(c.khz);
+                        add_row(c.label, value);
+                    }
                 }
             }
         }
