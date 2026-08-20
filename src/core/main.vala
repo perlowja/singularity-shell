@@ -947,6 +947,13 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         if (overview != null && overview.showing) {
             overview.toggle();
         }
+        // The workspace chooser is a full-screen TOP layer. Close the app
+        // menu first -- leaving it visible lets the chooser hover under (and
+        // be visually occluded by) the menu when Workspaces is invoked from
+        // the panel/dock/hot-corner while the menu is open.
+        if (app_menu != null && app_menu.visible) {
+            app_menu.toggle();
+        }
         if (!ensure_workspace_overview()) return;
         workspace_overview.toggle();
     }
