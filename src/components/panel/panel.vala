@@ -28,17 +28,21 @@ namespace Singularity {
         private SensorMonitor monitor;
         private bool show_frequency = true;
         private bool show_utilization = true;
-        // Whether Clocks groups cpufreq policies that share an EXACT max_khz
-        // into one row, or lists every policy raw. Defaults to grouped.
-        // Persisted so the choice survives a popover close/reopen, but the
-        // toggle itself lives in the popover (see rebuild_details()), not a
-        // settings page -- see the operator's own reasoning: Sky1's five
-        // policies happen to have five DIFFERENT ceilings, so grouped and
-        // ungrouped render almost identically there; the toggle matters on
-        // hardware where policies genuinely share a ceiling (a homogeneous
-        // desktop CPU, or same-tier cores on a hybrid part) and collapsing
-        // is worth seeing happen, or worth turning off to inspect per-policy.
-        private bool clocks_grouped = true;
+        // Controls TWO things, both driven by the single toggle in the
+        // popover (see add_sensors_toggle()/rebuild_details()):
+        //   1. Whether the per-kind sections (CPU/GPU/NPU/Memory/... from
+        //      add_group()) render their heading label, or flatten into one
+        //      unheaded list.
+        //   2. Whether Clocks groups cpufreq policies that share an EXACT
+        //      max_khz into one row, or lists every policy raw.
+        // Defaults to grouped. Persisted so the choice survives a popover
+        // close/reopen. On Clocks specifically, Sky1's five policies happen
+        // to have five DIFFERENT ceilings, so grouped and ungrouped render
+        // almost identically there; the toggle matters on hardware where
+        // policies genuinely share a ceiling (a homogeneous desktop CPU, or
+        // same-tier cores on a hybrid part) and collapsing is worth seeing
+        // happen, or worth turning off to inspect per-policy.
+        private bool sensors_grouped = true;
         private UtilizationMonitor util;
         // Set when on_updated() hides the chip because no sensors are
         // readable, so the unmap handler can tell a self-inflicted unmap
@@ -136,8 +140,8 @@ namespace Singularity {
             if (schema != null && schema.has_key("sensors-show-utilization")) {
                 show_utilization = settings.get_boolean("sensors-show-utilization");
             }
-            if (schema != null && schema.has_key("sensors-clocks-grouped")) {
-                clocks_grouped = settings.get_boolean("sensors-clocks-grouped");
+            if (schema != null && schema.has_key("sensors-grouped")) {
+                sensors_grouped = settings.get_boolean("sensors-grouped");
             }
             // Only override when the user has actually configured a zone name.
             // The schema's portable default for these keys is an empty string,
@@ -448,18 +452,20 @@ namespace Singularity {
         }
 
         /**
-         * "Clocks" heading with a clickable Grouped/Ungrouped toggle.
+         * Popover-wide Grouped/Ungrouped toggle. Rendered first, before any
+         * sensor section, so its scope (every group below, not just one
+         * subsection) is visible from where it sits.
          *
          * The label doubles as the current state, not just an action verb
          * ("Grouped" / "Ungrouped"), so glancing at it tells you which mode
          * you are already in -- an action-only "Group"/"Ungroup" button
          * would require remembering what you last clicked.
          */
-        private void add_clocks_heading() {
+        private void add_sensors_toggle() {
             Box row = new Box(Orientation.HORIZONTAL, 6);
             row.margin_top = 4;
 
-            Label heading = new Label(_("Clocks"));
+            Label heading = new Label(_("Sensors"));
             heading.add_css_class("heading");
             heading.halign = Align.START;
             heading.hexpand = true;
@@ -469,12 +475,12 @@ namespace Singularity {
             toggle.has_frame = false;
             toggle.add_css_class("flat");
             toggle.add_css_class("dim-label");
-            toggle.label = clocks_grouped ? _("Grouped") : _("Ungrouped");
+            toggle.label = sensors_grouped ? _("Grouped") : _("Ungrouped");
             toggle.clicked.connect(() => {
-                clocks_grouped = !clocks_grouped;
+                sensors_grouped = !sensors_grouped;
                 SettingsSchema? schema = settings.settings_schema;
-                if (schema != null && schema.has_key("sensors-clocks-grouped")) {
-                    settings.set_boolean("sensors-clocks-grouped", clocks_grouped);
+                if (schema != null && schema.has_key("sensors-grouped")) {
+                    settings.set_boolean("sensors-grouped", sensors_grouped);
                 }
                 rebuild_details();
             });
@@ -760,7 +766,13 @@ namespace Singularity {
             if (!any) {
                 return;
             }
-            add_heading(title);
+            // Ungrouped flattens the list by hiding the per-kind heading;
+            // the rows themselves (and their MAX_ROWS_PER_GROUP cap / overflow
+            // averaging below) are unchanged, same field the Clocks section
+            // toggles -- see sensors_grouped's declaration.
+            if (sensors_grouped) {
+                add_heading(title);
+            }
             // Cap the rows. Sensor count varies enormously by platform: an ARM
             // dev board reports 5, a Qualcomm SC8280XP reports 55. Listing all
             // of them turns the popover into a wall of near-identical numbers,
@@ -801,6 +813,11 @@ namespace Singularity {
                 child = detail_box.get_first_child();
             }
 
+            // One control for the whole popover, at the top so its scope is
+            // obvious before any section renders: it decides whether every
+            // group below (CPU/GPU/NPU/... and Clocks) shows its heading.
+            add_sensors_toggle();
+
             // Every kind the backend can name, hottest-silicon first and the
             // board last. add_group() skips a kind with no sensors, so a PC
             // that reports only CPU and GPU still shows exactly two headings.
@@ -834,9 +851,11 @@ namespace Singularity {
             // opened -- the preference silently did half of what it says.
             ClockReading[] clocks = show_frequency ? monitor.clocks() : new ClockReading[0];
             if (clocks.length > 0) {
-                add_clocks_heading();
+                if (sensors_grouped) {
+                    add_heading(_("Clocks"));
+                }
 
-                if (clocks_grouped) {
+                if (sensors_grouped) {
                     // Group by max_khz -- the actual performance-tier
                     // signal. clocks() is one entry per cpufreq POLICY, and
                     // a policy is a clock domain: cores sharing one on a
