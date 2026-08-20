@@ -1725,6 +1725,115 @@ namespace Singularity {
             });
         }
 
+        // How deep to walk below a scan root. /usr/share/backgrounds holds
+        // ncz/, and a pack sits one further down (ncz/brandon-perlow), so two
+        // levels is what the shipped layout needs. The bound exists because
+        // $XDG_DATA_HOME/backgrounds is user-writable: someone who points it at
+        // a deep tree should not stall the picker.
+        private const int WALLPAPER_SCAN_MAX_DEPTH = 3;
+
+        // Directories declared by installed wallpaper packs.
+        //
+        // Reading the registry rather than guessing paths is what surfaces the
+        // Bing provider at all: its Dir= is /var/cache/ncz-wallpapers/bing,
+        // which is not under any backgrounds path and is unreachable by
+        // directory walking alone.
+        //
+        // .collection is the current on-disk format (KeyFile). The design in
+        // docs/WALLPAPER-PACKS.md moves to .pack.json and accepts both for one
+        // release; when that lands, parse *.pack.json here too rather than
+        // replacing this, or packs installed by the older deb disappear from
+        // the picker on upgrade.
+        private static Gee.ArrayList<string> collection_dirs() {
+            var dirs = new ArrayList<string>();
+            var roots = new ArrayList<string>();
+            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
+                roots.add(GLib.Path.build_filename(d, "ncz-wallpapers", "collections"));
+            roots.add(GLib.Path.build_filename(GLib.Environment.get_user_data_dir(),
+                                               "ncz-wallpapers", "collections"));
+
+            foreach (string root in roots) {
+                try {
+                    var dir = File.new_for_path(root);
+                    if (!dir.query_exists()) continue;
+                    var en = dir.enumerate_children("standard::name", FileQueryInfoFlags.NONE, null);
+                    FileInfo info;
+                    while ((info = en.next_file(null)) != null) {
+                        if (!info.get_name().has_suffix(".collection")) continue;
+                        var kf = new GLib.KeyFile();
+                        try {
+                            kf.load_from_file(GLib.Path.build_filename(root, info.get_name()),
+                                              GLib.KeyFileFlags.NONE);
+                            string d = kf.get_string("Collection", "Dir");
+                            if (d != null && d != "" && !dirs.contains(d)) dirs.add(d);
+                        } catch (Error e) {
+                            // A malformed or Dir-less collection is skipped, not
+                            // fatal: one bad pack must not empty the picker.
+                        }
+                    }
+                } catch (Error e) {
+                }
+            }
+            return dirs;
+        }
+
+        // Walk one scan root, collecting images.
+        //
+        // The previous implementation enumerated a single level and kept only
+        // entries whose content-type began with image/. /usr/share/backgrounds
+        // contains no images at all -- only ncz/ and singularity/ -- and a
+        // directory's content-type is inode/directory, so every shipped
+        // wallpaper was silently skipped. The picker had never displayed them.
+        private static void scan_wallpaper_dir(string path,
+                                               ArrayList<WallpaperCandidate> candidates,
+                                               HashSet<string> thread_seen,
+                                               HashSet<string> visited_dirs,
+                                               int depth) {
+            if (depth > WALLPAPER_SCAN_MAX_DEPTH) return;
+            // The scan roots overlap by construction (/usr/share/backgrounds and
+            // /usr/share/backgrounds/singularity are both roots) and a pack may
+            // declare a Dir already reachable from one of them. Without this,
+            // those directories are walked more than once.
+            if (visited_dirs.contains(path)) return;
+            visited_dirs.add(path);
+
+            try {
+                var dir = File.new_for_path(path);
+                if (!dir.query_exists()) return;
+                var enumerator = dir.enumerate_children(
+                    "standard::name,standard::content-type,standard::type,standard::is-symlink",
+                    FileQueryInfoFlags.NONE, null);
+                FileInfo info;
+                while ((info = enumerator.next_file(null)) != null) {
+                    var child = dir.get_child(info.get_name());
+
+                    if (info.get_file_type() == FileType.DIRECTORY) {
+                        // Not followed as a directory either: a symlinked
+                        // directory is the easy way to walk in a circle.
+                        if (info.get_is_symlink()) continue;
+                        scan_wallpaper_dir(child.get_path(), candidates, thread_seen,
+                                           visited_dirs, depth + 1);
+                        continue;
+                    }
+
+                    // default.jpg is a symlink the rotator repoints at whichever
+                    // wallpaper is current. Its target is enumerated in the same
+                    // directory, so following it would list one image twice --
+                    // once under its own name and once as "default".
+                    if (info.get_is_symlink()) continue;
+
+                    string mime = info.get_content_type();
+                    if (mime == null || !mime.has_prefix("image/")) continue;
+
+                    string uri = child.get_uri();
+                    if (thread_seen.contains(uri)) continue;
+                    thread_seen.add(uri);
+                    candidates.add(new WallpaperCandidate(uri, false));
+                }
+            } catch (Error e) {
+            }
+        }
+
         private void populate_grid() {
             int gen = ++wallpaper_grid_generation;
             wallpaper_grid.remove_all();
@@ -1748,31 +1857,22 @@ namespace Singularity {
                 path_list.add(GLib.Path.build_filename(d, "backgrounds"));
             path_list.add(GLib.Path.build_filename(GLib.Environment.get_user_data_dir(), "backgrounds"));
 
+            // Packs declare their own directory, and it need not live under any
+            // backgrounds path. The Bing provider caches into
+            // /var/cache/ncz-wallpapers/bing, which nothing above would ever
+            // reach, so the registry is the only way those images are found.
+            foreach (string dir in collection_dirs())
+                path_list.add(dir);
+
             string[] scan_paths = path_list.to_array();
             new GLib.Thread<void>("wallpaper-scan", () => {
                 var candidates = new ArrayList<WallpaperCandidate>();
                 var thread_seen = new HashSet<string>();
                 foreach (string uri in seen) thread_seen.add(uri);
 
-                foreach (string path in scan_paths) {
-                    try {
-                        var dir = File.new_for_path(path);
-                        if (!dir.query_exists()) continue;
-                        var enumerator = dir.enumerate_children("standard::name,standard::content-type", FileQueryInfoFlags.NONE, null);
-                        FileInfo info;
-                        while ((info = enumerator.next_file(null)) != null) {
-                            string mime = info.get_content_type();
-                            if (mime.has_prefix("image/")) {
-                                string uri = dir.get_child(info.get_name()).get_uri();
-                                if (!thread_seen.contains(uri)) {
-                                    thread_seen.add(uri);
-                                    candidates.add(new WallpaperCandidate(uri, false));
-                                }
-                            }
-                        }
-                    } catch (Error e) {
-                    }
-                }
+                var visited_dirs = new HashSet<string>();
+                foreach (string path in scan_paths)
+                    scan_wallpaper_dir(path, candidates, thread_seen, visited_dirs, 0);
 
                 GLib.Idle.add(() => {
                     if (gen != wallpaper_grid_generation) return GLib.Source.REMOVE;
