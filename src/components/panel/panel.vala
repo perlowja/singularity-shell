@@ -756,23 +756,36 @@ namespace Singularity {
         }
 
         private void add_group(SensorKind kind, string title) {
-            bool any = false;
+            SensorReading[] matching = {};
             foreach (SensorReading reading in monitor.readings()) {
                 if (reading.kind == kind) {
-                    any = true;
-                    break;
+                    matching += reading;
                 }
             }
-            if (!any) {
+            if (matching.length == 0) {
                 return;
             }
-            // Ungrouped flattens the list by hiding the per-kind heading;
-            // the rows themselves (and their MAX_ROWS_PER_GROUP cap / overflow
-            // averaging below) are unchanged, same field the Clocks section
-            // toggles -- see sensors_grouped's declaration.
+
             if (sensors_grouped) {
-                add_heading(title);
+                // Collapse the whole family into ONE row: the average
+                // temperature across every reading of this kind, labelled by
+                // the kind itself rather than any individual sensor. No
+                // heading -- the row's own label ("CPU", "GPU", ...) already
+                // says what it is. Deliberately uncoloured and bar-less, same
+                // reasoning as the overflow rows in the ungrouped branch:
+                // severity is classified per-sensor against that sensor's own
+                // limit, and averaging across sensors -- let alone an entire
+                // family of them -- has no single threshold to colour or
+                // scale a bar against.
+                int64 sum = 0;
+                foreach (SensorReading reading in matching) {
+                    sum += reading.millidegrees;
+                }
+                add_row(title, format_celsius((int) (sum / matching.length)));
+                return;
             }
+
+            add_heading(title);
             // Cap the rows. Sensor count varies enormously by platform: an ARM
             // dev board reports 5, a Qualcomm SC8280XP reports 55. Listing all
             // of them turns the popover into a wall of near-identical numbers,
@@ -780,10 +793,7 @@ namespace Singularity {
             int shown = 0;
             int hidden = 0;
             int64 hidden_millidegrees_sum = 0;
-            foreach (SensorReading reading in monitor.readings()) {
-                if (reading.kind != kind) {
-                    continue;
-                }
+            foreach (SensorReading reading in matching) {
                 if (shown < MAX_ROWS_PER_GROUP) {
                     add_row(reading.label, format_celsius(reading.millidegrees),
                             reading.severity, reading.heat_fraction);
@@ -802,6 +812,140 @@ namespace Singularity {
             if (hidden > 0) {
                 add_row(_("%d more").printf(hidden),
                         format_celsius((int) (hidden_millidegrees_sum / hidden)));
+            }
+        }
+
+        /**
+         * CPU temperature AND clock, in one section instead of two. They used
+         * to be separate ("CPU" from add_group(), "Clocks" lower down in
+         * rebuild_details()) which put two headings on the same physical
+         * silicon with nothing connecting them.
+         *
+         * They stay two DIFFERENT KINDS OF ROW within that one section,
+         * though, rather than one merged "50C / 2.6GHz" row per cluster:
+         * CIX Sky1 names four thermal zones (CPU_B0/B1, CPU_M0/M1) that do
+         * NOT partition onto the same five cpufreq clusters cluster_id
+         * reports (verified on O6N: cluster_id 1/2/3/4/5 map exactly to
+         * cpufreq policy0/2/6/8/10, one cluster per policy -- but there is
+         * no sysfs link from a named thermal zone to the core numbers it
+         * actually measures). Attaching a temperature to a specific clock
+         * cluster would be a guess dressed up as a measurement. So: one
+         * aggregate temperature for the whole CPU, and clock broken out by
+         * cluster underneath it.
+         */
+        private void add_cpu_section() {
+            SensorReading[] cpu_temps = {};
+            foreach (SensorReading reading in monitor.readings()) {
+                if (reading.kind == SensorKind.CPU) {
+                    cpu_temps += reading;
+                }
+            }
+            // Honour sensors-show-frequency here too. It previously gated
+            // only the compact summary, so turning frequency "off" still
+            // rendered the entire Clocks section the moment the popover was
+            // opened -- the preference silently did half of what it says.
+            ClockReading[] clocks = show_frequency ? monitor.clocks() : new ClockReading[0];
+            if (cpu_temps.length == 0 && clocks.length == 0) {
+                return;
+            }
+
+            if (sensors_grouped) {
+                if (cpu_temps.length > 0) {
+                    int64 sum = 0;
+                    foreach (SensorReading reading in cpu_temps) {
+                        sum += reading.millidegrees;
+                    }
+                    add_row(_("CPU"), format_celsius((int) (sum / cpu_temps.length)));
+                }
+                // Group by max_khz -- the actual performance-tier signal.
+                // clocks() is one entry per cpufreq POLICY, and a policy is
+                // a clock domain: cores sharing one on a heterogeneous SoC
+                // (Sky1's five policies) are exactly the cores in the same
+                // tier, so an equal max_khz reliably identifies "same tier"
+                // without needing core-type names the backend doesn't have.
+                // On a homogeneous desktop CPU where every core reports the
+                // same max, this collapses a hundred identical rows into
+                // one. On Sky1 specifically every policy happens to have a
+                // DIFFERENT ceiling, so grouped and ungrouped render almost
+                // identically there -- the toggle exists so that is
+                // verifiable rather than assumed, and so it still collapses
+                // rows on hardware where policies genuinely share a ceiling.
+                //
+                // Plain parallel arrays + linear scan rather than a Gee map:
+                // tier count is always small (Sky1 has 5 policies at most),
+                // so the O(n*tiers) scan costs nothing, and it avoids any
+                // uncertainty about Gee's generic-boxing behaviour for a
+                // primitive int key.
+                int[] tier_max = {};
+                int64[] tier_khz_sum = {};
+                int[] tier_count = {};
+                foreach (ClockReading c in clocks) {
+                    int idx = -1;
+                    for (int i = 0; i < tier_max.length; i++) {
+                        if (tier_max[i] == c.max_khz) { idx = i; break; }
+                    }
+                    if (idx < 0) {
+                        tier_max += c.max_khz;
+                        tier_khz_sum += (int64) c.khz;
+                        tier_count += 1;
+                    } else {
+                        tier_khz_sum[idx] += c.khz;
+                        tier_count[idx] += 1;
+                    }
+                }
+                // Fastest tier first: the one most people check first, and
+                // matches how the sensor groups above already read
+                // hottest-first.
+                for (int i = 0; i < tier_max.length; i++) {
+                    for (int j = i + 1; j < tier_max.length; j++) {
+                        if (tier_max[j] > tier_max[i]) {
+                            int tmp_max = tier_max[i]; tier_max[i] = tier_max[j]; tier_max[j] = tmp_max;
+                            int64 tmp_sum = tier_khz_sum[i]; tier_khz_sum[i] = tier_khz_sum[j]; tier_khz_sum[j] = tmp_sum;
+                            int tmp_cnt = tier_count[i]; tier_count[i] = tier_count[j]; tier_count[j] = tmp_cnt;
+                        }
+                    }
+                }
+                for (int i = 0; i < tier_max.length; i++) {
+                    int avg_khz = (int) (tier_khz_sum[i] / tier_count[i]);
+                    string label = tier_count[i] > 1
+                        ? _("%d cores").printf(tier_count[i])
+                        : _("1 core");
+                    string value = tier_max[i] > 0
+                        ? "%s / %s".printf(format_clock(avg_khz), format_clock(tier_max[i]))
+                        : format_clock(avg_khz);
+                    add_row(label, value);
+                }
+                return;
+            }
+
+            add_heading(_("CPU"));
+            int shown = 0;
+            int hidden = 0;
+            int64 hidden_millidegrees_sum = 0;
+            foreach (SensorReading reading in cpu_temps) {
+                if (shown < MAX_ROWS_PER_GROUP) {
+                    add_row(reading.label, format_celsius(reading.millidegrees),
+                            reading.severity, reading.heat_fraction);
+                    shown++;
+                } else {
+                    hidden++;
+                    hidden_millidegrees_sum += reading.millidegrees;
+                }
+            }
+            if (hidden > 0) {
+                add_row(_("%d more").printf(hidden),
+                        format_celsius((int) (hidden_millidegrees_sum / hidden)));
+            }
+            // Raw, one row per cpufreq policy, in whatever order clocks()
+            // returned them -- no grouping, no averaging. The label is the
+            // policy's own sysfs directory name (e.g. "policy0"), the same
+            // identifier a person would see if they went and looked at
+            // /sys/devices/system/cpu/cpufreq/ themselves.
+            foreach (ClockReading c in clocks) {
+                string value = c.max_khz > 0
+                    ? "%s / %s".printf(format_clock(c.khz), format_clock(c.max_khz))
+                    : format_clock(c.khz);
+                add_row(c.label, value);
             }
         }
 
@@ -826,7 +970,7 @@ namespace Singularity {
             // kinds were classified and then silently dropped -- on Sky1 that
             // hid eleven of nineteen readings, including the NVMe that was the
             // only one worth looking at.
-            add_group(SensorKind.CPU,     _("CPU"));
+            add_cpu_section();
             add_group(SensorKind.GPU,     _("GPU"));
             add_group(SensorKind.NPU,     _("NPU"));
             add_group(SensorKind.VPU,     _("VPU"));
@@ -837,100 +981,6 @@ namespace Singularity {
             add_group(SensorKind.SYSTEM,  _("System"));
 
             add_utilization_details();
-
-            // Clocks are NOT colour-coded. A core at its maximum is doing its
-            // job, not overheating, and painting it red would train the user to
-            // ignore the colour that does mean something. They are shown
-            // against their own ceiling instead, because that ceiling is not
-            // one number per machine: CIX Sky1 has five cpufreq policies with
-            // five different maxima, so "1.4 GHz" is nearly flat out on one
-            // cluster and near idle on another.
-            // Honour sensors-show-frequency here too. It previously gated
-            // only the compact summary, so turning frequency "off" still
-            // rendered the entire Clocks section the moment the popover was
-            // opened -- the preference silently did half of what it says.
-            ClockReading[] clocks = show_frequency ? monitor.clocks() : new ClockReading[0];
-            if (clocks.length > 0) {
-                if (sensors_grouped) {
-                    add_heading(_("Clocks"));
-                }
-
-                if (sensors_grouped) {
-                    // Group by max_khz -- the actual performance-tier
-                    // signal. clocks() is one entry per cpufreq POLICY, and
-                    // a policy is a clock domain: cores sharing one on a
-                    // heterogeneous SoC (Sky1's five policies) are exactly
-                    // the cores in the same tier, so an equal max_khz
-                    // reliably identifies "same tier" without needing
-                    // core-type names the backend doesn't have. On a
-                    // homogeneous desktop CPU where every core reports the
-                    // same max, this collapses a hundred identical rows
-                    // into one. On Sky1 specifically every policy happens
-                    // to have a DIFFERENT ceiling, so grouped and ungrouped
-                    // render almost identically there -- the toggle below
-                    // exists so that is verifiable rather than assumed, and
-                    // so it still collapses rows on hardware where policies
-                    // genuinely do share a ceiling.
-                    //
-                    // Plain parallel arrays + linear scan rather than a Gee
-                    // map: tier count is always small (Sky1 has 5 policies
-                    // at most), so the O(n*tiers) scan costs nothing, and it
-                    // avoids any uncertainty about Gee's generic-boxing
-                    // behaviour for a primitive int key.
-                    int[] tier_max = {};
-                    int64[] tier_khz_sum = {};
-                    int[] tier_count = {};
-                    foreach (ClockReading c in clocks) {
-                        int idx = -1;
-                        for (int i = 0; i < tier_max.length; i++) {
-                            if (tier_max[i] == c.max_khz) { idx = i; break; }
-                        }
-                        if (idx < 0) {
-                            tier_max += c.max_khz;
-                            tier_khz_sum += (int64) c.khz;
-                            tier_count += 1;
-                        } else {
-                            tier_khz_sum[idx] += c.khz;
-                            tier_count[idx] += 1;
-                        }
-                    }
-                    // Fastest tier first: the one most people check first,
-                    // and matches how the sensor groups above already read
-                    // hottest-first.
-                    for (int i = 0; i < tier_max.length; i++) {
-                        for (int j = i + 1; j < tier_max.length; j++) {
-                            if (tier_max[j] > tier_max[i]) {
-                                int tmp_max = tier_max[i]; tier_max[i] = tier_max[j]; tier_max[j] = tmp_max;
-                                int64 tmp_sum = tier_khz_sum[i]; tier_khz_sum[i] = tier_khz_sum[j]; tier_khz_sum[j] = tmp_sum;
-                                int tmp_cnt = tier_count[i]; tier_count[i] = tier_count[j]; tier_count[j] = tmp_cnt;
-                            }
-                        }
-                    }
-                    for (int i = 0; i < tier_max.length; i++) {
-                        int avg_khz = (int) (tier_khz_sum[i] / tier_count[i]);
-                        string label = tier_count[i] > 1
-                            ? _("%d cores").printf(tier_count[i])
-                            : _("1 core");
-                        string value = tier_max[i] > 0
-                            ? "%s / %s".printf(format_clock(avg_khz), format_clock(tier_max[i]))
-                            : format_clock(avg_khz);
-                        add_row(label, value);
-                    }
-                } else {
-                    // Raw, one row per cpufreq policy, in whatever order
-                    // clocks() returned them -- no grouping, no averaging.
-                    // The label is the policy's own sysfs directory name
-                    // (e.g. "policy0"), the same identifier a person would
-                    // see if they went and looked at
-                    // /sys/devices/system/cpu/cpufreq/ themselves.
-                    foreach (ClockReading c in clocks) {
-                        string value = c.max_khz > 0
-                            ? "%s / %s".printf(format_clock(c.khz), format_clock(c.max_khz))
-                            : format_clock(c.khz);
-                        add_row(c.label, value);
-                    }
-                }
-            }
         }
     }
 
