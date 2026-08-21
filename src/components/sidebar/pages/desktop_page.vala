@@ -1732,22 +1732,18 @@ namespace Singularity {
                 var thread_seen = new HashSet<string>();
                 foreach (string uri in seen) thread_seen.add(uri);
 
+                // Bounded recursive scan: a single extra level catches the
+                // pack-on-disk layout under /usr/share/backgrounds (e.g. an
+                // `ncz/` pack directory containing the per-pack JPEGs) without
+                // walking arbitrary user trees. If a child is a directory,
+                // descend once and enumerate its image children; otherwise
+                // treat it as a leaf candidate. Anything deeper than that is
+                // intentionally left alone.
                 foreach (string path in scan_paths) {
                     try {
                         var dir = File.new_for_path(path);
                         if (!dir.query_exists()) continue;
-                        var enumerator = dir.enumerate_children("standard::name,standard::content-type", FileQueryInfoFlags.NONE, null);
-                        FileInfo info;
-                        while ((info = enumerator.next_file(null)) != null) {
-                            string mime = info.get_content_type();
-                            if (mime.has_prefix("image/")) {
-                                string uri = dir.get_child(info.get_name()).get_uri();
-                                if (!thread_seen.contains(uri)) {
-                                    thread_seen.add(uri);
-                                    candidates.add(new WallpaperCandidate(uri, false));
-                                }
-                            }
-                        }
+                        scan_directory_for_wallpapers(dir, thread_seen, candidates);
                     } catch (Error e) {
                     }
                 }
@@ -1758,6 +1754,61 @@ namespace Singularity {
                     return GLib.Source.REMOVE;
                 });
             });
+        }
+
+        private void scan_directory_for_wallpapers(File dir, HashSet<string> seen, ArrayList<WallpaperCandidate> candidates) {
+            FileEnumerator enumerator;
+            try {
+                enumerator = dir.enumerate_children("standard::name,standard::content-type,standard::type", FileQueryInfoFlags.NONE, null);
+            } catch (Error e) {
+                return;
+            }
+
+            FileInfo info;
+            try {
+                while ((info = enumerator.next_file(null)) != null) {
+                    string name = info.get_name();
+                    FileType type = info.get_file_type();
+                    File child = dir.get_child(name);
+                    if (type == FileType.DIRECTORY) {
+                        // One extra level: enumerate images directly inside
+                        // this subdirectory (e.g. /usr/share/backgrounds/ncz/*.jpg).
+                        // We do not recurse further.
+                        FileEnumerator sub;
+                        try {
+                            sub = child.enumerate_children("standard::name,standard::content-type", FileQueryInfoFlags.NONE, null);
+                        } catch (Error e) {
+                            continue;
+                        }
+                        FileInfo sub_info;
+                        try {
+                            while ((sub_info = sub.next_file(null)) != null) {
+                                if (sub_info.get_file_type() == FileType.DIRECTORY) continue;
+                                string mime = sub_info.get_content_type();
+                                if (!mime.has_prefix("image/")) continue;
+                                string uri = child.get_child(sub_info.get_name()).get_uri();
+                                if (seen.contains(uri)) continue;
+                                seen.add(uri);
+                                candidates.add(new WallpaperCandidate(uri, false));
+                            }
+                        } catch (Error e) {
+                        }
+                    } else if (type == FileType.REGULAR || type == FileType.SYMBOLIC_LINK || type == FileType.UNKNOWN) {
+                        // Treat anything that isn't a directory as a leaf
+                        // candidate. UNKNOWN covers filesystems where the
+                        // type isn't reported (some FUSE / overlay setups);
+                        // SYMBOLIC_LINK catches the per-pack default.jpg
+                        // style symlinks into the same directory.
+                        string mime = info.get_content_type();
+                        if (!mime.has_prefix("image/")) continue;
+                        string uri = child.get_uri();
+                        if (seen.contains(uri)) continue;
+                        seen.add(uri);
+                        candidates.add(new WallpaperCandidate(uri, false));
+                    }
+                }
+            } catch (Error e) {
+            }
         }
 
         private void append_wallpaper_candidates(ArrayList<WallpaperCandidate> candidates, int gen, int start) {
