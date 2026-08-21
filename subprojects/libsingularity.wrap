@@ -1,0 +1,5 @@
+[wrap-file]
+directory = libsingularity-7196e59c4856060157bd29618b2a28f79ee6d744
+source_filename = libsingularity-7196e59.tar.gz
+source_url = https://github.com/singularityos-lab/libsingularity/archive/7196e59c4856060157bd29618b2a28f79ee6d744.tar.gz
+source_hash = 5318aa63804cf558a465b6dc41d365179f6685549cb1e2bbd48e8fbf62fe342e

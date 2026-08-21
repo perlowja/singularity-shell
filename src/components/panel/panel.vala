@@ -67,6 +67,23 @@ namespace Singularity {
         private bool _dock_hidden = false;
         private Widget _corner_tl;
         private Widget _corner_tr;
+        // Sensors chip + popover. Built only if libsingularity exposes a
+        // SensorMonitor; the per-pin API contract is documented in
+        // src/core/system_monitor.vala above the sensors property.
+        private Button? sensors_btn = null;
+        private Label? sensors_label = null;
+        private Popover? sensors_popover = null;
+        private Box? sensors_detail_box = null;
+        private bool sensors_started = false;
+        // Sensor severity classification -- local to the panel because the
+        // libsingularity pin (7196e59) does not expose a Severity enum. See
+        // the sensors property doc in src/core/system_monitor.vala for why.
+        private enum SensorSeverity {
+            NORMAL,
+            WARM,
+            HOT,
+            CRITICAL,
+        }
         public signal void activities_clicked();
         public signal void clock_clicked();
         public signal void notifications_clicked();
@@ -376,6 +393,16 @@ namespace Singularity {
 
             // Secondary panels: hide status icons and notifications, show clock only
             sys_btn.visible = is_primary;
+            // Sensors chip: a button holding a label that shows the hottest
+            // CPU/GPU/SYSTEM reading, with a popover listing everything the
+            // libsingularity SensorMonitor can name. Built unconditionally;
+            // the chip stays hidden until SensorMonitor reports available.
+            build_sensors_chip();
+            if (sensors_btn != null) {
+                sensors_btn.visible = is_primary;
+                layout_items["sensors"] = sensors_btn;
+            }
+
             notif_btn.visible = is_primary;
 
             layout_items["notifications"] = notif_btn;
@@ -981,6 +1008,296 @@ namespace Singularity {
             if (icon != null && action != null) icon.icon_name = icon_for_corner_action(action);
             if (active) w.add_css_class("visible");
             else w.remove_css_class("visible");
+        }
+
+        // -----------------------------------------------------------------
+        // Sensors chip and popover.
+        //
+        // The original implementation (sensors-panel PR) used a Severity
+        // enum and a ClockReading class from libsingularity, plus a richer
+        // SensorKind (NPU, VPU, MEMORY, STORAGE, NETWORK, BOARD) and per-
+        // reading severity / heat_fraction. The libsingularity pin this
+        // build is locked to (7196e59 "Add adaptive night light scheduling")
+        // post-dates the rewritten-out aa7980b commit that introduced all
+        // of that, and aa7980b itself is unfetchable. The chip below adapts
+        // to the surviving API and does its own severity classification
+        // locally. The Clocks section is dropped because the surviving
+        // SensorMonitor exposes only the array of current CPU clock speeds
+        // (clocks_khz(), no max_khz per policy) and a single cpu_khz, which
+        // is not informative on a CPU that runs at its turbo almost all the
+        // time -- the compact chip renders cpu_khz when it is meaningful
+        // (i.e. not pinned) but the popover omits a dedicated section.
+        // -----------------------------------------------------------------
+
+        private void build_sensors_chip() {
+            var sys = SystemMonitor.get_default();
+            if (sys == null) return;
+
+            var sensors_btn_local = new Button();
+            sensors_btn_local.has_frame = false;
+            sensors_btn_local.add_css_class("sensors-button");
+            sensors_btn_local.valign = Align.CENTER;
+
+            var lbl = new Label("--");
+            lbl.add_css_class("sensors-label");
+            sensors_btn_local.set_child(lbl);
+
+            var popover = new Popover();
+            popover.autohide = true;
+            popover.position = Gtk.PositionType.BOTTOM;
+
+            var detail_box = new Box(Orientation.VERTICAL, 6);
+            detail_box.margin_top = 8;
+            detail_box.margin_bottom = 8;
+            detail_box.margin_start = 12;
+            detail_box.margin_end = 12;
+            detail_box.add_css_class("sensors-popover");
+            popover.set_child(detail_box);
+
+            sensors_btn_local.clicked.connect(() => {
+                if (!popover.visible) {
+                    rebuild_sensor_details();
+                }
+                popover.popup();
+            });
+            popover.notify["visible"].connect(() => {
+                if (!popover.visible) return;
+                rebuild_sensor_details();
+            });
+
+            sensors_btn = sensors_btn_local;
+            sensors_label = lbl;
+            sensors_popover = popover;
+            sensors_detail_box = detail_box;
+
+            // Visible / available / label state is driven by the monitor's
+            // own signal. It fires once after start() completes the first
+            // refresh, which on a machine with hwmon is immediate, and on a
+            // machine without it (most VMs) leaves the chip hidden.
+            var monitor = sys.sensors;
+            monitor.updated.connect(() => {
+                update_sensors_chip(monitor);
+                if (popover.visible) rebuild_sensor_details();
+            });
+            monitor.start();
+            sensors_started = true;
+            // Sync the initial state in case updated() has already fired
+            // (libsingularity refreshes synchronously inside start()).
+            update_sensors_chip(monitor);
+        }
+
+        private static SensorSeverity severity_for_millidegrees(int millidegrees) {
+            if (millidegrees < 0) return SensorSeverity.NORMAL;
+            double deg = millidegrees / 1000.0;
+            if (deg >= 90.0) return SensorSeverity.CRITICAL;
+            if (deg >= 78.0) return SensorSeverity.HOT;
+            if (deg >= 65.0) return SensorSeverity.WARM;
+            return SensorSeverity.NORMAL;
+        }
+
+        private static string severity_css(SensorSeverity severity) {
+            switch (severity) {
+                case SensorSeverity.CRITICAL: return "error";
+                case SensorSeverity.HOT:      return "warning";
+                case SensorSeverity.WARM:     return null;
+                default:                      return "dim-label";
+            }
+        }
+
+        private static string format_celsius(int millidegrees) {
+            if (millidegrees < 0) return "--";
+            double deg = millidegrees / 1000.0;
+            // One decimal is more useful than no decimal here: a sensor that
+            // moves from 56.4 to 56.9 to 57.2 looks like a flat "57 C" with
+            // no fractional part, and the operator has stopped watching it.
+            return "%.1f°C".printf(deg);
+        }
+
+        private static string format_clock_khz(int khz) {
+            if (khz < 0) return "--";
+            double mhz = khz / 1000.0;
+            if (mhz >= 1000.0) return "%.2f GHz".printf(mhz / 1000.0);
+            return "%d MHz".printf((int) Math.round(mhz));
+        }
+
+        private void update_sensors_chip(SensorMonitor monitor) {
+            if (sensors_label == null || sensors_btn == null) return;
+            if (!monitor.available) {
+                sensors_btn.visible = false;
+                return;
+            }
+            sensors_btn.visible = true;
+
+            // Find the hottest reading we have a kind for. CPU and GPU each
+            // have a fast path (cpu_millidegrees / gpu_millidegrees); SYSTEM
+            // is the rest of the list. Only the three kinds that survive in
+            // the libsingularity pin are rendered; SensorKind.NPU /
+            // SensorKind.VPU / SensorKind.MEMORY / etc. were added in the
+            // rewritten-out aa7980b commit and are not part of this build.
+            int hottest = -1;
+            SensorKind hottest_kind = SensorKind.SYSTEM;
+            if (monitor.cpu_millidegrees > hottest) {
+                hottest = monitor.cpu_millidegrees;
+                hottest_kind = SensorKind.CPU;
+            }
+            if (monitor.gpu_millidegrees > hottest) {
+                hottest = monitor.gpu_millidegrees;
+                hottest_kind = SensorKind.GPU;
+            }
+            foreach (var reading in monitor.readings()) {
+                if (reading.kind == SensorKind.CPU) continue;
+                if (reading.kind == SensorKind.GPU) continue;
+                if (reading.millidegrees > hottest) {
+                    hottest = reading.millidegrees;
+                    hottest_kind = reading.kind;
+                }
+            }
+
+            if (hottest < 0) {
+                sensors_label.label = "--";
+                sensors_label.remove_css_class("error");
+                sensors_label.remove_css_class("warning");
+                sensors_label.remove_css_class("dim-label");
+                return;
+            }
+
+            SensorSeverity severity = severity_for_millidegrees(hottest);
+            string prefix;
+            switch (hottest_kind) {
+                case SensorKind.CPU: prefix = "CPU"; break;
+                case SensorKind.GPU: prefix = "GPU"; break;
+                default:             prefix = "SYS"; break;
+            }
+            sensors_label.label = "%s %s".printf(prefix, format_celsius(hottest));
+
+            sensors_label.remove_css_class("error");
+            sensors_label.remove_css_class("warning");
+            sensors_label.remove_css_class("dim-label");
+            string? css = severity_css(severity);
+            if (css != null) sensors_label.add_css_class(css);
+
+            sensors_btn.tooltip_text = "%s: %s".printf(
+                (hottest_kind == SensorKind.CPU) ? "Hottest CPU sensor"
+                : (hottest_kind == SensorKind.GPU) ? "Hottest GPU sensor"
+                : "Hottest system sensor",
+                format_celsius(hottest));
+        }
+
+        private void rebuild_sensor_details() {
+            if (sensors_detail_box == null) return;
+            Box detail_box = sensors_detail_box;
+
+            // Clear out the previous render -- the popover is rebuilt on
+            // every open so a sensor that disappeared between two opens does
+            // not leave a stale row behind.
+            Gtk.Widget? child = detail_box.get_first_child();
+            while (child != null) {
+                detail_box.remove(child);
+                child = detail_box.get_first_child();
+            }
+
+            var monitor = SystemMonitor.get_default().sensors;
+            if (!monitor.available) {
+                var unavailable = new Label(_("No temperature sensors readable on this machine."));
+                unavailable.halign = Align.START;
+                unavailable.wrap = true;
+                unavailable.max_width_chars = 32;
+                unavailable.add_css_class("dim-label");
+                detail_box.append(unavailable);
+                return;
+            }
+
+            // CPU section -- average the per-policy readings so the chip
+            // stays compact on a homogeneous desktop and still meaningful
+            // on Sky1, where the four CPU zones have meaningfully
+            // different temperatures.
+            SensorReading[] cpu_temps = {};
+            SensorReading[] gpu_temps = {};
+            SensorReading[] system_temps = {};
+            foreach (var reading in monitor.readings()) {
+                switch (reading.kind) {
+                    case SensorKind.CPU:    cpu_temps += reading; break;
+                    case SensorKind.GPU:    gpu_temps += reading; break;
+                    default:                system_temps += reading; break;
+                }
+            }
+            add_sensor_group(detail_box, _("CPU"), cpu_temps);
+            add_sensor_group(detail_box, _("GPU"), gpu_temps);
+            if (system_temps.length > 0) {
+                add_sensor_group(detail_box, _("System"), system_temps);
+            }
+
+            // Clocks -- current per-policy speeds, highest first. No max /
+            // current comparison because the surviving API does not expose
+            // per-policy max_khz; just show the current speed so the user
+            // can tell at a glance whether a CPU policy is parked.
+            int[] clocks = monitor.clocks_khz();
+            if (clocks.length > 0 && monitor.cpu_khz > 0) {
+                detail_box.append(make_section_heading(_("CPU clocks")));
+                foreach (int khz in clocks) {
+                    add_sensor_row(detail_box, format_clock_khz(khz),
+                                    SensorSeverity.NORMAL);
+                }
+            }
+        }
+
+        private static Widget make_section_heading(string title) {
+            var heading = new Label(title);
+            heading.add_css_class("heading");
+            heading.halign = Align.START;
+            heading.margin_top = 4;
+            return heading;
+        }
+
+        private static void add_sensor_group(Box detail_box, string heading,
+                                             SensorReading[] readings) {
+            if (readings.length == 0) return;
+
+            // Hottest first so the most interesting row is closest to the
+            // top of the popover.
+            SensorReading[] sorted = {};
+            foreach (var r in readings) sorted += r;
+            for (uint i = 0; i < sorted.length; i++) {
+                for (uint j = i + 1; j < sorted.length; j++) {
+                    if (sorted[j].millidegrees > sorted[i].millidegrees) {
+                        var tmp = sorted[i];
+                        sorted[i] = sorted[j];
+                        sorted[j] = tmp;
+                    }
+                }
+            }
+
+            int64 sum = 0;
+            foreach (var r in sorted) sum += r.millidegrees;
+
+            detail_box.append(make_section_heading(heading));
+            int avg = (int) (sum / sorted.length);
+            add_sensor_row(detail_box, _("avg"), avg, severity_for_millidegrees(avg));
+            foreach (var r in sorted) {
+                add_sensor_row(detail_box, r.label,
+                                r.millidegrees,
+                                severity_for_millidegrees(r.millidegrees));
+            }
+        }
+
+        private static void add_sensor_row(Box detail_box, string name,
+                                           int millidegrees,
+                                           SensorSeverity severity = SensorSeverity.NORMAL) {
+            var row = new Box(Orientation.HORIZONTAL, 12);
+            var name_label = new Label(name);
+            name_label.halign = Align.START;
+            name_label.hexpand = true;
+            name_label.ellipsize = Pango.EllipsizeMode.END;
+            name_label.max_width_chars = 24;
+            name_label.tooltip_text = name;
+            row.append(name_label);
+
+            var value_label = new Label(format_celsius(millidegrees));
+            value_label.halign = Align.END;
+            string? css = severity_css(severity);
+            if (css != null) value_label.add_css_class(css);
+            row.append(value_label);
+            detail_box.append(row);
         }
     }
 }
