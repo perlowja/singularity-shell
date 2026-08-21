@@ -34,6 +34,15 @@ namespace Singularity {
     [CCode (cname = "singularity_wayland_activate_window", cheader_filename = "wayland_integration.h")]
     public void wayland_activate_window(void* handle);
 
+    [CCode (cname = "singularity_wayland_show_window_pip", cheader_filename = "wayland_integration.h")]
+    public bool wayland_show_window_pip(void* handle);
+
+    [CCode (cname = "singularity_wayland_show_region_pip", cheader_filename = "wayland_integration.h")]
+    public bool wayland_show_region_pip(int x, int y, int width, int height);
+
+    [CCode (cname = "singularity_wayland_close_pip", cheader_filename = "wayland_integration.h")]
+    public void wayland_close_pip();
+
     [CCode (cname = "singularity_wayland_activate_workspace", cheader_filename = "wayland_integration.h")]
     public void wayland_activate_workspace(void* handle);
 

@@ -107,6 +107,19 @@ sp_proto_h = custom_target(
   input: sp_proto_xml,
   command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@']
 )
+pip_proto_xml = 'protocols/singularity-pip-unstable-v1.xml'
+pip_proto_c = custom_target(
+  'singularity-pip-unstable-v1-protocol.c',
+  output: 'singularity-pip-unstable-v1-protocol.c',
+  input: pip_proto_xml,
+  command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@']
+)
+pip_proto_h = custom_target(
+  'singularity-pip-unstable-v1-client-protocol.h',
+  output: 'singularity-pip-unstable-v1-client-protocol.h',
+  input: pip_proto_xml,
+  command: [wayland_scanner, 'client-header', '@INPUT@', '@OUTPUT@']
+)
 gc_proto_xml = 'protocols/wlr-gamma-control-unstable-v1.xml'
 gc_proto_c = custom_target(
   'wlr-gamma-control-unstable-v1-protocol.c',
@@ -376,7 +389,7 @@ subdir('src/lockscreen')
 
 executable('singularity-desktop',
   sources: ['src/core/main.vala'] + singularity_core_sources + [
-    wl_proto_c, wl_proto_h, ws_proto_c, ws_proto_h, sp_proto_c, sp_proto_h, om_proto_c, om_proto_h, st_proto_c, st_proto_h, sg_proto_c, sg_proto_h, gc_proto_c, gc_proto_h, sb_proto_c, sb_proto_h, vk_proto_c, vk_proto_h
+    wl_proto_c, wl_proto_h, ws_proto_c, ws_proto_h, sp_proto_c, sp_proto_h, pip_proto_c, pip_proto_h, om_proto_c, om_proto_h, st_proto_c, st_proto_h, sg_proto_c, sg_proto_h, gc_proto_c, gc_proto_h, sb_proto_c, sb_proto_h, vk_proto_c, vk_proto_h
   ],
   dependencies: dependencies + [libsingularity_dep, system_dep, gee_dep, json_dep, cc.find_library('m'), cc.find_library('crypt'), dependency('xcb')],
   include_directories: [

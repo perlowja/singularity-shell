@@ -35,6 +35,7 @@ static void install_crash_handler(void) {
 #include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 #include "ext-workspace-v1-client-protocol.h"
 #include "singularity-preview-unstable-v1-client-protocol.h"
+#include "singularity-pip-unstable-v1-client-protocol.h"
 #include "wlr-output-management-unstable-v1-client-protocol.h"
 #include "singularity-tiling-unstable-v1-client-protocol.h"
 #include "singularity-gesture-unstable-v1-client-protocol.h"
@@ -55,6 +56,7 @@ struct SingularityWaylandContext {
     struct ext_workspace_manager_v1 *workspace_manager;
     struct ext_workspace_group_handle_v1 *workspace_group;
     struct zsingularity_preview_manager_v1 *preview_manager;
+    struct zsingularity_pip_manager_v1 *pip_manager;
     struct zwlr_output_manager_v1 *output_manager;
     struct zsingularity_tiling_manager_v1 *tiling_manager;
     struct zsingularity_gesture_manager_v1 *gesture_manager;
@@ -1209,6 +1211,37 @@ static const struct zsingularity_gesture_manager_v1_listener gesture_listener = 
     .end = gesture_handle_end,
 };
 
+static void pip_handle_shown(void *data,
+        struct zsingularity_pip_manager_v1 *manager) {
+    (void)data;
+    (void)manager;
+    if (wl_debug()) g_message("[PiP] compositor view ready");
+}
+
+static void pip_handle_failed(void *data,
+        struct zsingularity_pip_manager_v1 *manager, uint32_t reason) {
+    (void)data;
+    (void)manager;
+    const char *message = "render failed";
+    switch (reason) {
+        case ZSINGULARITY_PIP_MANAGER_V1_FAILURE_REASON_INVALID_TOPLEVEL:
+            message = "invalid toplevel";
+            break;
+        case ZSINGULARITY_PIP_MANAGER_V1_FAILURE_REASON_INVALID_REGION:
+            message = "invalid region";
+            break;
+        case ZSINGULARITY_PIP_MANAGER_V1_FAILURE_REASON_NO_WINDOW:
+            message = "no window in the selected region";
+            break;
+    }
+    g_warning("[PiP] %s", message);
+}
+
+static const struct zsingularity_pip_manager_v1_listener pip_listener = {
+    .shown = pip_handle_shown,
+    .failed = pip_handle_failed,
+};
+
 static void registry_handle_global(void *data, struct wl_registry *registry, uint32_t name, const char *interface, uint32_t version) {
     if (strcmp(interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
         if (wl_debug()) g_message("[Wayland] Found Toplevel Manager");
@@ -1223,6 +1256,11 @@ static void registry_handle_global(void *data, struct wl_registry *registry, uin
         ctx.shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
     } else if (strcmp(interface, zsingularity_preview_manager_v1_interface.name) == 0) {
         ctx.preview_manager = wl_registry_bind(registry, name, &zsingularity_preview_manager_v1_interface, 1);
+    } else if (strcmp(interface, zsingularity_pip_manager_v1_interface.name) == 0) {
+        ctx.pip_manager = wl_registry_bind(registry, name,
+            &zsingularity_pip_manager_v1_interface, 1);
+        zsingularity_pip_manager_v1_add_listener(ctx.pip_manager,
+            &pip_listener, NULL);
     } else if (strcmp(interface, zwlr_output_manager_v1_interface.name) == 0) {
         ctx.output_manager = wl_registry_bind(registry, name, &zwlr_output_manager_v1_interface, 4);
         zwlr_output_manager_v1_add_listener(ctx.output_manager, &output_manager_listener, NULL);
@@ -1348,6 +1386,33 @@ void singularity_wayland_activate_window(void *handle) {
     }
     struct zwlr_foreign_toplevel_handle_v1 *toplevel = (struct zwlr_foreign_toplevel_handle_v1 *)handle;
     zwlr_foreign_toplevel_handle_v1_activate(toplevel, ctx.seat);
+    wl_display_flush(ctx.display);
+}
+
+int singularity_wayland_show_window_pip(void *handle) {
+    if (!ctx.pip_manager || !ctx.valid_handles ||
+            !g_hash_table_contains(ctx.valid_handles, handle)) {
+        return 0;
+    }
+    zsingularity_pip_manager_v1_show_toplevel(ctx.pip_manager,
+        (struct zwlr_foreign_toplevel_handle_v1 *)handle);
+    wl_display_flush(ctx.display);
+    return 1;
+}
+
+int singularity_wayland_show_region_pip(int x, int y, int width, int height) {
+    if (!ctx.pip_manager || width <= 0 || height <= 0) {
+        return 0;
+    }
+    zsingularity_pip_manager_v1_show_region(ctx.pip_manager,
+        x, y, width, height);
+    wl_display_flush(ctx.display);
+    return 1;
+}
+
+void singularity_wayland_close_pip(void) {
+    if (!ctx.pip_manager) return;
+    zsingularity_pip_manager_v1_close(ctx.pip_manager);
     wl_display_flush(ctx.display);
 }
 void singularity_wayland_activate_workspace(void *handle) {

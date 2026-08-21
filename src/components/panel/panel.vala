@@ -388,6 +388,25 @@ namespace Singularity {
             layout_items["tiling-position"] = tiling_position;
             var tiling = TilingManager.get_default();
             if (tiling != null) {
+                var tiling_scroll = new EventControllerScroll(
+                    EventControllerScrollFlags.BOTH_AXES);
+                double tiling_scroll_delta = 0;
+                tiling_scroll.scroll_begin.connect(() => {
+                    tiling_scroll_delta = 0;
+                });
+                tiling_scroll.scroll.connect((dx, dy) => {
+                    double delta = Math.fabs(dx) > Math.fabs(dy) ? dx : dy;
+                    tiling_scroll_delta += delta;
+                    if (Math.fabs(tiling_scroll_delta) < 1.0) return true;
+                    int direction = tiling_scroll_delta > 0 ? 1 : -1;
+                    tiling_scroll_delta = 0;
+                    tiling.scroll_on_monitor(gdk_monitor, direction);
+                    return true;
+                });
+                tiling_scroll.scroll_end.connect(() => {
+                    tiling_scroll_delta = 0;
+                });
+                tiling_position.add_controller(tiling_scroll);
                 tiling.scrolling_position_changed.connect((monitor, position,
                         visible_fraction, active) => {
                     if (!active && (monitor == null

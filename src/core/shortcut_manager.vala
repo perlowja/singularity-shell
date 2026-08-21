@@ -27,6 +27,7 @@ namespace Singularity {
         private GLib.FileMonitor? capslock_monitor = null;
         private GLib.FileMonitor? numlock_monitor = null;
         private ulong screenshot_handler_id = 0;
+        private GLib.Subprocess? pip_region_picker = null;
         public signal void shortcut_changed(string action_name, string new_accelerator);
         public signal void run_command_triggered();
         public signal void retile_triggered();
@@ -66,6 +67,8 @@ namespace Singularity {
             register_shortcut("Screenshot", "Open screenshot tool", "Print", "screenshot_tool");
             register_shortcut("Screenshot Region", "Select region to screenshot", "<Shift>Print", "screenshot_region");
             register_shortcut("Screenshot Window", "Screenshot active window", "<Alt>Print", "screenshot_window");
+            register_shortcut("Picture in Picture Region", "Show a selected window region in picture in picture", "<Super><Shift>p", "pip_region");
+            register_shortcut("Picture in Picture Window", "Show the focused window in picture in picture", "<Super><Alt>p", "pip_window");
             register_shortcut("Lock Screen", "Lock the screen", "<Super>l", "lock_screen");
             load_custom_shortcuts();
             Idle.add(() => {
@@ -543,6 +546,8 @@ namespace Singularity {
                     case "screenshot_tool":     screenshot_tool_action(); break;
                     case "screenshot_region":   screenshot_region_action(); break;
                     case "screenshot_window":   screenshot_window_action(); break;
+                    case "pip_region": pip_region_action(); break;
+                    case "pip_window": pip_window_action(); break;
                     case "snap_left":  snap_focused(TilingLayout.SNAP_LEFT); break;
                     case "snap_right": snap_focused(TilingLayout.SNAP_RIGHT); break;
                     case "snap_up":    snap_focused(TilingLayout.SNAP_TOP); break;
@@ -807,6 +812,68 @@ namespace Singularity {
             } else {
                 _screenshot_fullscreen();
             }
+        }
+
+        private void pip_window_action() {
+            var handle = AppSystem.get_default().get_focused_window_handle();
+            if (handle == null || !Singularity.wayland_show_window_pip(handle)) {
+                warning("[PiP] no focused window or compositor support");
+            }
+        }
+
+        private void pip_region_action() {
+            if (pip_region_picker != null) return;
+            string helper = AppSystem.resolve_companion_bin("singularity-region-picker");
+            GLib.Subprocess picker;
+            try {
+                picker = new GLib.Subprocess(
+                    GLib.SubprocessFlags.STDOUT_PIPE |
+                    GLib.SubprocessFlags.STDERR_SILENCE,
+                    helper);
+            } catch (Error e) {
+                warning("[PiP] failed to start region picker: %s", e.message);
+                return;
+            }
+            pip_region_picker = picker;
+
+            picker.communicate_utf8_async.begin(null, null, (obj, res) => {
+                string? output = null;
+                try {
+                    picker.communicate_utf8_async.end(res, out output, null);
+                } catch (Error e) {
+                    pip_region_picker = null;
+                    return;
+                }
+                pip_region_picker = null;
+                if (!picker.get_if_exited() || picker.get_exit_status() != 0 ||
+                        output == null) {
+                    return;
+                }
+                int x, y, width, height;
+                if (!parse_region_geometry(output, out x, out y,
+                        out width, out height)) {
+                    warning("[PiP] invalid region picker output: %s", output.strip());
+                    return;
+                }
+                if (!Singularity.wayland_show_region_pip(x, y, width, height)) {
+                    warning("[PiP] compositor protocol unavailable");
+                }
+            });
+        }
+
+        private bool parse_region_geometry(string value, out int x, out int y,
+                out int width, out int height) {
+            x = y = width = height = 0;
+            string[] fields = value.strip().split(" ");
+            if (fields.length != 2) return false;
+            string[] position = fields[0].split(",");
+            string[] size = fields[1].split("x");
+            if (position.length != 2 || size.length != 2) return false;
+            return int.try_parse(position[0], out x)
+                && int.try_parse(position[1], out y)
+                && int.try_parse(size[0], out width)
+                && int.try_parse(size[1], out height)
+                && width > 0 && height > 0;
         }
 
         private void _screenshot_window(void* handle) {

@@ -589,6 +589,59 @@ namespace Singularity {
             return int.max(1, group.area.width);
         }
 
+        private ScrollingWorkarea? output_area_for_monitor(
+                ScrollingGroup group, Gdk.Monitor? monitor) {
+            if (monitor == null) return null;
+            var geometry = monitor.get_geometry();
+            ScrollingWorkarea? target = null;
+            int64 best_overlap = 0;
+            foreach (var area in group.output_areas) {
+                int overlap_width = int.max(0,
+                    int.min(area.x + area.width,
+                        geometry.x + geometry.width)
+                    - int.max(area.x, geometry.x));
+                int overlap_height = int.max(0,
+                    int.min(area.y + area.height,
+                        geometry.y + geometry.height)
+                    - int.max(area.y, geometry.y));
+                int64 overlap = (int64)overlap_width * overlap_height;
+                if (overlap > best_overlap) {
+                    target = area;
+                    best_overlap = overlap;
+                }
+            }
+            return target;
+        }
+
+        private Gdk.Monitor? monitor_for_output_area(
+                ScrollingGroup group, ScrollingWorkarea area) {
+            var display = Gdk.Display.get_default();
+            if (display == null) return null;
+            var monitors = display.get_monitors();
+            Gdk.Monitor? target = null;
+            int64 best_overlap = 0;
+            for (uint i = 0; i < monitors.get_n_items(); i++) {
+                var monitor = monitors.get_item(i) as Gdk.Monitor;
+                if (monitor == null) continue;
+                if (output_area_for_monitor(group, monitor) != area) continue;
+                var geometry = monitor.get_geometry();
+                int overlap_width = int.max(0,
+                    int.min(area.x + area.width,
+                        geometry.x + geometry.width)
+                    - int.max(area.x, geometry.x));
+                int overlap_height = int.max(0,
+                    int.min(area.y + area.height,
+                        geometry.y + geometry.height)
+                    - int.max(area.y, geometry.y));
+                int64 overlap = (int64)overlap_width * overlap_height;
+                if (overlap > best_overlap) {
+                    target = monitor;
+                    best_overlap = overlap;
+                }
+            }
+            return target;
+        }
+
         private void offset_limits(ScrollingGroup group,
                                    out double minimum, out double maximum) {
             if (group.columns.size == 0) {
@@ -740,17 +793,35 @@ namespace Singularity {
         }
 
         private void emit_position(ScrollingGroup group) {
+            double content = content_width(group);
+            bool active = group.columns.size > 0 && scrolling_active();
+            bool emitted = false;
+            foreach (var area in group.output_areas) {
+                var monitor = monitor_for_output_area(group, area);
+                if (monitor == null) continue;
+                double viewport = int.max(1, area.width);
+                double range = double.max(0, content - viewport);
+                double start = group.offset + area.x - group.area.x;
+                double position = range > 0.5 ? start / range : 0.5;
+                position = double.max(0, double.min(1, position));
+                double fraction = content > 0
+                    ? double.min(1, viewport / content) : 1;
+                scrolling_position_changed(monitor, position, fraction,
+                    active);
+                emitted = true;
+            }
+            if (emitted) return;
+
             double minimum, maximum;
             offset_limits(group, out minimum, out maximum);
             double range = maximum - minimum;
             double position = range > 0.5
                 ? (group.offset - minimum) / range : 0.5;
             position = double.max(0, double.min(1, position));
-            double content = content_width(group);
             double fraction = content > 0
                 ? double.min(1, viewport_width(group) / content) : 1;
             scrolling_position_changed(group.monitor, position, fraction,
-                group.columns.size > 0 && scrolling_active());
+                active);
         }
 
         private ScrollingRect rect_for(ScrollingGroup group,
@@ -959,7 +1030,10 @@ namespace Singularity {
                 scrolling_groups.unset(stale_key);
 
             sync_group(group, candidates);
-            if (group.columns.size == 0) return;
+            if (group.columns.size == 0) {
+                emit_position(group);
+                return;
+            }
             if (group == gesture_group) {
                 cancel_offset_animation(group);
                 group.offset = clamp_offset(group, group.offset);
@@ -1113,6 +1187,51 @@ namespace Singularity {
                 }
             }
             return nearest;
+        }
+
+        private ScrollingColumn? nearest_column_on_output(
+                ScrollingGroup group, ScrollingWorkarea area) {
+            if (group.columns.size == 0) return null;
+            double output_center = area.x + area.width / 2.0;
+            ScrollingColumn nearest = group.columns[0];
+            double best = double.MAX;
+            foreach (var column in group.columns) {
+                double center = group.area.x + logical_x(group, column)
+                    + width_for(group, column) / 2.0 - group.offset;
+                double distance = Math.fabs(center - output_center);
+                if (distance < best) {
+                    best = distance;
+                    nearest = column;
+                }
+            }
+            return nearest;
+        }
+
+        public bool scroll_on_monitor(Gdk.Monitor? monitor, int direction) {
+            if (!scrolling_active() || direction == 0) return false;
+            apply_layout();
+            var group = gesture_group_fallback();
+            if (group == null) return false;
+            var area = output_area_for_monitor(group, monitor);
+            if (area == null) return false;
+            var current = nearest_column_on_output(group, area);
+            if (current == null) return false;
+            int index = group.columns.index_of(current);
+            int target_index = int.max(0, int.min(group.columns.size - 1,
+                index + (direction > 0 ? 1 : -1)));
+            if (target_index == index) return true;
+            var target = group.columns[target_index];
+            var win = target.windows[0];
+            group.focused = win;
+            last_scrolling_focus = win;
+            double target_offset = group.area.x + logical_x(group, target)
+                + width_for(group, target) / 2.0
+                - (area.x + area.width / 2.0);
+            Singularity.wayland_activate_window(win.handle);
+            if (animate_offset(group, target_offset)) return true;
+            group.offset = clamp_offset(group, target_offset);
+            layout_group(group);
+            return true;
         }
 
         private AppSystem.Window? nearest_window(ScrollingGroup group) {
