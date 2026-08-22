@@ -156,28 +156,6 @@ namespace Singularity {
     public void wayland_set_window_output_changed_callback(WindowOutputChangedCallback cb, void* data);
 
     [CCode (has_target = false)]
-    public delegate void WindowGroupChangedCallback(void* handle, void* data);
-    [CCode (cname = "singularity_wayland_set_window_group_changed_callback", cheader_filename = "wayland_integration.h")]
-    public void wayland_set_window_group_changed_callback(WindowGroupChangedCallback cb, void* data);
-
-    [CCode (cname = "singularity_wayland_get_window_group", cheader_filename = "wayland_integration.h")]
-    public bool wayland_get_window_group(void* toplevel_handle,
-        out uint group_id, out uint active, out uint index,
-        out uint members, out uint spread);
-
-    [CCode (cname = "singularity_wayland_group_join", cheader_filename = "wayland_integration.h")]
-    public void wayland_group_join(void* toplevel_handle, void* target_handle);
-
-    [CCode (cname = "singularity_wayland_group_leave", cheader_filename = "wayland_integration.h")]
-    public void wayland_group_leave(void* toplevel_handle);
-
-    [CCode (cname = "singularity_wayland_group_activate", cheader_filename = "wayland_integration.h")]
-    public void wayland_group_activate(void* toplevel_handle);
-
-    [CCode (cname = "singularity_wayland_group_set_spread", cheader_filename = "wayland_integration.h")]
-    public void wayland_group_set_spread(void* toplevel_handle, bool spread);
-
-    [CCode (has_target = false)]
     public delegate void DesktopGestureCallback(uint32 phase, uint32 fingers,
         uint32 direction,
         double dx, double dy, int cancelled, int committed, void* data);

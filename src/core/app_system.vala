@@ -25,7 +25,6 @@ namespace Singularity {
         public signal void apps_changed();
         public signal void running_apps_changed();
         public signal void window_output_changed(void* handle);
-        public signal void window_group_changed(void* handle);
         public signal void app_focused(string? app_id);
         public signal void window_focused(void* handle);
         public signal void app_opened(void* handle, string app_id);
@@ -119,11 +118,6 @@ namespace Singularity {
             public uint snap_type = 0; // last snap type applied by TilingManager (SNAP_* constants)
             public bool scrolling_tiled = false;
             public bool scrolling_floating = false;
-            public uint group_id = 0;
-            public uint group_index = 0;
-            public uint group_members = 0;
-            public bool group_active = false;
-            public bool group_spread = false;
 
             public Window(void* handle, string app_id) {
                 this.handle = handle;
@@ -216,7 +210,6 @@ namespace Singularity {
                 this
             );
             Singularity.wayland_set_window_output_changed_callback(on_window_output_changed, this);
-            Singularity.wayland_set_window_group_changed_callback(on_window_group_changed, this);
             update_workspaces_config();
         }
 
@@ -466,46 +459,6 @@ namespace Singularity {
         private static void on_app_closed(void* handle, void* data) {
             var self = (AppSystem)data;
             self.remove_running_app(handle);
-        }
-
-        private static void on_window_group_changed(void* handle, void* data) {
-            var self = (AppSystem)data;
-            Idle.add(() => {
-                self.refresh_window_group(handle);
-                self.window_group_changed(handle);
-                self.running_apps_changed();
-                return Source.REMOVE;
-            });
-        }
-
-        private void refresh_window_group(void* handle) {
-            var win = get_window_by_handle(handle);
-            if (win == null) return;
-            uint id, active, index, members, spread;
-            Singularity.wayland_get_window_group(handle, out id, out active,
-                out index, out members, out spread);
-            win.group_id = id;
-            win.group_index = index;
-            win.group_members = members;
-            win.group_active = active != 0;
-            win.group_spread = spread != 0;
-        }
-
-        public void group_window_with(Window win, Window target) {
-            if (win == target) return;
-            Singularity.wayland_group_join(win.handle, target.handle);
-        }
-
-        public void ungroup_window(Window win) {
-            Singularity.wayland_group_leave(win.handle);
-        }
-
-        public void activate_group_member(Window win) {
-            Singularity.wayland_group_activate(win.handle);
-        }
-
-        public void set_group_spread(Window win, bool spread) {
-            Singularity.wayland_group_set_spread(win.handle, spread);
         }
 
         private static void on_window_output_changed(void* handle, void* data) {
