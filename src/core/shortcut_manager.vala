@@ -3,18 +3,23 @@ using GLib;
 namespace Singularity {
 
     public class Shortcut : Object {
+        public string id;
         public string name;
         public string description;
         public string default_accelerator;
         public string accelerator;
         public string action_name;
+        public string? secondary_accelerator;
 
-        public Shortcut(string name, string desc, string default_accel, string action) {
+        public Shortcut(string name, string desc, string default_accel, string action,
+                        string? id = null, string? secondary_accel = null) {
+            this.id = id ?? action;
             this.name = name;
             this.description = desc;
             this.default_accelerator = default_accel;
             this.accelerator = default_accel;
             this.action_name = action;
+            this.secondary_accelerator = secondary_accel;
         }
     }
     [DBus (name = "dev.sinty.desktop.Shortcuts")]
@@ -44,25 +49,25 @@ namespace Singularity {
             if (schema_source.lookup("org.gnome.desktop.wm.preferences", true) != null) {
                 wm_settings = new GLib.Settings("org.gnome.desktop.wm.preferences");
             }
-            register_shortcut("Volume Up", "Increase volume", "", "volume_up");
-            register_shortcut("Volume Down", "Decrease volume", "", "volume_down");
-            register_shortcut("Mute", "Toggle mute", "<Super>m", "volume_mute");
-            register_shortcut("Mute Microphone", "Toggle microphone mute", "", "mic_mute");
-            register_shortcut("Brightness Up", "Increase brightness", "", "brightness_up");
-            register_shortcut("Brightness Down", "Decrease brightness", "", "brightness_down");
+            register_shortcut("Volume Up", "Increase volume", "", "volume_up", null, "XF86AudioRaiseVolume");
+            register_shortcut("Volume Down", "Decrease volume", "", "volume_down", null, "XF86AudioLowerVolume");
+            register_shortcut("Mute", "Toggle mute", "<Super>m", "volume_mute", null, "XF86AudioMute");
+            register_shortcut("Mute Microphone", "Toggle microphone mute", "", "mic_mute", null, "XF86AudioMicMute");
+            register_shortcut("Brightness Up", "Increase brightness", "", "brightness_up", null, "XF86MonBrightnessUp");
+            register_shortcut("Brightness Down", "Decrease brightness", "", "brightness_down", null, "XF86MonBrightnessDown");
             register_shortcut("Snap Window Left", "Snap the focused window to the left half", "<Super>Left", "snap_left");
             register_shortcut("Snap Window Right", "Snap the focused window to the right half", "<Super>Right", "snap_right");
             register_shortcut("Snap Window Up", "Snap the focused window to the top half", "<Super>Up", "snap_up");
             register_shortcut("Snap Window Down", "Snap the focused window to the bottom half", "<Super>Down", "snap_down");
             register_shortcut("Keyboard Light Up", "Increase keyboard backlight", "XF86KbdBrightnessUp", "kbd_brightness_up");
             register_shortcut("Keyboard Light Down", "Decrease keyboard backlight", "XF86KbdBrightnessDown", "kbd_brightness_down");
-            register_shortcut("Launcher", "Open application launcher", "<Super>space", "toggle_launcher");
+            register_shortcut("Launcher", "Open application launcher", "<Super>space", "toggle_launcher", null, "Super_L");
             register_shortcut("Workspaces", "Show workspace overview", "<Super>w", "toggle_workspace_overview");
             register_shortcut("Desktop", "Reveal the desktop", "<Super>d", "toggle_desktop_reveal");
             register_shortcut("Terminal", "Open terminal", "<Super>Return", "spawn_terminal");
             register_shortcut("Emoji Picker", "Open the emoji picker", "<Super>period", "toggle_emoji_picker");
             register_shortcut("Command Palette", "Open the command palette", "<Super>Tab", "run_command");
-            register_shortcut("Command Palette (alt)", "Open the command palette", "<Shift><Alt>F2", "run_command");
+            register_shortcut("Command Palette (alt)", "Open the command palette", "<Shift><Alt>F2", "run_command", "run_command_alt");
             register_shortcut("Re-tile Windows", "Re-arrange windows in grid", "<Super>r", "retile_windows");
             register_shortcut("Screenshot", "Open screenshot tool", "Print", "screenshot_tool");
             register_shortcut("Screenshot Region", "Select region to screenshot", "<Shift>Print", "screenshot_region");
@@ -169,8 +174,9 @@ namespace Singularity {
                 "Num Lock On", "Num Lock Off", ref numlock_monitor);
         }
 
-        private void register_shortcut(string name, string desc, string accel, string action) {
-            var s = new Shortcut(name, desc, accel, action);
+        private void register_shortcut(string name, string desc, string accel, string action,
+                                       string? id = null, string? secondary_accel = null) {
+            var s = new Shortcut(name, desc, accel, action, id, secondary_accel);
             shortcuts.append(s);
         }
 
@@ -481,7 +487,7 @@ namespace Singularity {
                 }
                 while (iter.next("{ss}", out action, out accel)) {
                     foreach (var s in shortcuts) {
-                        if (s.action_name == action) {
+                        if (s.id == action) {
                             if (s.accelerator != accel) {
                                 s.accelerator = accel;
                                 shortcut_changed(s.action_name, s.accelerator);
@@ -493,9 +499,9 @@ namespace Singularity {
             }
         }
 
-        public void update_shortcut(string action_name, string new_accelerator) {
+        public void update_shortcut(string shortcut_id, string new_accelerator) {
             foreach (var s in shortcuts) {
-                if (s.action_name == action_name) {
+                if (s.id == shortcut_id) {
                     s.accelerator = new_accelerator;
                     shortcut_changed(s.action_name, s.accelerator);
                     break;
@@ -504,17 +510,17 @@ namespace Singularity {
             var builder = new VariantBuilder(new VariantType("a{ss}"));
             foreach (var s in shortcuts) {
                 if (s.accelerator != s.default_accelerator) {
-                    builder.add("{ss}", s.action_name, s.accelerator);
+                    builder.add("{ss}", s.id, s.accelerator);
                 }
             }
             settings.set_value("custom-shortcuts", builder.end());
             write_labwc_rc_xml();
         }
 
-        public void reset_shortcut(string action_name) {
+        public void reset_shortcut(string shortcut_id) {
             foreach (var s in shortcuts) {
-                if (s.action_name == action_name) {
-                    update_shortcut(action_name, s.default_accelerator);
+                if (s.id == shortcut_id) {
+                    update_shortcut(shortcut_id, s.default_accelerator);
                     break;
                 }
             }
