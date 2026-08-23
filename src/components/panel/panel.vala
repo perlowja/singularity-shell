@@ -260,6 +260,8 @@ namespace Singularity {
         private bool _hidden_for_fullscreen = false;
         private ulong _sig_app_focused = 0;
         private ulong _sig_menu_model_changed = 0;
+        private ulong _sig_background_effect = 0;
+        private ulong _sig_blur_strength = 0;
         private bool _last_strip_light = false;
         private double _last_strip_lum = -1.0;
         private double _last_frac = -1.0;
@@ -321,6 +323,12 @@ namespace Singularity {
             main_box.overflow = Overflow.VISIBLE;
             overlay.set_child(main_box);
             if (is_primary && !is_greeter_mode) main_box.opacity = 0;
+
+            _sig_background_effect = _settings.changed["background-effect"].connect(
+                update_background_effect);
+            _sig_blur_strength = _settings.changed["blur-strength"].connect(
+                update_background_effect);
+            map.connect_after(update_background_effect);
 
             _corner_tl = create_corner_hint("corner-hint-tl");
             _corner_tl.can_target = false;
@@ -795,6 +803,12 @@ namespace Singularity {
         }
 
         private static Gtk.CssProvider? _flat_provider = null;
+
+        private void update_background_effect() {
+            Singularity.Style.BackgroundEffect.apply(this,
+                Singularity.Style.BackgroundEffect.read(_settings));
+        }
+
         private static void apply_flat_opacity(GLib.Settings s) {
             var disp = Gdk.Display.get_default();
             if (disp == null) return;
@@ -1089,6 +1103,14 @@ namespace Singularity {
             var as = AppSystem.get_default();
             if (_sig_app_focused != 0) { GLib.SignalHandler.disconnect(as, _sig_app_focused); _sig_app_focused = 0; }
             if (_sig_menu_model_changed != 0) { GLib.SignalHandler.disconnect(as, _sig_menu_model_changed); _sig_menu_model_changed = 0; }
+            if (_sig_background_effect != 0) {
+                _settings.disconnect(_sig_background_effect);
+                _sig_background_effect = 0;
+            }
+            if (_sig_blur_strength != 0) {
+                _settings.disconnect(_sig_blur_strength);
+                _sig_blur_strength = 0;
+            }
             if (_sig_clock != 0) {
                 GLib.SignalHandler.disconnect(SharedClock.get_default(), _sig_clock);
                 _sig_clock = 0;

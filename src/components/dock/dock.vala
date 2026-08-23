@@ -82,6 +82,8 @@ namespace Singularity {
         private ulong _sig_workspaces_changed = 0;
         private ulong _sig_any_fullscreen = 0;
         private ulong _sig_app_closed = 0;
+        private ulong _sig_background_effect = 0;
+        private ulong _sig_blur_strength = 0;
         private Widget _corner_bl;
         private Widget _corner_br;
 
@@ -219,6 +221,12 @@ namespace Singularity {
             update_layout_viewports();
 
             add_css_class("dock-window");
+
+            _sig_background_effect = _settings.changed["background-effect"].connect(
+                update_background_effect);
+            _sig_blur_strength = _settings.changed["blur-strength"].connect(
+                update_background_effect);
+            map.connect_after(update_background_effect);
 
             _sig_config_changed = app_system.config_changed.connect((key) => {
                 if (key == "pinned-apps" || key == "dock-extended-mode" || key == "dock-icon-size") {
@@ -391,7 +399,11 @@ namespace Singularity {
             _sig_clock = SharedClock.get_default().minute_changed.connect(() => update_clock());
             setup_dnd();
 
-            /* Request compositor-level background blur (frosted glass) */
+        }
+
+        private void update_background_effect() {
+            Singularity.Style.BackgroundEffect.apply(this,
+                Singularity.Style.BackgroundEffect.read(_settings));
         }
 
         private void update_settings() {
@@ -2931,6 +2943,14 @@ namespace Singularity {
             if (_sig_workspaces_changed != 0)    { GLib.SignalHandler.disconnect(as, _sig_workspaces_changed); _sig_workspaces_changed = 0; }
             if (_sig_any_fullscreen != 0)        { GLib.SignalHandler.disconnect(as, _sig_any_fullscreen); _sig_any_fullscreen = 0; }
             if (_sig_app_closed != 0)            { GLib.SignalHandler.disconnect(as, _sig_app_closed); _sig_app_closed = 0; }
+            if (_sig_background_effect != 0) {
+                _settings.disconnect(_sig_background_effect);
+                _sig_background_effect = 0;
+            }
+            if (_sig_blur_strength != 0) {
+                _settings.disconnect(_sig_blur_strength);
+                _sig_blur_strength = 0;
+            }
             if (_sig_clock != 0) {
                 GLib.SignalHandler.disconnect(SharedClock.get_default(), _sig_clock);
                 _sig_clock = 0;

@@ -346,6 +346,71 @@ namespace Singularity {
             });
             app_group.add_row(theme_row);
 
+            var effect_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            effect_options.add(new Singularity.Core.AppSettingOption() {
+                id = "disabled", label = _("Disabled")
+            });
+            effect_options.add(new Singularity.Core.AppSettingOption() {
+                id = "glass", label = _("Glass")
+            });
+            effect_options.add(new Singularity.Core.AppSettingOption() {
+                id = "blur", label = _("Classic Blur")
+            });
+            var effect_row = new SelectionRow.with_options(
+                _("Background Effect"), effect_options,
+                settings.get_string("background-effect"));
+            effect_row.subtitle = _("Material behind transparent windows and desktop surfaces");
+            effect_row.selected.connect((mode) => {
+                if (settings.get_string("background-effect") != mode)
+                    settings.set_string("background-effect", mode);
+            });
+            app_group.add_row(effect_row);
+
+            var transparency_row = new ActionRow(
+                _("Window Transparency"),
+                _("Amount of wallpaper visible through app windows"));
+            transparency_row.activatable = false;
+            var transparency_scale = new Scale.with_range(
+                Orientation.HORIZONTAL, 0, 90, 1);
+            transparency_scale.width_request = 170;
+            transparency_scale.draw_value = true;
+            transparency_scale.digits = 0;
+            transparency_scale.value_pos = PositionType.RIGHT;
+            transparency_scale.set_value(settings.get_int("window-transparency"));
+            transparency_scale.value_changed.connect(() => {
+                settings.set_int("window-transparency",
+                    (int) transparency_scale.get_value());
+            });
+            transparency_row.add_suffix(transparency_scale);
+            app_group.add_row(transparency_row);
+
+            var blur_strength_row = new ActionRow(
+                _("Blur Strength"),
+                _("Amount of background blur used by the material"));
+            blur_strength_row.activatable = false;
+            var blur_strength_scale = new Scale.with_range(
+                Orientation.HORIZONTAL, 0, 100, 1);
+            blur_strength_scale.width_request = 170;
+            blur_strength_scale.draw_value = true;
+            blur_strength_scale.digits = 0;
+            blur_strength_scale.value_pos = PositionType.RIGHT;
+            blur_strength_scale.set_value(settings.get_int("blur-strength"));
+            blur_strength_scale.value_changed.connect(() => {
+                settings.set_int("blur-strength",
+                    (int) blur_strength_scale.get_value());
+            });
+            blur_strength_row.add_suffix(blur_strength_scale);
+            app_group.add_row(blur_strength_row);
+
+            bool effect_enabled = settings.get_string("background-effect") != "disabled";
+            transparency_row.visible = effect_enabled;
+            blur_strength_row.visible = effect_enabled;
+            settings.changed["background-effect"].connect(() => {
+                bool enabled = settings.get_string("background-effect") != "disabled";
+                transparency_row.visible = enabled;
+                blur_strength_row.visible = enabled;
+            });
+
             // Adaptive: follow a daily schedule (dark at night, the chosen mode by
             // day). Pointless when the base mode is already Dark.
             var adaptive_row = new SwitchRow(_("Adaptive"),

@@ -11,6 +11,9 @@ namespace Singularity {
         private SettingsView settings_view;
         private GLib.Settings desktop_settings;
         private ScrolledWindow sidebar_scroll;
+        private Box main_box;
+        private ulong _background_effect_handler = 0;
+        private ulong _blur_strength_handler = 0;
         public delegate void FilePickerCallback(File file);
         private uint _file_picker_token = 0;
 
@@ -36,7 +39,7 @@ namespace Singularity {
             // shadow can render outside the bg edges. The card itself is
             // the inner main_box with the .sidebar class.
             add_css_class("sidebar-window");
-            var main_box = new Box(Orientation.VERTICAL, 0);
+            main_box = new Box(Orientation.VERTICAL, 0);
             main_box.add_css_class("sidebar");
             // Pin the inner width so the sidebar stays this size on every page
             // instead of resizing to each page's natural width.
@@ -69,6 +72,12 @@ namespace Singularity {
 
             sidebar_scroll.set_child(main_stack);
             main_box.append(sidebar_scroll);
+
+            _background_effect_handler = desktop_settings.changed["background-effect"].connect(
+                update_background_effect);
+            _blur_strength_handler = desktop_settings.changed["blur-strength"].connect(
+                update_background_effect);
+            map.connect_after(update_background_effect);
 
             system_view = new SystemView();
             system_view.toggle_settings.connect(() => {
@@ -122,6 +131,37 @@ namespace Singularity {
                     });
                 }
             });
+        }
+
+        private void update_background_effect() {
+            var mode = Singularity.Style.BackgroundEffect.read(desktop_settings);
+            if (get_mapped()) {
+                Graphene.Rect bounds;
+                if (main_box.compute_bounds(this, out bounds)) {
+                    Singularity.Style.BackgroundEffect.apply(this, mode,
+                        (int) bounds.origin.x, (int) bounds.origin.y,
+                        (int) bounds.size.width, (int) bounds.size.height);
+                    return;
+                }
+            }
+            Singularity.Style.BackgroundEffect.apply(this, mode);
+        }
+
+        public override void size_allocate(int width, int height, int baseline) {
+            base.size_allocate(width, height, baseline);
+            update_background_effect();
+        }
+
+        protected override void dispose() {
+            if (_background_effect_handler != 0) {
+                desktop_settings.disconnect(_background_effect_handler);
+                _background_effect_handler = 0;
+            }
+            if (_blur_strength_handler != 0) {
+                desktop_settings.disconnect(_blur_strength_handler);
+                _blur_strength_handler = 0;
+            }
+            base.dispose();
         }
 
         private void animated_close() {

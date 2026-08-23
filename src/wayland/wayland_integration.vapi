@@ -177,9 +177,6 @@ namespace Singularity {
     [CCode (cname = "singularity_wayland_list_globals", cheader_filename = "wayland_integration.h")]
     public string wayland_list_globals();
 
-    [CCode (cname = "singularity_request_surface_blur", cheader_filename = "blur_surface.h")]
-    public void request_surface_blur(Gtk.Widget widget, uint32 radius);
-
     [CCode (cname = "singularity_surface_set_input_passthrough", cheader_filename = "blur_surface.h")]
     public void surface_set_input_passthrough(Gtk.Widget widget);
 
