@@ -89,7 +89,15 @@ namespace Singularity {
                 var app = (Gtk.Application) GLib.Application.get_default();
                 var tool = Singularity.ScreenshotTool.get_default(app);
                 if (!tool.ensure_screenshots()) return;
-                tool.present();
+                // prepare_for_invocation() resolves _target_monitor/_target_connector
+                // and sets the layer-shell output -- without it both stay null and
+                // screen-mode capture fails with "no target monitor for screen
+                // capture" the instant this opens, since it defaults to screen mode.
+                // shortcut_manager.vala's screenshot_tool_action() (the Print-key
+                // path) already does this; this entry point never did.
+                var handle = Singularity.AppSystem.get_default().get_focused_window_handle();
+                tool.prepare_for_invocation(handle);
+                tool.open_dialog();
             });
             _edit_button = new Button.from_icon_name("document-edit-symbolic");
             _edit_button.has_frame = false;
