@@ -1,5 +1,9 @@
 # Singularity Shell
 
+> [!IMPORTANT]
+> Report bugs and request features in the
+> [Singularity Desktop tracker](https://github.com/singularityos-lab/singularity-desktop/issues/new/choose).
+
 The desktop shell for the Singularity Desktop Environment: the panel, dock,
 overview, sidebar, notifications, run dialog, app switcher, lock screen, and
 the compositor integration that drives `labwc`.
