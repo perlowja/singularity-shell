@@ -332,6 +332,16 @@ namespace Singularity {
                 main_box.remove_css_class("animating-in");
                 main_box.add_css_class("animating-out");
                 hiding();
+                // A folder overlay is a separate toplevel layer window, so it
+                // does not go away with the launcher. Dismiss it here, next to
+                // hiding() -- not inside the 180ms timer below. Two reasons:
+                // the overlay and the launcher then leave together instead of
+                // the overlay fading alone over the desktop for the 180ms the
+                // launcher already took to close, and the reopen path above
+                // cancels _anim_out_timer when the overview reopens within
+                // that window, which would otherwise skip this dismissal
+                // entirely and leave the overlay stuck open indefinitely.
+                launcher_grid.close_folder_overlays();
                 _anim_out_timer = GLib.Timeout.add(180, () => {
                     _anim_out_timer = 0;
                     main_box.remove_css_class("animating-out");
@@ -437,6 +447,12 @@ namespace Singularity {
         }
 
         private void finish_gesture_hide() {
+            // Same reason as the animated close path, and same fix: dismiss
+            // the overlay before close_layer_window(), not after -- the
+            // overlay is its own toplevel and does not go away with the
+            // launcher, and closing it second left it fading alone over the
+            // desktop once the launcher window was already gone.
+            launcher_grid.close_folder_overlays();
             close_layer_window (this);
             PreviewCache.get_default().clear();
             hidden();
