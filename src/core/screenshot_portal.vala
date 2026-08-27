@@ -23,7 +23,10 @@ namespace Singularity {
         }
 
         public bool is_available() {
-            if (connection == null) return false;
+            if (connection == null) {
+                warning("[ScreenshotPortal] is_available: no session bus connection");
+                return false;
+            }
             try {
                 var res = connection.call_sync(
                     "org.freedesktop.DBus",
@@ -35,8 +38,12 @@ namespace Singularity {
                     DBusCallFlags.NONE, -1, null);
                 bool owned;
                 res.get("(b)", out owned);
+                if (!owned) {
+                    warning("[ScreenshotPortal] is_available: org.freedesktop.portal.Desktop has no owner");
+                }
                 return owned;
             } catch (Error e) {
+                warning("[ScreenshotPortal] is_available: NameHasOwner call failed: %s", e.message);
                 return false;
             }
         }
