@@ -243,7 +243,11 @@ namespace Singularity.SidebarPages {
                 var del_row = new ActionRow(_("Remove User"), _("Permanently delete this account and home folder"), "user-trash-symbolic");
                 del_row.activatable = true;
                 del_row.add_css_class("destructive-action-row");
-                del_row.activated.connect(show_delete_confirm);
+                del_row.activated.connect(() => {
+                    del_row.confirmation_requested(_("Delete Account"), _("Cancel"),
+                        ConfirmationSuggestedAction.CANCEL);
+                });
+                del_row.confirmed.connect(() => do_delete.begin());
                 danger_group.add_row(del_row);
                 add_group(danger_group);
             }
@@ -359,37 +363,6 @@ namespace Singularity.SidebarPages {
             try { yield user.set_locked(locked); } catch (GLib.Error e) {
                 warning("set_locked: %s", e.message);
             }
-        }
-
-        private void show_delete_confirm() {
-            // Replace page content with inline confirmation
-            var confirm_group = new PreferencesGroup(_("Confirm deletion"));
-            var msg = new ActionRow(
-                "Delete %s?".printf(user.user_name),
-                "This will permanently remove the account and all its files.",
-                "dialog-warning-symbolic");
-            confirm_group.add_row(msg);
-
-            var btn_row = new Box(Orientation.HORIZONTAL, 12);
-            btn_row.halign = Align.CENTER;
-            btn_row.margin_top = 8;
-            btn_row.margin_bottom = 8;
-
-            var cancel = new Button.with_label(_("Cancel"));
-            cancel.add_css_class("pill");
-            cancel.clicked.connect(() => view.navigate_to("users"));
-            btn_row.append(cancel);
-
-            var del = new Button.with_label(_("Delete Account"));
-            del.add_css_class("pill");
-            del.add_css_class("destructive-action");
-            del.clicked.connect(() => do_delete.begin());
-            btn_row.append(del);
-
-            var btn_pref_row = new PreferencesRow();
-            btn_pref_row.set_child(btn_row);
-            confirm_group.add_row(btn_pref_row);
-            add_group(confirm_group);
         }
 
         private async void do_delete() {
@@ -622,4 +595,3 @@ namespace Singularity.SidebarPages {
         }
     }
 }
-

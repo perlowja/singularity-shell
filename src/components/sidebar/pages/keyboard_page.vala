@@ -363,6 +363,10 @@ namespace Singularity {
                         } else {
                             remove_btn.tooltip_text = _("Remove Input Source");
                             remove_btn.clicked.connect(() => {
+                                row.confirmation_requested(_("Remove"), _("Cancel"),
+                                    ConfirmationSuggestedAction.CANCEL);
+                            });
+                            row.confirmed.connect(() => {
                                 remove_input_source(source_type, source_id);
                                 refresh_input_sources(view);
                             });

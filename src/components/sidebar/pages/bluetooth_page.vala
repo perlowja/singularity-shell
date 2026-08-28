@@ -7,7 +7,6 @@ namespace Singularity.SidebarPages {
         private BluetoothManager manager;
         private SwitchRow power_row;
         private PreferencesGroup devices_group;
-        private Box devices_box;
         private bool _syncing = false;
         private uint _refresh_id = 0;
 
@@ -36,10 +35,6 @@ namespace Singularity.SidebarPages {
             group.add_row(power_row);
             add_group(group);
             devices_group = new PreferencesGroup(_("Devices"));
-            devices_box = new Box(Orientation.VERTICAL, 0);
-            var row = new PreferencesRow();
-            row.set_child(devices_box);
-            devices_group.add_row(row);
             add_group(devices_group);
         }
 
@@ -75,49 +70,25 @@ namespace Singularity.SidebarPages {
         }
 
         private void update_devices() {
-            Widget? child = devices_box.get_first_child();
-            while (child != null) {
-                var next = child.get_next_sibling();
-                devices_box.remove(child);
-                child = next;
-            }
+            devices_group.clear();
             if (manager.devices.length() == 0) {
-                var lbl = new Label(_("No devices found"));
-                lbl.add_css_class("dim-label");
-                lbl.margin_top = 12;
-                lbl.margin_bottom = 12;
-                devices_box.append(lbl);
+                var empty = new ActionRow(_("No devices found"));
+                empty.sensitive = false;
+                devices_group.add_row(empty);
                 return;
             }
             foreach (var device in manager.devices) {
                 string dev_path = device.path;
-                var row = new Box(Orientation.HORIZONTAL, 12);
-                row.margin_top = 8;
-                row.margin_bottom = 8;
-                row.margin_start = 12;
-                row.margin_end = 12;
-                var icon = new Image.from_icon_name(BluetoothManager.bt_icon_for(device.icon));
-                icon.pixel_size = 24;
-                row.append(icon);
-                var lbl = new Label(device.name);
-                lbl.hexpand = true;
-                lbl.halign = Align.START;
-                lbl.ellipsize = Pango.EllipsizeMode.END;
-                row.append(lbl);
-                if (device.connected) {
-                    var status = new Label(_("Connected"));
-                    status.add_css_class("dim-label");
-                    row.append(status);
-                } else if (device.paired) {
-                    var status = new Label(_("Paired"));
-                    status.add_css_class("dim-label");
-                    row.append(status);
-                }
+                string? status = device.connected ? _("Connected") :
+                    (device.paired ? _("Paired") : null);
+                var row = new ActionRow(device.name, status,
+                    BluetoothManager.bt_icon_for(device.icon));
+                row.activatable = false;
                 if (manager.connecting_path == dev_path) {
                     var spinner = new Spinner();
                     spinner.spinning = true;
-                    spinner.tooltip_text = _("Connecting…");
-                    row.append(spinner);
+                    spinner.tooltip_text = _("Connecting...");
+                    row.add_suffix(spinner);
                 } else {
                     var btn = new Button();
                     btn.add_css_class("flat");
@@ -134,18 +105,22 @@ namespace Singularity.SidebarPages {
                             manager.connect_device.begin(dev_path);
                         });
                     }
-                    row.append(btn);
+                    row.add_suffix(btn);
                 }
                 if (device.paired) {
                     var forget_btn = new Button.from_icon_name("user-trash-symbolic");
                     forget_btn.add_css_class("flat");
                     forget_btn.tooltip_text = _("Forget Device");
                     forget_btn.clicked.connect(() => {
+                        row.confirmation_requested(_("Forget"), _("Cancel"),
+                            ConfirmationSuggestedAction.CANCEL);
+                    });
+                    row.confirmed.connect(() => {
                         manager.remove_device.begin(dev_path);
                     });
-                    row.append(forget_btn);
+                    row.add_suffix(forget_btn);
                 }
-                devices_box.append(row);
+                devices_group.add_row(row);
             }
         }
 

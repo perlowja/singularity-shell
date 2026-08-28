@@ -83,6 +83,10 @@ namespace Singularity.SidebarPages {
                 remove_btn.tooltip_text = _("Remove");
                 string entry_path = path;
                 remove_btn.clicked.connect(() => {
+                    row.confirmation_requested(_("Remove"), _("Cancel"),
+                        ConfirmationSuggestedAction.CANCEL);
+                });
+                row.confirmed.connect(() => {
                     autostart.remove(entry_path);
                     refresh_entries();
                 });

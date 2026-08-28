@@ -130,6 +130,10 @@ namespace Singularity.SidebarPages {
                     del_btn.add_css_class("flat");
                     del_btn.add_css_class("destructive-action");
                     del_btn.clicked.connect(() => {
+                        row.confirmation_requested(_("Remove"), _("Cancel"),
+                            ConfirmationSuggestedAction.CANCEL);
+                    });
+                    row.confirmed.connect(() => {
                         if (provider is LocalProvider) {
                             ((LocalProvider)provider).delete();
                         }
