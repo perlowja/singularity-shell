@@ -4,6 +4,8 @@ using Singularity.Widgets;
 namespace Singularity {
 
     public class NetworkPage : SettingsPage {
+        private PreferencesGroup vpn_error_group;
+        private ActionRow vpn_error_row;
 
         public NetworkPage(SettingsView view) {
             base(_("Network"));
@@ -78,6 +80,16 @@ namespace Singularity {
             hs_group.add_row(eth_row);
             add_group(hs_group);
 
+            string pending_hotspot_ssid = "";
+            string pending_hotspot_password = "";
+            bool pending_hotspot_wpa3 = false;
+            hotspot_row.confirmed.connect(() => {
+                network.start_wifi_hotspot(pending_hotspot_ssid,
+                    pending_hotspot_password, pending_hotspot_wpa3);
+            });
+            hotspot_row.confirmation_cancelled.connect(() => {
+                hotspot_row.switch_btn.active = false;
+            });
             hotspot_row.switch_btn.notify["active"].connect(() => {
                 bool on = hotspot_row.switch_btn.active;
                 if (on == network.wifi_hotspot_active) return;
@@ -93,16 +105,11 @@ namespace Singularity {
                 hs_settings.set_boolean("hotspot-wpa3", wpa3);
 
                 if (network.hotspot_needs_disconnect()) {
-                    var app = GLib.Application.get_default() as Gtk.Application;
-                    var dlg = new ConfirmDialog(app, _("Start Wi-Fi Hotspot?"),
-                        "network-wireless-hotspot-symbolic",
-                        _("Your current Wi-Fi connection will be disconnected, because the adapter can only join a network or host a hotspot, not both."),
-                        _("Start Hotspot"), ConfirmDialog.ActionStyle.SUGGESTED);
-                    dlg.response.connect((r) => {
-                        if (r == ConfirmDialog.Response.PRIMARY) network.start_wifi_hotspot(ssid, pw, wpa3);
-                        else hotspot_row.switch_btn.active = false;
-                    });
-                    dlg.present();
+                    pending_hotspot_ssid = ssid;
+                    pending_hotspot_password = pw;
+                    pending_hotspot_wpa3 = wpa3;
+                    hotspot_row.confirmation_requested(_("Start Hotspot"), _("Cancel"),
+                        ConfirmationSuggestedAction.CONFIRM);
                 } else {
                     network.start_wifi_hotspot(ssid, pw, wpa3);
                 }
@@ -129,22 +136,28 @@ namespace Singularity {
                 }
             });
 
-            // VPN section
             var vpn_group = new PreferencesGroup(_("VPN"));
             var vpn_rows = new List<Widget>();
             update_vpn_list(vpn_group, ref vpn_rows, network);
+
+            vpn_error_group = new PreferencesGroup();
+            vpn_error_row = new ActionRow(_("VPN action failed"), "", "dialog-error-symbolic");
+            var dismiss_error = new Button.from_icon_name("window-close-symbolic");
+            dismiss_error.add_css_class("flat");
+            dismiss_error.tooltip_text = _("Dismiss");
+            dismiss_error.clicked.connect(() => vpn_error_group.visible = false);
+            vpn_error_row.add_suffix(dismiss_error);
+            vpn_error_group.add_row(vpn_error_row);
+            vpn_error_group.visible = false;
+
             network.vpn_state_changed.connect(() => {
                 update_vpn_list(vpn_group, ref vpn_rows, network);
             });
             network.vpn_connections_changed.connect(() => {
                 update_vpn_list(vpn_group, ref vpn_rows, network);
             });
-            // Surface the result of import / manual-add / remove actions.
             network.vpn_action_result.connect(on_vpn_action_result);
 
-            // Plugin-provided VPN backends (e.g. Tailscale). They register
-            // through PluginContext and land in VpnProviderRegistry; render
-            // them alongside the NetworkManager VPNs and refresh on changes.
             var vpn_registry = VpnProviderRegistry.get_default();
             foreach (var p in vpn_registry.list()) {
                 p.changed.connect(() => update_vpn_list(vpn_group, ref vpn_rows, network));
@@ -159,21 +172,18 @@ namespace Singularity {
                 update_vpn_list(vpn_group, ref vpn_rows, network);
             });
 
-            // Add a VPN by hand - opens our native multi-level page (back arrow),
-            // not a dialog and not GNOME's settings.
+            add_group(vpn_group);
+            add_group(vpn_error_group);
+
+            var vpn_setup_group = new PreferencesGroup(_("VPN Profiles"));
             var add_row = new ActionRow(_("Add VPN"), _("Enter WireGuard or OpenVPN details"), "list-add-symbolic");
-            add_row.activatable = true;
-            var add_gesture = new GestureClick();
-            add_gesture.released.connect(() => {
+            add_row.activated.connect(() => {
                 view.open_subpage(new VpnConfigPage(view, network), "vpn-config");
             });
-            add_row.add_controller(add_gesture);
-            vpn_group.add_row(add_row);
+            vpn_setup_group.add_row(add_row);
 
             var import_row = new ActionRow(_("Import VPN Configuration"), _("OpenVPN .ovpn, WireGuard .conf, or .nmconnection"), "document-open-symbolic");
-            import_row.activatable = true;
-            var import_gesture = new GestureClick();
-            import_gesture.released.connect(() => {
+            import_row.activated.connect(() => {
                 var chooser = new FileDialog();
                 chooser.title = _("Import VPN Configuration");
                 var filter_store = new GLib.ListStore(typeof(Gtk.FileFilter));
@@ -198,13 +208,13 @@ namespace Singularity {
                             }
                         }
                     } catch (Error e) {
-                        // user cancelled or error
+                        if (!e.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED))
+                            on_vpn_action_result(false, e.message);
                     }
                 });
             });
-            import_row.add_controller(import_gesture);
-            vpn_group.add_row(import_row);
-            add_group(vpn_group);
+            vpn_setup_group.add_row(import_row);
+            add_group(vpn_setup_group);
         }
 
         public static void ensure_hotspot_credentials(GLib.Settings s,
@@ -293,14 +303,13 @@ namespace Singularity {
             }
         }
 
-        // Shows the result of import / manual-add / remove / provider actions.
         private void on_vpn_action_result(bool success, string message) {
-            if (success) return;
-            var app = (Gtk.Application) GLib.Application.get_default();
-            var dlg = new Singularity.Widgets.ConfirmDialog(
-                app, "VPN", "dialog-error-symbolic", message, "OK");
-            dlg.response.connect((r) => dlg.close_dialog());
-            dlg.open_dialog();
+            if (success) {
+                vpn_error_group.visible = false;
+                return;
+            }
+            vpn_error_row.subtitle = message;
+            vpn_error_group.visible = true;
         }
 
         private void update_vpn_list(PreferencesGroup group, ref List<Widget> rows, NetworkManagerWrapper network) {
@@ -311,7 +320,6 @@ namespace Singularity {
 
             int total = 0;
 
-            // NetworkManager-managed VPNs (built-in: vpn / wireguard).
             foreach (var vpn_conn in network.get_vpn_connections()) {
                 var row = build_nm_vpn_row(vpn_conn, network);
                 group.add_row(row);
@@ -319,7 +327,6 @@ namespace Singularity {
                 total++;
             }
 
-            // Plugin-provided VPN backends (Tailscale, ...).
             foreach (var provider in VpnProviderRegistry.get_default().list()) {
                 foreach (var conn in provider.get_connections()) {
                     var row = build_provider_vpn_row(conn);
@@ -347,97 +354,101 @@ namespace Singularity {
 
             string state_str;
             switch (link_state) {
-                case NetworkManagerWrapper.VpnLinkState.CONNECTED:  state_str = "Connected"; break;
-                case NetworkManagerWrapper.VpnLinkState.CONNECTING: state_str = "Connecting…"; break;
-                default:                                            state_str = "Disconnected"; break;
+                case NetworkManagerWrapper.VpnLinkState.CONNECTED:  state_str = _("Connected"); break;
+                case NetworkManagerWrapper.VpnLinkState.CONNECTING: state_str = _("Connecting..."); break;
+                default:                                            state_str = _("Disconnected"); break;
             }
 
             bool is_wireguard = (vpn_conn.get_connection_type() == "wireguard");
-            var row = new ActionRow(name, state_str,
-                is_wireguard ? "network-wireless-symbolic" : "network-vpn-symbolic");
-
             var captured_conn = vpn_conn;
-
-            var connect_btn = new Button();
-            connect_btn.has_frame = false;
-            connect_btn.valign = Align.CENTER;
-            if (link_state == NetworkManagerWrapper.VpnLinkState.CONNECTED) {
-                connect_btn.icon_name = "media-playback-stop-symbolic";
-                connect_btn.tooltip_text = _("Disconnect");
-                connect_btn.add_css_class("destructive-action-flat");
-                connect_btn.clicked.connect(() => {
-                    network.deactivate_connection(captured_conn);
-                });
+            ActionRow row;
+            if (link_state == NetworkManagerWrapper.VpnLinkState.CONNECTING) {
+                row = new ActionRow(name, state_str);
+                var spinner = new Spinner();
+                spinner.spinning = true;
+                row.add_suffix(spinner);
             } else {
-                connect_btn.icon_name = "network-vpn-symbolic";
-                connect_btn.tooltip_text = _("Connect");
-                connect_btn.add_css_class("suggested-action-flat");
-                connect_btn.clicked.connect(() => {
-                    network.activate_vpn(captured_conn);
+                var switch_row = new SwitchRow(name, state_str,
+                    link_state == NetworkManagerWrapper.VpnLinkState.CONNECTED);
+                switch_row.switch_btn.notify["active"].connect(() => {
+                    if (switch_row.active)
+                        network.activate_vpn.begin(captured_conn);
+                    else
+                        network.deactivate_connection.begin(captured_conn);
                 });
+                row = switch_row;
             }
-            row.add_suffix(connect_btn);
+            row.icon_name = is_wireguard ? "network-wireless-symbolic" : "network-vpn-symbolic";
 
-            // Right-click to remove ("forget") the connection.
-            var remove_gesture = new GestureClick();
-            remove_gesture.button = Gdk.BUTTON_SECONDARY;
-            remove_gesture.released.connect((n, x, y) => {
-                var menu = new Singularity.Widgets.ContextMenu(row);
-                Gdk.Rectangle rect = { (int) x, (int) y, 1, 1 };
-                menu.set_pointing_to(rect);
-                menu.add_item("Remove VPN", "user-trash-symbolic", () => {
-                    network.delete_vpn(captured_conn);
-                });
-                menu.popup();
+            var remove_btn = new Button.from_icon_name("user-trash-symbolic");
+            remove_btn.add_css_class("flat");
+            remove_btn.add_css_class("destructive-action");
+            remove_btn.tooltip_text = _("Remove VPN");
+            remove_btn.clicked.connect(() => {
+                row.confirmation_requested(_("Remove"), _("Cancel"),
+                    ConfirmationSuggestedAction.CANCEL);
             });
-            row.add_controller(remove_gesture);
+            row.confirmed.connect(() => network.delete_vpn.begin(captured_conn));
+            row.add_suffix(remove_btn);
 
             return row;
+        }
+
+        private async void set_provider_vpn_active(VpnConnection conn, bool active) {
+            try {
+                bool success = active ? yield conn.activate() : yield conn.deactivate();
+                on_vpn_action_result(success,
+                    success ? "" : _("The VPN provider rejected the request"));
+            } catch (Error e) {
+                on_vpn_action_result(false, e.message);
+            }
+        }
+
+        private async void remove_provider_vpn(VpnConnection conn) {
+            try {
+                bool success = yield conn.remove();
+                on_vpn_action_result(success,
+                    success ? "" : _("The VPN provider could not remove this profile"));
+            } catch (Error e) {
+                on_vpn_action_result(false, e.message);
+            }
         }
 
         private Widget build_provider_vpn_row(VpnConnection conn) {
             string state_str;
             switch (conn.state) {
-                case VpnState.CONNECTED:  state_str = "Connected"; break;
-                case VpnState.CONNECTING: state_str = "Connecting…"; break;
-                default:                  state_str = "Disconnected"; break;
+                case VpnState.CONNECTED:  state_str = _("Connected"); break;
+                case VpnState.CONNECTING: state_str = _("Connecting..."); break;
+                default:                  state_str = _("Disconnected"); break;
             }
 
-            var row = new ActionRow(conn.display_name, state_str, conn.icon_name);
-
-            var connect_btn = new Button();
-            connect_btn.has_frame = false;
-            connect_btn.valign = Align.CENTER;
-            if (conn.state == VpnState.CONNECTED) {
-                connect_btn.icon_name = "media-playback-stop-symbolic";
-                connect_btn.tooltip_text = _("Disconnect");
-                connect_btn.add_css_class("destructive-action-flat");
-                connect_btn.clicked.connect(() => {
-                    conn.deactivate.begin();
-                });
+            ActionRow row;
+            if (conn.state == VpnState.CONNECTING) {
+                row = new ActionRow(conn.display_name, state_str);
+                var spinner = new Spinner();
+                spinner.spinning = true;
+                row.add_suffix(spinner);
             } else {
-                connect_btn.icon_name = "network-vpn-symbolic";
-                connect_btn.tooltip_text = _("Connect");
-                connect_btn.add_css_class("suggested-action-flat");
-                connect_btn.clicked.connect(() => {
-                    conn.activate.begin();
+                var switch_row = new SwitchRow(conn.display_name, state_str,
+                    conn.state == VpnState.CONNECTED);
+                switch_row.switch_btn.notify["active"].connect(() => {
+                    set_provider_vpn_active.begin(conn, switch_row.active);
                 });
+                row = switch_row;
             }
-            row.add_suffix(connect_btn);
+            row.icon_name = conn.icon_name;
 
             if (conn.can_remove) {
-                var remove_gesture = new GestureClick();
-                remove_gesture.button = Gdk.BUTTON_SECONDARY;
-                remove_gesture.released.connect((n, x, y) => {
-                    var menu = new Singularity.Widgets.ContextMenu(row);
-                    Gdk.Rectangle rect = { (int) x, (int) y, 1, 1 };
-                    menu.set_pointing_to(rect);
-                    menu.add_item("Remove VPN", "user-trash-symbolic", () => {
-                        conn.remove.begin();
-                    });
-                    menu.popup();
+                var remove_btn = new Button.from_icon_name("user-trash-symbolic");
+                remove_btn.add_css_class("flat");
+                remove_btn.add_css_class("destructive-action");
+                remove_btn.tooltip_text = _("Remove VPN");
+                remove_btn.clicked.connect(() => {
+                    row.confirmation_requested(_("Remove"), _("Cancel"),
+                        ConfirmationSuggestedAction.CANCEL);
                 });
-                row.add_controller(remove_gesture);
+                row.confirmed.connect(() => remove_provider_vpn.begin(conn));
+                row.add_suffix(remove_btn);
             }
 
             return row;
