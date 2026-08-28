@@ -239,8 +239,7 @@ namespace Singularity {
         private uint _build_source = 0;
 
         public void populate(bool animate = false) {
-            _folder_overlays.foreach((id, ov) => ov.close_overlay());
-            _folder_overlays.remove_all();
+            close_folder_overlays();
 
             // Cancel any in-flight build + lazy widget jobs from a prior pass.
             if (_build_source != 0) { GLib.Source.remove(_build_source); _build_source = 0; }
@@ -377,9 +376,35 @@ namespace Singularity {
             return GLib.Source.CONTINUE;
         }
 
-        public void depopulate() {
-            _folder_overlays.foreach((id, ov) => ov.close_overlay());
+        /**
+         * Dismiss any open folder overlay without tearing down the grid.
+         *
+         * A folder overlay is its own toplevel layer-shell window, so hiding
+         * the launcher that spawned it leaves it on screen. Closing the
+         * overlays is cheap; dropping the grid contents is not, which is why
+         * depopulate() stays on its idle timer and this can be called
+         * immediately on close.
+         */
+        public void close_folder_overlays() {
+            // force_close(), not close_overlay(): close_overlay() fades via
+            // add_tick_callback(), the exact mechanism force_close() exists
+            // to avoid (#51) -- if the clock stalls, destroy() never runs and
+            // the overlay is stuck for good.
+            //
+            // Snapshot the table before closing anything: AppFolderOverlay's
+            // closed() signal fires synchronously and its handler removes
+            // the entry from _folder_overlays, so calling force_close()
+            // while still inside a foreach over that same table mutates it
+            // mid-iteration.
+            var overlays = _folder_overlays.get_values();
             _folder_overlays.remove_all();
+            foreach (var ov in overlays) {
+                ov.force_close();
+            }
+        }
+
+        public void depopulate() {
+            close_folder_overlays();
             Widget? c = grid.get_first_child();
             while (c != null) { Widget nc = c.get_next_sibling(); grid.remove(c); c = nc; }
         }
