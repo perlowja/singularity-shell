@@ -377,7 +377,6 @@ namespace Singularity {
                         // Keyboard-backlight tile only when the hardware exists (hide the whole
                         // nav wrapper, not just the inner tile, so it leaves no slot).
                         var kbd_nav = make_tile_with_nav(kbd_tile, "keyboard");
-                        kbd_mgr.changed.connect(() => { rebuild_quick_tiles(); });
 
                         // GameMode quick tile - only when the gamemode daemon is available.
                         var gm2 = GameModeManager.get_default();
@@ -615,7 +614,10 @@ namespace Singularity {
             action.vexpand = false;
             action.halign = Align.END;
             action.valign = Align.START;
-            action.clicked.connect(() => set_tile_active(item, !tile_is_active(id)));
+            action.clicked.connect(() => {
+                if (_editing_tiles)
+                    set_tile_active(item, !tile_is_active(id));
+            });
             action.set_data<string>("quick-tile-id", id);
             item.editor.add_overlay(action);
 
@@ -694,6 +696,7 @@ namespace Singularity {
                 if (icon != null)
                     icon.icon_name = active ? "list-remove-symbolic" : "list-add-symbolic";
                 item.action.visible = _editing_tiles;
+                item.action.can_target = _editing_tiles;
                 item.drag.actions = _editing_tiles
                     ? Gdk.DragAction.MOVE : (Gdk.DragAction) 0;
                 item.tile.can_target = !_editing_tiles;
