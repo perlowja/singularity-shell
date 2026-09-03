@@ -151,6 +151,7 @@ namespace Singularity {
 
                         // Wi-Fi Tile
                         var network = SystemMonitor.get_default().network;
+                        bool wifi_available = network.has_wifi;
                         var wifi_tile = new QuickSettingTile("Wi-Fi", network.wifi_icon, network.wifi_enabled);
                         // The click handler drives the real state via toggle_wifi;
                         // the NetworkManager state_changed signal then sets the
@@ -162,7 +163,10 @@ namespace Singularity {
                             wifi_tile.active = network.wifi_enabled;
                             wifi_tile.icon_name = network.wifi_icon;
                             wifi_tile.subtitle = network.wifi_ssid;
-                            rebuild_quick_tiles();
+                            if (wifi_available != network.has_wifi) {
+                                wifi_available = network.has_wifi;
+                                rebuild_quick_tiles();
+                            }
                         });
                         wifi_tile.clicked.connect(() => {
                             network.toggle_wifi();
@@ -170,12 +174,17 @@ namespace Singularity {
 
                         // Bluetooth Tile
                         var bluetooth = SystemMonitor.get_default().bluetooth;
+                        bool bt_available = bluetooth.is_available;
                         var bt_tile = new QuickSettingTile("Bluetooth", "bluetooth-active-symbolic", bluetooth.is_powered);
                         bt_tile.auto_toggle = false;
                         SystemView.update_bt_tile(bt_tile, bluetooth);
                         bluetooth.state_changed.connect(() => {
                             bt_tile.active = bluetooth.is_powered;
                             SystemView.update_bt_tile(bt_tile, bluetooth);
+                            if (bt_available != bluetooth.is_available) {
+                                bt_available = bluetooth.is_available;
+                                rebuild_quick_tiles();
+                            }
                         });
                         bluetooth.device_changed.connect((path) => {
                             SystemView.update_bt_tile(bt_tile, bluetooth);
@@ -263,6 +272,7 @@ namespace Singularity {
 
                         // Power Profile tile (4-state: extreme-save, power-saver, balanced, performance)
                         var ppm = SystemMonitor.get_default().power_profiles;
+                        bool ppm_available = ppm.available;
                         var ppm_tile = new QuickSettingTile(
                             "Power Profile",
                             SystemView.get_profile_icon_with_extreme(ppm.active_profile, _extreme_mgr.active),
@@ -274,10 +284,13 @@ namespace Singularity {
                         ppm_tile.subtitle = SystemView.format_profile_name_with_extreme(ppm.active_profile, _extreme_mgr.active);
                         var ppm_wrapper = make_tile_with_nav(ppm_tile, "performance");
                         ppm.profile_changed.connect(() => {
-                            rebuild_quick_tiles();
                             ppm_tile.icon_name = SystemView.get_profile_icon_with_extreme(ppm.active_profile, _extreme_mgr.active);
                             ppm_tile.subtitle = SystemView.format_profile_name_with_extreme(ppm.active_profile, _extreme_mgr.active);
                             ppm_tile.state = SystemView.get_profile_state_with_extreme(ppm.active_profile, _extreme_mgr.active);
+                            if (ppm_available != ppm.available) {
+                                ppm_available = ppm.available;
+                                rebuild_quick_tiles();
+                            }
                         });
                         _extreme_mgr.extreme_mode_changed.connect(() => {
                             ppm_tile.icon_name = SystemView.get_profile_icon_with_extreme(ppm.active_profile, _extreme_mgr.active);
@@ -372,7 +385,6 @@ namespace Singularity {
                         // Wi-Fi & Bluetooth (only when the hardware exists)
                         var wifi_nav = make_tile_with_nav(wifi_tile, "network");
                         var bt_nav = make_tile_with_nav(bt_tile, "bluetooth");
-                        bluetooth.state_changed.connect(() => { rebuild_quick_tiles(); });
 
                         // Keyboard-backlight tile only when the hardware exists (hide the whole
                         // nav wrapper, not just the inner tile, so it leaves no slot).
