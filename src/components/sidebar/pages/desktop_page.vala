@@ -1866,7 +1866,7 @@ namespace Singularity {
                 var dir = File.new_for_path(path);
                 if (!dir.query_exists()) return;
                 var enumerator = dir.enumerate_children(
-                    "standard::name,standard::content-type,standard::type,standard::is-symlink",
+                    "standard::name,standard::content-type,standard::type,standard::is-symlink,standard::symlink-target",
                     FileQueryInfoFlags.NONE, null);
                 FileInfo info;
                 while ((info = enumerator.next_file(null)) != null) {
@@ -1882,10 +1882,23 @@ namespace Singularity {
                     }
 
                     // default.jpg is a symlink the rotator repoints at whichever
-                    // wallpaper is current. Its target is enumerated in the same
-                    // directory, so following it would list one image twice --
-                    // once under its own name and once as "default".
-                    if (info.get_is_symlink()) continue;
+                    // wallpaper is current, at a target enumerated in this same
+                    // directory -- following it would list one image twice, once
+                    // under its own name and once as "default". Only elide a
+                    // same-directory pointer like that one: a pack that ships an
+                    // image as a symlink to a shared asset OUTSIDE this directory
+                    // is real content, and the previous scanner listed it fine
+                    // (content-type resolves through the link either way, since
+                    // enumerate_children above passes no NOFOLLOW flag).
+                    if (info.get_is_symlink()) {
+                        string? target = info.get_symlink_target();
+                        if (target != null) {
+                            string resolved = Path.is_absolute(target)
+                                ? target
+                                : Path.build_filename(path, target);
+                            if (Path.get_dirname(resolved) == path) continue;
+                        }
+                    }
 
                     string mime = info.get_content_type();
                     if (mime == null || !mime.has_prefix("image/")) continue;
