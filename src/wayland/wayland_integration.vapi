@@ -116,8 +116,15 @@ namespace Singularity {
     public bool wayland_get_layout_output_workarea(int index,
         out int x, out int y, out int width, out int height);
 
-    [CCode (cname = "singularity_wayland_get_cursor_position", cheader_filename = "wayland_integration.h")]
-    public bool wayland_get_cursor_position(out int x, out int y);
+    [CCode (has_target = false)]
+    public delegate void CursorPositionCallback(int x, int y, void* data);
+
+    [CCode (cname = "singularity_wayland_set_cursor_position_callback", cheader_filename = "wayland_integration.h")]
+    public void wayland_set_cursor_position_callback(
+        CursorPositionCallback cb, void* data);
+
+    [CCode (cname = "singularity_wayland_request_cursor_position", cheader_filename = "wayland_integration.h")]
+    public bool wayland_request_cursor_position();
 
     [CCode (cname = "singularity_wayland_window_is_tileable", cheader_filename = "wayland_integration.h")]
     public bool wayland_window_is_tileable(void* toplevel_handle);

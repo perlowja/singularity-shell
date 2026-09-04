@@ -21,6 +21,7 @@ typedef void (*TilingInteractionCallback)(void *handle, uint32_t phase,
     uint32_t kind, int32_t x, int32_t y, int32_t width, int32_t height,
     int32_t cursor_x, int32_t cursor_y, uint32_t edges,
     int float_candidate, void *data);
+typedef void (*CursorPositionCallback)(int32_t x, int32_t y, void *data);
 
 void singularity_wayland_init(
     AppOpenedCallback opened_cb, 
@@ -39,6 +40,8 @@ void singularity_wayland_set_desktop_gesture_callback(DesktopGestureCallback cb,
 void singularity_wayland_toggle_desktop_reveal(void);
 void singularity_wayland_set_tiling_interaction_callback(
     TilingInteractionCallback cb, void *user_data);
+void singularity_wayland_set_cursor_position_callback(
+    CursorPositionCallback cb, void *user_data);
 
 void singularity_wayland_minimize_window(void* handle);
 void singularity_wayland_unminimize_window(void* handle);
@@ -78,7 +81,7 @@ int singularity_wayland_get_layout_workarea(int* x, int* y, int* w, int* h);
 int singularity_wayland_get_layout_output_count(void);
 int singularity_wayland_get_layout_output_workarea(int index,
         int* x, int* y, int* w, int* h);
-int singularity_wayland_get_cursor_position(int* x, int* y);
+int singularity_wayland_request_cursor_position(void);
 int singularity_wayland_window_is_tileable(void* toplevel_handle);
 void singularity_wayland_set_tiled(void* toplevel_handle, uint32_t tiled);
 void singularity_wayland_set_scrolling_mode(uint32_t enabled);

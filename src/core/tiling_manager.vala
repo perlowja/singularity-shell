@@ -62,6 +62,7 @@ namespace Singularity {
         public double offset_animation_target = 0;
         public int64 offset_animation_started = 0;
         public bool initialized = false;
+        public bool focus_reveal_pending = false;
 
         public ScrollingGroup(string key, ScrollingWorkarea area,
                               ArrayList<ScrollingWorkarea> output_areas,
@@ -108,7 +109,9 @@ namespace Singularity {
         private HashSet<AppSystem.Window> startup_windows =
             new HashSet<AppSystem.Window>();
         private AppSystem.Window? last_scrolling_focus;
+        private void* observed_focus_handle;
         private AppSystem.Window? pointer_focus_window;
+        private bool pointer_focus_request_pending = false;
         private int pointer_focus_x;
         private int pointer_focus_y;
         private ScrollingGroup? gesture_group;
@@ -175,6 +178,8 @@ namespace Singularity {
             app_system.any_fullscreen_changed.connect(on_window_state_changed);
             Singularity.wayland_set_tiling_interaction_callback(
                 on_tiling_interaction, this);
+            Singularity.wayland_set_cursor_position_callback(
+                on_cursor_position, this);
             sync_compositor_mode();
             if (enabled) schedule_apply_layout();
         }
@@ -307,29 +312,51 @@ namespace Singularity {
 
         private void on_window_focused(void* handle) {
             pointer_focus_window = null;
+            bool focus_event_changed = handle != observed_focus_handle;
+            observed_focus_handle = handle;
             if (enabled && handle != null) {
                 var win = app_system.get_window_by_handle(handle);
                 var group = win != null ? group_for_window(win) : null;
                 if (win != null && group != null) {
+                    if (focus_event_changed)
+                        group.focus_reveal_pending = true;
                     last_scrolling_focus = win;
-                    var rect = current_rect_for_window(win)
-                        ?? rect_for_window(group, win);
-                    int cursor_x = 0;
-                    int cursor_y = 0;
-                    if (scrolling_active() && rect != null
-                            && Singularity.wayland_get_cursor_position(
-                                out cursor_x, out cursor_y)
-                            && cursor_x >= rect.x
-                            && cursor_x < rect.x + rect.width
-                            && cursor_y >= rect.y
-                            && cursor_y < rect.y + rect.height) {
-                        pointer_focus_window = win;
-                        pointer_focus_x = cursor_x;
-                        pointer_focus_y = cursor_y;
+                    if (scrolling_active()) {
+                        if (!pointer_focus_request_pending) {
+                            pointer_focus_request_pending =
+                                Singularity.wayland_request_cursor_position();
+                        }
+                        if (pointer_focus_request_pending) return;
                     }
                 }
                 schedule_apply_layout();
             }
+        }
+
+        private static void on_cursor_position(int cursor_x, int cursor_y,
+                void* data) {
+            var self = (TilingManager)data;
+            self.pointer_focus_request_pending = false;
+            self.update_pointer_focus(cursor_x, cursor_y);
+            if (self.enabled) self.schedule_apply_layout();
+        }
+
+        private void update_pointer_focus(int cursor_x, int cursor_y) {
+            pointer_focus_window = null;
+            if (!scrolling_active() || observed_focus_handle == null) return;
+            var win = app_system.get_window_by_handle(observed_focus_handle);
+            if (win == null) return;
+            var group = group_for_window(win);
+            if (group == null) return;
+            var rect = rect_for_window(group, win);
+            if (rect == null
+                    || cursor_x < rect.x
+                    || cursor_x >= rect.x + rect.width
+                    || cursor_y < rect.y
+                    || cursor_y >= rect.y + rect.height) return;
+            pointer_focus_window = win;
+            pointer_focus_x = cursor_x;
+            pointer_focus_y = cursor_y;
         }
 
         private void on_window_output_changed(void* handle) {
@@ -1049,9 +1076,11 @@ namespace Singularity {
                 return;
             }
             var focused = focused_in_group(group);
-            bool focus_changed = focused != null && focused != group.focused;
+            bool focus_changed = focused != null
+                && (focused != group.focused || group.focus_reveal_pending);
             if (focused != null) {
                 group.focused = focused;
+                group.focus_reveal_pending = false;
                 last_scrolling_focus = focused;
             }
             if (group.focused == null

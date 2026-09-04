@@ -87,10 +87,6 @@ static struct {
     int x, y, w, h;
 } layout_output_workareas[32];
 static int layout_output_workarea_count;
-static struct {
-    int x, y;
-    int got;
-} cursor_position;
 static void invalidate_toplevel_tileable(void *handle);
 /* Maps wl_output* (our binding), connector name (heap string, owned) */
 static GHashTable *output_connector_map = NULL;
@@ -101,6 +97,8 @@ static DesktopGestureCallback desktop_gesture_cb = NULL;
 static void *desktop_gesture_user_data = NULL;
 static TilingInteractionCallback tiling_interaction_cb = NULL;
 static void *tiling_interaction_user_data = NULL;
+static CursorPositionCallback cursor_position_cb = NULL;
+static void *cursor_position_user_data = NULL;
 static uint32_t desktop_gesture_fingers = 0;
 static uint32_t desktop_gesture_direction = 0;
 static int wayland_debug_enabled = -1;
@@ -1108,9 +1106,10 @@ static void tiling_handle_layout_workarea_done(void *data,
 static void tiling_handle_cursor_position(void *data,
         struct zsingularity_tiling_manager_v1 *mgr,
         int32_t x, int32_t y) {
-    cursor_position.x = x;
-    cursor_position.y = y;
-    cursor_position.got = 1;
+    (void)data;
+    (void)mgr;
+    if (cursor_position_cb)
+        cursor_position_cb(x, y, cursor_position_user_data);
 }
 
 static void tiling_handle_interaction(void *data,
@@ -1280,19 +1279,42 @@ void singularity_wayland_set_tiling_interaction_callback(
     tiling_interaction_cb = cb;
     tiling_interaction_user_data = user_data;
 }
+
+void singularity_wayland_set_cursor_position_callback(
+        CursorPositionCallback cb, void *user_data) {
+    cursor_position_cb = cb;
+    cursor_position_user_data = user_data;
+}
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t name) {}
 static const struct wl_registry_listener registry_listener = {
     .global = registry_handle_global,
     .global_remove = registry_handle_global_remove,
 };
+
+static void log_wayland_dispatch_error(struct wl_display *display,
+        const char *context) {
+    int error = wl_display_get_error(display);
+    if (error == EPROTO) {
+        const struct wl_interface *interface = NULL;
+        uint32_t object_id = 0;
+        uint32_t code = wl_display_get_protocol_error(display, &interface,
+            &object_id);
+        g_critical("%s: protocol error %u on %s@%u", context, code,
+            interface ? interface->name : "unknown", object_id);
+        return;
+    }
+    g_critical("%s: %s", context,
+        error ? g_strerror(error) : "Wayland socket closed");
+}
+
 static gboolean wayland_event_source_cb(GIOChannel *source, GIOCondition condition, gpointer data) {
     struct wl_display *display = (struct wl_display *)data;
     if (condition & (G_IO_HUP | G_IO_ERR)) {
-        g_critical("Wayland compositor socket closed or errored (condition=%u), exiting", condition);
+        log_wayland_dispatch_error(display, "Wayland connection lost");
         exit(1);
     }
     if (wl_display_dispatch(display) < 0) {
-        g_critical("wl_display_dispatch failed: %s, exiting", g_strerror(errno));
+        log_wayland_dispatch_error(display, "Wayland dispatch failed");
         exit(1);
     }
     return TRUE;
@@ -1667,18 +1689,12 @@ int singularity_wayland_get_layout_output_workarea(int index,
     return 1;
 }
 
-int singularity_wayland_get_cursor_position(int *x, int *y) {
-    if (x) *x = 0;
-    if (y) *y = 0;
+int singularity_wayland_request_cursor_position(void) {
     if (!ctx.tiling_manager || !ctx.display) return 0;
     if (wl_proxy_get_version((struct wl_proxy *)ctx.tiling_manager) < 10)
         return 0;
-    cursor_position.got = 0;
     zsingularity_tiling_manager_v1_get_cursor_position(ctx.tiling_manager);
-    wl_display_roundtrip(ctx.display);
-    if (!cursor_position.got) return 0;
-    if (x) *x = cursor_position.x;
-    if (y) *y = cursor_position.y;
+    wl_display_flush(ctx.display);
     return 1;
 }
 
