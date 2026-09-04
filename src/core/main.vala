@@ -1952,11 +1952,14 @@ window.inactive.shadow.color: %s
         string log_dir = GLib.Path.build_filename(GLib.Environment.get_user_state_dir(), "singularity");
         GLib.DirUtils.create_with_parents(log_dir, 0700);
         string log_path = GLib.Path.build_filename(log_dir, "singularity-desktop.log");
-        // Start each session with a fresh log: rotate the previous one to .old
-        // and truncate. Appending across sessions let the file grow without
-        // bound (it reached 1.1 GB), which bloated disk and startup IO.
+        // Keep five bounded session logs so a crash survives later restarts.
+        for (int i = 5; i > 1; i--) {
+            string previous = "%s.%d".printf(log_path, i - 1);
+            if (FileUtils.test(previous, FileTest.EXISTS))
+                FileUtils.rename(previous, "%s.%d".printf(log_path, i));
+        }
         if (FileUtils.test(log_path, FileTest.EXISTS)) {
-            FileUtils.rename(log_path, log_path + ".old");
+            FileUtils.rename(log_path, log_path + ".1");
         }
         try {
             int log_fd = Posix.open(log_path, Posix.O_WRONLY | Posix.O_CREAT | Posix.O_TRUNC, 0644);
