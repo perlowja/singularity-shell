@@ -86,6 +86,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         // shell only needs to load its style here.
         Singularity.Style.StyleManager.get_default().load_theme();
         settings = new GLib.Settings("dev.sinty.desktop");
+        Singularity.HandControlManager.get_default();
         settings.changed["bar-layout-edit-mode"].connect(sync_bar_layout_edit_mode);
         var settings_source = GLib.SettingsSchemaSource.get_default();
         if (settings_source != null
@@ -993,7 +994,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             gesture_launcher_overview = null;
 
             if (workspace_overview != null && workspace_overview.visible) {
-                if (direction == 3) workspace_overview.begin_gesture(false);
+                workspace_overview.begin_gesture(false);
                 return;
             }
             if ((app_menu != null && app_menu.visible)

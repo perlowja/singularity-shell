@@ -820,6 +820,20 @@ namespace Singularity {
             }
         }
 
+        public void capture_fullscreen() {
+            var app = GLib.Application.get_default() as Gtk.Application;
+            if (!ScreenshotTool.get_default(app).ensure_screenshots()) return;
+            _screenshot_fullscreen();
+        }
+
+        public void capture_region(int x, int y, int width, int height) {
+            if (width < 1 || height < 1) return;
+            var app = GLib.Application.get_default() as Gtk.Application;
+            if (!ScreenshotTool.get_default(app).ensure_screenshots()) return;
+            string geometry = "%d,%d %dx%d".printf(x, y, width, height);
+            _capture_geometry(geometry, "Region captured and copied to clipboard", false);
+        }
+
         private void pip_window_action() {
             var handle = AppSystem.get_default().get_focused_window_handle();
             if (handle == null || !Singularity.wayland_show_window_pip(handle)) {
@@ -883,7 +897,6 @@ namespace Singularity {
         }
 
         private void _screenshot_window(void* handle) {
-            var app_system = AppSystem.get_default();
             int x, y, w, h, maximized, fullscreen;
             string? connector;
             bool got_geometry = Singularity.wayland_get_window_geometry(handle,
@@ -894,16 +907,24 @@ namespace Singularity {
                 return;
             }
 
+            string geometry = "%d,%d %dx%d".printf(x, y, w, h);
+            _capture_geometry(geometry, "Window captured and copied to clipboard", true);
+        }
+
+        private void _capture_geometry(string geometry,
+                                       string notification,
+                                       bool fallback_fullscreen) {
             string temp_path;
             try {
                 int fd = GLib.FileUtils.open_tmp("singularity-screenshot-XXXXXX.png", out temp_path);
                 Posix.close(fd);
             } catch (Error e) {
                 warning("[Screenshot] temp file: %s", e.message);
+                if (fallback_fullscreen) _screenshot_fullscreen();
                 return;
             }
-            string geometry = "%d,%d %dx%d".printf(x, y, w, h);
-            message("[Screenshot] Using singularity-screenshot -g \"%s\", %s", geometry, temp_path);
+            message("[Screenshot] Using singularity-screenshot -g \"%s\", %s",
+                geometry, temp_path);
             try {
                 string helper = AppSystem.resolve_companion_bin("singularity-screenshot");
                 string[] argv = { helper, "-g", geometry, temp_path };
@@ -918,23 +939,28 @@ namespace Singularity {
                     }
                     if (!ok || !screenshot_file_has_data(temp_path)) {
                         GLib.FileUtils.unlink(temp_path);
-                        _screenshot_fullscreen();
+                        if (fallback_fullscreen) _screenshot_fullscreen();
                         return;
                     }
                     var portal = ScreenshotPortal.get_default();
                     portal.copy_to_clipboard(temp_path);
                     portal.save_to_pictures("file://" + temp_path);
                     Singularity.Shell.ScreenFlash.flash();
+                    var app_system = AppSystem.get_default();
                     string? focused_app = app_system.get_focused_app_id();
                     if (focused_app != null && focused_app != "")
                         app_system.pulse_app_requested(focused_app);
-                    try { Process.spawn_command_line_async("notify-send 'Screenshot' 'Window captured and copied to clipboard'"); } catch {}
+                    try {
+                        Process.spawn_async(null,
+                            { "notify-send", "Screenshot", notification },
+                            null, SpawnFlags.SEARCH_PATH, null, null);
+                    } catch {}
                     GLib.Timeout.add(3000, () => { GLib.FileUtils.unlink(temp_path); return false; });
                 });
             } catch (Error e) {
                 warning("[Screenshot] singularity-screenshot spawn failed: %s", e.message);
                 GLib.FileUtils.unlink(temp_path);
-                _screenshot_fullscreen();
+                if (fallback_fullscreen) _screenshot_fullscreen();
             }
         }
 

@@ -10,6 +10,7 @@ namespace Singularity.SidebarPages {
         private GLib.Settings? a11y_iface_settings;
         private GLib.Settings? wm_settings;
         private GLib.Settings? a11y_kb_settings;
+        private GLib.Settings desktop_settings;
 
         // Cursor size options: label, value mapping
         private static int[] CURSOR_SIZES = { 24, 32, 48, 64 };
@@ -23,6 +24,40 @@ namespace Singularity.SidebarPages {
             a11y_iface_settings = get_settings("org.gnome.desktop.a11y.interface");
             wm_settings        = get_settings("org.gnome.desktop.wm.preferences");
             a11y_kb_settings   = get_settings("org.gnome.desktop.a11y.keyboard");
+            desktop_settings   = new GLib.Settings("dev.sinty.desktop");
+
+            var hand_manager = Singularity.HandControlManager.get_default();
+            var hand_group = new PreferencesGroup(_("Hands-free control"));
+            add_group(hand_group);
+
+            var hand_row = new SwitchRow(
+                _("Hand Control"),
+                _("Point, click, drag, and scroll with natural hand gestures"));
+            hand_row.active = desktop_settings.get_boolean("hand-control-enabled");
+            hand_row.sensitive = hand_manager.available;
+            hand_row.switch_btn.notify["active"].connect(() => {
+                desktop_settings.set_boolean("hand-control-enabled", hand_row.active);
+            });
+            desktop_settings.changed["hand-control-enabled"].connect(() => {
+                bool enabled = desktop_settings.get_boolean("hand-control-enabled");
+                if (hand_row.active != enabled) hand_row.active = enabled;
+            });
+            hand_group.add_row(hand_row);
+
+            var calibrate_row = new ActionRow(
+                _("Calibrate Hand Control"),
+                _("Map your hand movement across every connected display"),
+                "input-touchpad-symbolic");
+            calibrate_row.sensitive = hand_manager.available && hand_row.active;
+            calibrate_row.activated.connect(() => hand_manager.calibrate());
+            hand_row.switch_btn.notify["active"].connect(() => {
+                calibrate_row.sensitive = hand_manager.available && hand_row.active;
+            });
+            hand_manager.availability_changed.connect(() => {
+                hand_row.sensitive = hand_manager.available;
+                calibrate_row.sensitive = hand_manager.available && hand_row.active;
+            });
+            hand_group.add_row(calibrate_row);
 
             // Vision
             var vision_group = new PreferencesGroup(_("Vision"));
