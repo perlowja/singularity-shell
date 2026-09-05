@@ -448,3 +448,9 @@ wallpaper_collections_test = executable('wallpaper-collections-test',
   dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep],
 )
 test('wallpaper-collections', wallpaper_collections_test)
+
+wallpaper_rotation_state_test = executable('wallpaper-rotation-state-test',
+  sources: ['src/core/wallpaper_rotation_state.vala', 'tests/wallpaper_rotation_state_test.vala'],
+  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0')],
+)
+test('wallpaper-rotation-state', wallpaper_rotation_state_test)
