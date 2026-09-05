@@ -442,3 +442,9 @@ safe_mode_test = executable('safe-mode-test',
   dependencies: [dependency('gobject-2.0')],
 )
 test('safe-mode', safe_mode_test)
+
+wallpaper_collections_test = executable('wallpaper-collections-test',
+  sources: ['src/core/wallpaper_collections.vala', 'tests/wallpaper_collections_test.vala'],
+  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep],
+)
+test('wallpaper-collections', wallpaper_collections_test)
