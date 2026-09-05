@@ -676,7 +676,7 @@ git commit -m "feat(wallpaper): add a source selector, scope the grid to one col
 
 - [ ] **Step 1: Add the rotation switch + interval rows**
 
-Immediately after `grid_group.add_row(grid_row);` (from Task 3's step 4), before `add_group(grid_group);`, insert:
+Immediately after `grid_group.add_row(grid_row);` (from Task 3's step 3), before `add_group(grid_group);`, insert:
 
 ```vala
             var rotate_row = new SwitchRow(_("Rotate Wallpapers"),
