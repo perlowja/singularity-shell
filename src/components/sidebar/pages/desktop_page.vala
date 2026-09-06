@@ -5,16 +5,6 @@ using Singularity.Widgets;
 
 namespace Singularity {
 
-    internal class WallpaperCandidate : Object {
-        public string uri { get; private set; }
-        public bool is_recent { get; private set; }
-
-        public WallpaperCandidate(string uri, bool is_recent) {
-            this.uri = uri;
-            this.is_recent = is_recent;
-        }
-    }
-
     public class DesktopPage : SettingsPage {
         private GLib.Settings settings;
         private GLib.Settings? wm_settings;
@@ -1896,97 +1886,10 @@ namespace Singularity {
             });
         }
 
-        // How deep to walk below a scan root. /usr/share/backgrounds holds
-        // ncz/, and a pack sits one further down (ncz/brandon-perlow), so two
-        // levels is what the shipped layout needs. The bound exists because
-        // $XDG_DATA_HOME/backgrounds is user-writable: someone who points it at
-        // a deep tree should not stall the picker.
-        private const int WALLPAPER_SCAN_MAX_DEPTH = 3;
-
-        // Walk one scan root, collecting images.
-        //
-        // The previous implementation enumerated a single level and kept only
-        // entries whose content-type began with image/. /usr/share/backgrounds
-        // contains no images at all -- only ncz/ and singularity/ -- and a
-        // directory's content-type is inode/directory, so every shipped
-        // wallpaper was silently skipped. The picker had never displayed them.
-        private static void scan_wallpaper_dir(string path,
-                                               ArrayList<WallpaperCandidate> candidates,
-                                               HashSet<string> thread_seen,
-                                               HashSet<string> visited_dirs,
-                                               int depth) {
-            if (depth > WALLPAPER_SCAN_MAX_DEPTH) return;
-            // The scan roots overlap by construction (/usr/share/backgrounds and
-            // /usr/share/backgrounds/singularity are both roots) and a pack may
-            // declare a Dir already reachable from one of them. Without this,
-            // those directories are walked more than once.
-            if (visited_dirs.contains(path)) return;
-            visited_dirs.add(path);
-
-            try {
-                var dir = File.new_for_path(path);
-                if (!dir.query_exists()) return;
-                var enumerator = dir.enumerate_children(
-                    "standard::name,standard::content-type,standard::type,standard::is-symlink,standard::symlink-target",
-                    FileQueryInfoFlags.NONE, null);
-                FileInfo info;
-                while ((info = enumerator.next_file(null)) != null) {
-                    var child = dir.get_child(info.get_name());
-
-                    if (info.get_file_type() == FileType.DIRECTORY) {
-                        // Not followed as a directory either: a symlinked
-                        // directory is the easy way to walk in a circle.
-                        if (info.get_is_symlink()) continue;
-                        scan_wallpaper_dir(child.get_path(), candidates, thread_seen,
-                                           visited_dirs, depth + 1);
-                        continue;
-                    }
-
-                    // default.jpg is a symlink the rotator repoints at whichever
-                    // wallpaper is current, at a target enumerated in this same
-                    // directory -- following it would list one image twice, once
-                    // under its own name and once as "default". Only elide a
-                    // same-directory pointer like that one: a pack that ships an
-                    // image as a symlink to a shared asset OUTSIDE this directory
-                    // is real content, and the previous scanner listed it fine
-                    // (content-type resolves through the link either way, since
-                    // enumerate_children above passes no NOFOLLOW flag).
-                    if (info.get_is_symlink()) {
-                        string? target = info.get_symlink_target();
-                        if (target != null) {
-                            string resolved = Path.is_absolute(target)
-                                ? target
-                                : Path.build_filename(path, target);
-                            if (Path.get_dirname(resolved) == path) continue;
-                        }
-                    }
-
-                    string mime = info.get_content_type();
-                    if (mime == null || !mime.has_prefix("image/")) continue;
-
-                    string uri = child.get_uri();
-                    if (thread_seen.contains(uri)) continue;
-                    thread_seen.add(uri);
-                    candidates.add(new WallpaperCandidate(uri, false));
-                }
-            } catch (Error e) {
-            }
-        }
-
         private void populate_grid() {
             int gen = ++wallpaper_grid_generation;
             wallpaper_grid.remove_all();
-            var uris = new ArrayList<string>();
             string[] recent = settings.get_strv("recent-wallpapers");
-            foreach (string uri in recent) {
-                if (!uris.contains(uri)) {
-                    uris.add(uri);
-                    add_wallpaper_card(uri, true);
-                }
-            }
-
-            var seen = new HashSet<string>();
-            foreach (string uri in recent) seen.add(uri);
 
             string selected_id = rotation_state.get_selected_collection("ncz");
             string? scan_dir = null;
@@ -2002,18 +1905,15 @@ namespace Singularity {
                 scan_dir = wallpaper_collections[0].dir;
             }
 
-            string[] scan_paths = (scan_dir == null) ? new string[0] : new string[] { scan_dir };
+            var collection_dirs = new ArrayList<string>();
+            foreach (var collection in wallpaper_collections) collection_dirs.add(collection.dir);
             new GLib.Thread<void>("wallpaper-scan", () => {
-                var candidates = new ArrayList<WallpaperCandidate>();
-                var thread_seen = new HashSet<string>();
-                foreach (string uri in seen) thread_seen.add(uri);
-
-                var visited_dirs = new HashSet<string>();
-                foreach (string path in scan_paths)
-                    scan_wallpaper_dir(path, candidates, thread_seen, visited_dirs, 0);
+                var candidates = WallpaperGallery.scan(scan_dir, collection_dirs.to_array(), recent);
 
                 GLib.Idle.add(() => {
                     if (gen != wallpaper_grid_generation) return GLib.Source.REMOVE;
+                    debug("Wallpaper gallery: source=%s root=%s images=%d",
+                          selected_id, scan_dir ?? "(none)", candidates.size);
                     append_wallpaper_candidates(candidates, gen, 0);
                     return GLib.Source.REMOVE;
                 });
