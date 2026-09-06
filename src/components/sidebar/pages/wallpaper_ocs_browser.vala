@@ -147,7 +147,7 @@ namespace Singularity.Shell {
             // Import invokes ImageMagick children. Stop the whole private process
             // group so a timeout cannot leave a writer running after Retry.
             string? identifier = process.get_identifier();
-            int pid;
+            int pid = 0;
             if (identifier != null && int.try_parse(identifier, out pid) && pid > 1)
                 Posix.kill((Posix.pid_t) (-pid), Posix.Signal.KILL);
             process.force_exit();
