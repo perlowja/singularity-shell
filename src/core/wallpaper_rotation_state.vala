@@ -36,8 +36,17 @@ namespace Singularity {
 
         private void write(string filename, string contents) {
             GLib.DirUtils.create_with_parents(config_dir, 0700);
+            string dest = path_for(filename);
+            string tmp = dest + ".tmp";
             try {
-                FileUtils.set_contents(path_for(filename), contents);
+                // Write-then-rename: the rotator daemon polls these files on
+                // its own timer, so a partial write it reads mid-flush would
+                // be picked up as-is. rename(2) within the same directory is
+                // atomic, so the daemon only ever sees a complete write.
+                FileUtils.set_contents(tmp, contents);
+                if (FileUtils.rename(tmp, dest) != 0) {
+                    warning("wallpaper rotation state: could not rename %s into place", filename);
+                }
             } catch (Error e) {
                 warning("wallpaper rotation state: could not write %s: %s", filename, e.message);
             }
@@ -54,7 +63,9 @@ namespace Singularity {
 
         public bool get_rotate_enabled() {
             string? value = read_trimmed("rotate-enabled");
-            return value != "0";
+            if (value == null) return true;
+            string lowered = value.down();
+            return lowered != "0" && lowered != "false" && lowered != "off";
         }
 
         public void set_rotate_enabled(bool enabled) {

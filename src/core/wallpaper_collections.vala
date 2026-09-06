@@ -61,34 +61,36 @@ namespace Singularity {
 
                         string collection_dir;
                         try {
-                            collection_dir = kf.get_string("Collection", "Dir");
+                            collection_dir = kf.get_string("Collection", "Dir").strip();
                         } catch (Error e) {
                             continue; // Dir-less collection, skip it
                         }
-                        if (collection_dir == null || collection_dir == "") continue;
+                        if (collection_dir == "") continue;
 
                         string id;
                         try {
-                            id = kf.get_string("Collection", "Id");
+                            id = kf.get_string("Collection", "Id").strip();
                         } catch (Error e) {
-                            id = filename.substring(0, filename.length - ".collection".length);
+                            id = "";
                         }
-                        if (id == null || id == "") {
+                        if (id == "") {
                             id = filename.substring(0, filename.length - ".collection".length);
                         }
                         if (!seen_ids.add(id)) continue; // first root wins
 
                         string name;
-                        try { name = kf.get_string("Collection", "Name"); }
-                        catch (Error e) { name = id; }
+                        try { name = kf.get_string("Collection", "Name").strip(); }
+                        catch (Error e) { name = ""; }
+                        if (name == "") name = id;
 
                         string artist;
-                        try { artist = kf.get_string("Collection", "Artist"); }
+                        try { artist = kf.get_string("Collection", "Artist").strip(); }
                         catch (Error e) { artist = ""; }
 
                         string type;
-                        try { type = kf.get_string("Collection", "Type"); }
-                        catch (Error e) { type = "static"; }
+                        try { type = kf.get_string("Collection", "Type").strip(); }
+                        catch (Error e) { type = ""; }
+                        if (type == "") type = "static";
 
                         results.add(new WallpaperCollectionInfo(id, name, artist, collection_dir, type));
                     }
