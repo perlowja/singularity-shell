@@ -128,7 +128,7 @@ namespace Singularity.Shell {
                 if (key == Gdk.Key.Escape) { close(); return true; }
                 return false;
             });
-            add_controller(keys);
+            ((Gtk.Widget) this).add_controller(keys);
             initialize.begin();
         }
 
