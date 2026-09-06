@@ -8,6 +8,20 @@ namespace Singularity.Shell {
         public signal void imported();
         public signal void dismissed();
         private const string HELPER = "/usr/local/bin/ncz-wallpaper-ocs";
+        // Bing lives behind its own helper because its commands and JSON
+        // shapes are different (markets -> TSV, list -> bare array, no
+        // schema/items wrapper). Calling it is the same SubprocessLauncher
+        // shape as HELPER; only the argv and the parsers in WallpaperBing
+        // differ. There is NO copy/import path for Bing -- it is already a
+        // persistent Wallpaper Source the moment it is archived, so the
+        // per-item action here is PIN (which protects it from retention
+        // pruning), not import.
+        private const string BING_HELPER = "/usr/local/bin/ncz-wallpaper-bing";
+        // The synthetic provider id used by the SelectionRow, the worker
+        // branching, and the card layout. Same value as WallpaperBing.PROVIDER_ID
+        // in core/ -- duplicated here so the browser can branch on it
+        // without pulling in a core class field reference at the call site.
+        private const string BING_PROVIDER_ID = "bing";
         // Bounded crawl: enough parallelism that a provider with many usable
         // categories fills the grid quickly, but small enough that a single
         // provider cannot fork dozens of OCS processes against the helper at
@@ -284,15 +298,26 @@ namespace Singularity.Shell {
                 foreach (var choice in choices) WallpaperOcs.categories(index, choice.id);
                 providers = choices;
                 category_index = index;
+                // Append the synthetic Bing pseudo-provider at the END of the
+                // real OCS list -- not in WallpaperOcs.providers(), which
+                // stays strictly about parsing the OCS helper's JSON. The
+                // browser is the only place Bing is glued into the UI; the
+                // core parser keeps a hard contract about what "a provider"
+                // means over OCS.
+                providers.add(new WallpaperOcsChoice(BING_PROVIDER_ID, _("Bing")));
                 // SelectionRow takes a plain string[] of options and a current
                 // value. The provider id (e.g. "pling") doubles as both the
                 // option key and the visible label until we get fancier
                 // branding -- the desktop_page Wallpaper Source row does the
-                // same thing for its raw provider token.
+                // same thing for its raw provider token. Bing uses its
+                // display name ("Bing") so the row reads naturally; the
+                // SelectionRow's key is still the id ("bing").
                 var names = new string[providers.size];
                 string initial = providers.size > 0 ? providers[0].id : "";
                 for (int i = 0; i < providers.size; i++) {
-                    names[i] = providers[i].id;
+                    // Human-readable label for the row, but the stored value
+                    // is the id so select_provider(id) keeps working.
+                    names[i] = providers[i].id == BING_PROVIDER_ID ? _("Bing") : providers[i].id;
                     if (providers[i].id == "pling") initial = providers[i].id;
                 }
                 updating = true;
@@ -311,8 +336,20 @@ namespace Singularity.Shell {
 
         // Provider selected -> rebuild the category chip row, then kick off
         // the aggregate crawl for every usable category under that provider.
+        // For Bing the "categories" are actually markets fetched from a
+        // different helper; the chip row is the same widget, but the
+        // underlying command and parser branch.
         private void select_provider(string provider_id) {
-            if (provider_id == "" || category_index == "") return;
+            if (provider_id == "") return;
+            if (provider_id == BING_PROVIDER_ID) {
+                // Bing: drop the OCS category-index gate entirely (the file
+                // is irrelevant for Bing) and let select_provider_bing pull
+                // markets from the Bing helper. Done in a separate async
+                // helper so the synchronous select_provider stays clean.
+                select_provider_bing.begin();
+                return;
+            }
+            if (category_index == "") return;
             string selected_provider = provider_id;
             try {
                 categories = WallpaperOcs.categories(category_index, selected_provider);
@@ -331,6 +368,41 @@ namespace Singularity.Shell {
             grid.remove_all();
             update_controls();
             browse_all.begin();
+        }
+
+        // Bing equivalent of the OCS provider/category-index load: one
+        // synchronous `ncz-wallpaper-bing markets` call, TSV-parsed into the
+        // same WallpaperOcsChoice list the chip row already knows how to
+        // render. Errors are surfaced through `status` exactly like an OCS
+        // category-index parse failure.
+        private async void select_provider_bing() {
+            int gen = ++generation;
+            request.cancel();
+            request = new Cancellable();
+            var cancel = request;
+            loading = true;
+            status.label = _("Loading Bing markets…");
+            update_controls();
+            try {
+                string data = yield command({BING_HELPER, "markets"}, cancel, 30);
+                if (gen != generation || closed) return;
+                categories = WallpaperBing.markets(data);
+                active_category_id = "";
+                active_tag_ids.clear();
+                known_tag_ids.clear();
+                rebuild_category_chips();
+                tag_chips.remove_all();
+                cards.clear();
+                grid.remove_all();
+                loading = false;
+                update_controls();
+                browse_all.begin();
+            } catch (Error e) {
+                if (gen != generation || closed) return;
+                loading = false;
+                status.label = _("Could not load Bing markets: %s").printf(e.message);
+                update_controls();
+            }
         }
 
         // Build a row of category filter chips from the cached list. First
@@ -542,9 +614,27 @@ namespace Singularity.Shell {
                 bool new_tag = false;
                 string? error = null;
                 try {
-                    string data = yield command({HELPER, "browse", state.provider, category, "--pages", "1"}, state.cancel, CRAWL_CATEGORY_TIMEOUT);
-                    if (state.generation != generation || closed || state.cancel.is_cancelled()) return;
-                    var items = WallpaperOcs.items(data, state.provider, category);
+                    string data;
+                    Gee.ArrayList<WallpaperOcsItem> items;
+                    if (state.provider == BING_PROVIDER_ID) {
+                        // No --pages / pagination concept for Bing: one
+                        // `list <market>` call returns everything archived
+                        // for that market, already bounded by the existing
+                        // retention window. CRAWL_CATEGORY_TIMEOUT still
+                        // applies so a single slow market cannot stall a
+                        // worker beyond the user's patience.
+                        data = yield command({BING_HELPER, "list", category}, state.cancel, CRAWL_CATEGORY_TIMEOUT);
+                        if (state.generation != generation || closed || state.cancel.is_cancelled()) return;
+                        items = WallpaperBing.items(data);
+                        // For Bing, `category` IS the market id and the
+                        // item_category map uses it as the filter key the
+                        // same way OCS does (chip row -> string equality
+                        // against item_category[key]).
+                    } else {
+                        data = yield command({HELPER, "browse", state.provider, category, "--pages", "1"}, state.cancel, CRAWL_CATEGORY_TIMEOUT);
+                        if (state.generation != generation || closed || state.cancel.is_cancelled()) return;
+                        items = WallpaperOcs.items(data, state.provider, category);
+                    }
                     foreach (var item in items) {
                         // Re-check the cap under the lock so two workers
                         // can never both push past it on the last item.
@@ -672,7 +762,11 @@ namespace Singularity.Shell {
             name.tooltip_text = item.name;
             name.add_css_class("heading");
             box.append(name);
-            string attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"), item.provider);
+            string attribution;
+            if (item.provider == BING_PROVIDER_ID)
+                attribution = "%s · %s".printf(_("Bing"), item.market != "" ? item.market : item.provider);
+            else
+                attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"), item.provider);
             var credit = new Label(attribution);
             credit.xalign = 0;
             credit.ellipsize = Pango.EllipsizeMode.END;
@@ -721,9 +815,21 @@ namespace Singularity.Shell {
             var action = new Box(Orientation.HORIZONTAL, 8);
             card.spinner = new Spinner();
             action.append(card.spinner);
-            card.button = new Button.with_label(imports.is_added(item.key) ? _("Added") : _("Import"));
-            card.button.hexpand = true;
-            card.button.clicked.connect(() => import_card.begin(card));
+            if (item.provider == BING_PROVIDER_ID) {
+                // Pin/Pinned: the image is already part of a persistent
+                // Wallpaper Source the moment it was archived; toggling
+                // this just protects it from the retention-pruning timer.
+                // No WallpaperOcsImports involvement, no copy, no new
+                // pack: explicit operator decision not to misattribute
+                // a Bing photo into the "Imported from OCS" collection.
+                card.button = new Button.with_label(item.pinned ? _("Pinned") : _("Pin"));
+                card.button.hexpand = true;
+                card.button.clicked.connect(() => pin_card.begin(card));
+            } else {
+                card.button = new Button.with_label(imports.is_added(item.key) ? _("Added") : _("Import"));
+                card.button.hexpand = true;
+                card.button.clicked.connect(() => import_card.begin(card));
+            }
             action.append(card.button);
             box.append(action);
             card.child.set_child(box);
@@ -734,6 +840,47 @@ namespace Singularity.Shell {
         private async void thumbnails(int start, int gen, Cancellable cancel) {
             for (int i = start; i < cards.size && gen == generation && !closed; i += 3) {
                 var card = cards[i];
+                // Bing thumbnails live on the local filesystem already (the
+                // helper downloads the 400x240 JPEG before the `list`
+                // response is built); load them directly via a file-based
+                // pixbuf stream -- no Soup, no network round-trip. Empty
+                // thumbnail_path means OCS, which uses the Soup path below.
+                if (card.item.thumbnail_path != "") {
+                    try {
+                        var file = File.new_for_path(card.item.thumbnail_path);
+                        if (!file.query_exists()) {
+                            if (gen == generation && !closed) card.picture.tooltip_text = _("Preview unavailable");
+                            continue;
+                        }
+                        var stream = yield file.read_async(Priority.DEFAULT, cancel);
+                        // No try/finally -- Vala forbids `yield` inside a
+                        // finally block ("jump out of finally block not
+                        // permitted"). Close inline after the load and
+                        // again on the error path so a partially-decoded
+                        // stream never leaks the FD. Mirrors the existing
+                        // Soup path's flat try/catch + inline-close shape
+                        // in this same function.
+                        try {
+                            var pixbuf = yield new Gdk.Pixbuf.from_stream_at_scale_async(stream, 440, 260, true, cancel);
+                            try { stream.close(); } catch (Error e) {}
+                            if (gen == generation && !closed) card.picture.paintable = Gdk.Texture.for_pixbuf(pixbuf);
+                        } catch (Error e) {
+                            // Eat the error here rather than re-throwing:
+                            // the inner throw made Vala's flow analysis
+                            // mark `i` (the for-loop counter) as possibly
+                            // unassigned across the function, which broke
+                            // compilation. The outer catch below already
+                            // shows the same "Preview unavailable"
+                            // tooltip when stream.close() fails, so we
+                            // mirror that here -- a corrupt or unreadable
+                            // thumbnail file just shows the placeholder.
+                            try { stream.close(); } catch (Error e2) {}
+                        }
+                    } catch (Error e) {
+                        if (gen == generation && !closed) card.picture.tooltip_text = _("Preview unavailable");
+                    }
+                    continue;
+                }
                 string url = card.item.preview;
                 if (!url.has_prefix("https://") && !url.has_prefix("http://")) continue;
                 try {
@@ -760,6 +907,50 @@ namespace Singularity.Shell {
                     if (gen == generation && !closed) card.picture.tooltip_text = _("Preview unavailable");
                 }
             }
+        }
+
+        // Toggle pin/unpin for a Bing card. The helper takes
+        // "<market> <yyyymmdd>" with the date as a separate positional,
+        // so we split item.id (which the parser composes as
+        // "<market>:<date>") on the first colon and argv that to the
+        // helper. No file copy, no new pack, no WallpaperOcsImports --
+        // this is the entire Bing per-item action: write or remove a
+        // .pinned marker file so the retention timer skips this image.
+        private async void pin_card(OcsCard card) {
+            int colon = card.item.id.index_of(":");
+            if (colon <= 0 || colon >= card.item.id.length - 1) {
+                card.message.label = _("Invalid Bing item identity");
+                return;
+            }
+            string market = card.item.id.substring(0, colon);
+            string date = card.item.id.substring(colon + 1);
+            string[] verb = card.item.pinned ? new string[] {"unpin"} : new string[] {"pin"};
+            card.spinner.start();
+            card.button.label = card.item.pinned ? _("Unpinning…") : _("Pinning…");
+            card.message.label = "";
+            status.label = card.item.pinned ? _("Unpinning Bing image…") : _("Pinning Bing image…");
+            update_controls();
+            try {
+                // Pass a fresh Cancellable (null) so a pending browse-all
+                // cancellation cannot also kill the user's explicit pin
+                // click. Pin/unpin is a deliberate single-step op; a
+                // 15-second budget is generous and protects against a
+                // wedged helper.
+                yield command({BING_HELPER, verb[0], market, date}, null, 15);
+                card.item.pinned = !card.item.pinned;
+                card.button.label = card.item.pinned ? _("Pinned") : _("Pin");
+                card.message.label = card.item.pinned
+                    ? _("Pinned. This image will not be auto-pruned.")
+                    : _("Unpinned. This image may be auto-pruned.");
+                status.label = card.item.pinned
+                    ? _("Bing image pinned.")
+                    : _("Bing image unpinned.");
+            } catch (Error e) {
+                card.message.label = _("Could not toggle pin: %s").printf(e.message);
+                status.label = _("Pin toggle failed. Try again.");
+            }
+            card.spinner.stop();
+            update_controls();
         }
 
         private async void import_card(OcsCard card) {

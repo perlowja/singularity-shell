@@ -22,6 +22,20 @@ namespace Singularity {
         // an array of strings is a parse error, consistent with the other
         // shape checks in this class.
         public string[] tags = {};
+        // Bing-only fields. Defaults keep the existing OCS shape unchanged:
+        // every OCS item has an empty thumbnail_path (the Soup thumbnail
+        // path uses item.preview, a remote URL), is not pinned, and has no
+        // market. The browser treats these as additive, not load-bearing
+        // for OCS items.
+        public string thumbnail_path = "";
+        public bool pinned = false;
+        public string market = "";
+        // Canonical identity. For OCS this is "provider:numeric_id"; for Bing
+        // the helper's pin/unpin commands take "market date" independently, so
+        // we use "provider:market:date" and let callers compose the helper
+        // argv from (market, date) on the item directly. Keeping `key` stable
+        // across both item kinds means add_card / filter_cards / the imports
+        // map do not need a parallel data path.
         public string key { owned get { return provider + ":" + id; } }
     }
     // JSON from the helper is untrusted. Check types before Json-GLib getters,
@@ -139,6 +153,102 @@ namespace Singularity {
                 item.license = text(entry, "license", false);
                 item.preview = text(entry, "preview", false);
                 item.tags = tag_array(entry, "tags");
+                if (seen.add(item.key)) result.add(item);
+            }
+            return result;
+        }
+    }
+    // Bing is not a JSON-over-OCS feed; it talks to a different helper
+    // (ncz-wallpaper-bing) with its own command grammar. The browser treats
+    // it as a fifth pseudo-provider in the provider row but its command and
+    // response shapes are kept here, out of WallpaperOcs.providers(), so the
+    // OCS parser remains strictly about OCS data. WallpaperBing shares
+    // WallpaperOcsChoice so the category chip row can render markets the same
+    // way it renders OCS categories, and shares WallpaperOcsItem so the rest
+    // of the browser (add_card, filter_cards, thumbnails) keeps a single
+    // code path. The Bing-only fields on WallpaperOcsItem (thumbnail_path,
+    // pinned, market) default to empty/false for OCS items and are populated
+    // by items() below.
+    public class WallpaperBing : Object {
+        // The synthetic provider id used by every Bing item and the browser's
+        // SelectionRow. Hard-coded so the same string shows up in tests, the
+        // browser, and any future call site that needs to recognise Bing.
+        public const string PROVIDER_ID = "bing";
+        // `ncz-wallpaper-bing markets` prints TSV, NOT JSON: one
+        // "<market-code>\t<Human Name>" per line. The category chip row
+        // expects an ArrayList<WallpaperOcsChoice> just like the OCS
+        // categories() does, so we parse the TSV into the same shape.
+        // Tolerates trailing whitespace, blank lines, and lines with no tab
+        // (those are skipped, not treated as errors -- the helper's real
+        // output is well-formed, but the parser is the safety belt).
+        public static ArrayList<WallpaperOcsChoice> markets(string data) throws Error {
+            var result = new ArrayList<WallpaperOcsChoice>();
+            var seen = new HashSet<string>();
+            foreach (var raw in data.split("\n")) {
+                string line = raw.strip();
+                if (line == "") continue;
+                int tab = line.index_of("\t");
+                if (tab < 0) continue;
+                string id = line.substring(0, tab).strip();
+                string name = line.substring(tab + 1).strip();
+                if (id == "" || name == "") continue;
+                if (!seen.add(id)) continue;
+                result.add(new WallpaperOcsChoice(id, name));
+            }
+            result.sort((a, b) => a.name.collate(b.name));
+            return result;
+        }
+        // `ncz-wallpaper-bing list <market>` returns a JSON ARRAY (no
+        // schema/items wrapper, unlike the OCS helper). Each element carries:
+        //   provider, date, market, path, caption, copyright,
+        //   thumbnail_path, pinned
+        // Parse the array into the shared WallpaperOcsItem shape. `id` on the
+        // item is set to "<market>:<date>" so the existing key=
+        // "provider:id" formula produces a unique, stable identity per Bing
+        // archived image; helpers downstream that need the helper argv split
+        // can read item.market + item.id (substring after the colon) instead
+        // of re-parsing. Tags: Bing has no per-image tags; the field stays
+        // empty so filter_cards does not need to special-case anything.
+        public static ArrayList<WallpaperOcsItem> items(string data) throws Error {
+            var parser = new Json.Parser();
+            parser.load_from_data(data);
+            var root = parser.get_root();
+            if (root == null || root.get_node_type() != Json.NodeType.ARRAY)
+                throw new WallpaperOcsError.INVALID("Expected a Bing list array");
+            var arr = root.get_array();
+            var result = new ArrayList<WallpaperOcsItem>();
+            var seen = new HashSet<string>();
+            foreach (var node in arr.get_elements()) {
+                if (node == null || node.get_node_type() != Json.NodeType.OBJECT)
+                    throw new WallpaperOcsError.INVALID("Invalid Bing list entry");
+                var entry = node.get_object();
+                var item = new WallpaperOcsItem();
+                item.provider = PROVIDER_ID;
+                // Provider field is required and must equal "bing"; this
+                // catches a helper that ever emits mixed provider types in
+                // the same list.
+                if (WallpaperOcs.text(entry, "provider") != PROVIDER_ID)
+                    throw new WallpaperOcsError.INVALID("Bing list entry has unexpected provider");
+                item.market = WallpaperOcs.text(entry, "market");
+                item.name = WallpaperOcs.text(entry, "caption", false);
+                // Composite id keeps item.key unique across markets. The
+                // browser composes helper argv from (market, date) below
+                // rather than re-splitting item.id; this id is purely the
+                // identity for add_card / the imports map.
+                item.id = item.market + ":" + WallpaperOcs.text(entry, "date");
+                item.author = WallpaperOcs.text(entry, "copyright", false);
+                item.license = ""; // Bing does not emit a license field; honest default.
+                item.preview = ""; // No remote preview URL for Bing -- the
+                                   // thumbnail_path is loaded locally below.
+                item.thumbnail_path = WallpaperOcs.text(entry, "thumbnail_path", false);
+                var pin = entry.get_member("pinned");
+                if (pin == null || pin.get_value_type() != typeof(bool))
+                    throw new WallpaperOcsError.INVALID("Invalid Bing pinned field");
+                item.pinned = pin.get_boolean();
+                // Empty tags stays empty; do NOT synthesise a market-as-tag
+                // here (operator-confirmed design decision: a market name
+                // is not a wallpaper tag, it is a filter axis via the chip
+                // row, which already uses categories).
                 if (seen.add(item.key)) result.add(item);
             }
             return result;

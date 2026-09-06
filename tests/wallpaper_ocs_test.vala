@@ -241,8 +241,134 @@ private void test_import_complete_rejects_payload_without_sidecar_path() {
     remove_tree(root);
 }
 
+// Sample TSV emitted by `ncz-wallpaper-bing markets`. One "<id>\t<name>"
+// per line; the real helper hardcodes eight markets. We use a representative
+// four here so the parser is exercised on realistic input.
+private const string BING_MARKETS_TSV =
+    "en-US\tUnited States\n" +
+    "en-GB\tUnited Kingdom\n" +
+    "en-AU\tAustralia\n" +
+    "ja-JP\tJapan\n";
+// Sample list JSON emitted by `ncz-wallpaper-bing list <market>`. The shape
+// is a bare JSON array (no schema/items wrapper). Includes both pinned:true
+// and pinned:false so the bool parser is exercised on both branches.
+private const string BING_LIST_JSON =
+    "[{\"provider\":\"bing\",\"date\":\"20260818\",\"market\":\"en-US\"," +
+    "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260818.jpg\"," +
+    "\"caption\":\"Palmanova\",\"copyright\":\"Marco Zoccheddu/Getty Images\"," +
+    "\"thumbnail_path\":\"/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg\"," +
+    "\"pinned\":true}," +
+    "{\"provider\":\"bing\",\"date\":\"20260817\",\"market\":\"en-US\"," +
+    "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260817.jpg\"," +
+    "\"caption\":\"Cliffside path\",\"copyright\":\"Sample Author\"," +
+    "\"thumbnail_path\":\"/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260817_400x240.jpg\"," +
+    "\"pinned\":false}]";
+
+private void test_bing_markets_parses_tsv() {
+    // Realistic TSV -> the four markets above, sorted by display name.
+    try {
+        var rows = WallpaperBing.markets(BING_MARKETS_TSV);
+        assert(rows.size == 4);
+        // Sorted alphabetically by name: Australia, Japan, United Kingdom, United States.
+        assert(rows[0].id == "en-AU" && rows[0].name == "Australia");
+        assert(rows[1].id == "ja-JP" && rows[1].name == "Japan");
+        assert(rows[2].id == "en-GB" && rows[2].name == "United Kingdom");
+        assert(rows[3].id == "en-US" && rows[3].name == "United States");
+    } catch (Error e) { error("markets: %s", e.message); }
+}
+
+private void test_bing_markets_tolerates_blank_lines_and_whitespace() {
+    // Blank lines, trailing whitespace, and a comment-shaped line with no
+    // tab must not crash the parser -- the real helper is well-formed, but
+    // future versions or wrapper scripts may add comments and blank lines.
+    string noisy = "\n  \nen-US\tUnited States\n# this looks like a comment\n\nen-GB\tUnited Kingdom  \n";
+    try {
+        var rows = WallpaperBing.markets(noisy);
+        assert(rows.size == 2);
+        assert(rows[0].id == "en-GB" && rows[0].name == "United Kingdom");
+        assert(rows[1].id == "en-US" && rows[1].name == "United States");
+    } catch (Error e) { error("markets-noisy: %s", e.message); }
+}
+
+private void test_bing_markets_empty() {
+    // An empty response is a valid edge case (helper not installed, etc).
+    try { assert(WallpaperBing.markets("").size == 0); } catch (Error e) { error("markets-empty: %s", e.message); }
+    try { assert(WallpaperBing.markets("\n\n\n").size == 0); } catch (Error e) { error("markets-blank: %s", e.message); }
+}
+
+private void test_bing_items_parses_list_array() {
+    // The two-entry fixture above: one pinned, one not. Both items must
+    // populate the shared WallpaperOcsItem shape, with Bing-only fields
+    // filled in (market, thumbnail_path, pinned). item.key must be unique
+    // and provider-namespaced.
+    try {
+        var rows = WallpaperBing.items(BING_LIST_JSON);
+        assert(rows.size == 2);
+        // Pinned item first.
+        assert(rows[0].provider == "bing");
+        assert(rows[0].market == "en-US");
+        assert(rows[0].pinned == true);
+        assert(rows[0].name == "Palmanova");
+        assert(rows[0].author == "Marco Zoccheddu/Getty Images");
+        assert(rows[0].license == "");
+        assert(rows[0].preview == "");
+        assert(rows[0].tags.length == 0);
+        assert(rows[0].id == "en-US:20260818");
+        assert(rows[0].key == "bing:en-US:20260818");
+        assert(rows[0].thumbnail_path == "/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg");
+        // Unpinned item: pinned=false, different date.
+        assert(rows[1].pinned == false);
+        assert(rows[1].id == "en-US:20260817");
+        assert(rows[1].key == "bing:en-US:20260817");
+        assert(rows[1].name == "Cliffside path");
+    } catch (Error e) { error("items: %s", e.message); }
+}
+
+private void test_bing_items_empty_array() {
+    // An empty archive for a market is a valid edge case (no images yet).
+    try { assert(WallpaperBing.items("[]").size == 0); } catch (Error e) { error("items-empty: %s", e.message); }
+}
+
+private void test_bing_items_rejects_non_array_root() {
+    // Anything that isn't a JSON array is a parse error, mirroring the
+    // OCS-side "Expected a JSON object" guard. The Bing helper returns a
+    // bare array, never an object, so any non-array means we are
+    // talking to the wrong command / a broken helper.
+    string[] bad = {
+        "null",
+        "{}",
+        "{\"images\":[]}",
+        "not json",
+        "[{\"provider\":\"pling\",\"date\":\"20260818\",\"market\":\"en-US\"}]",
+    };
+    foreach (string data in bad) {
+        bool rejected = false;
+        try { WallpaperBing.items(data); }
+        catch (Error e) { rejected = true; }
+        assert(rejected);
+    }
+}
+
+private void test_bing_items_rejects_bad_pinned_field() {
+    // pinned must be a JSON bool; an int/string/null is a parse error so
+    // a malformed helper cannot silently drop the toggle state.
+    string bad = "[{\"provider\":\"bing\",\"date\":\"20260818\",\"market\":\"en-US\"," +
+                 "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260818.jpg\"," +
+                 "\"caption\":\"x\",\"copyright\":\"y\",\"pinned\":\"yes\"}]";
+    bool rejected = false;
+    try { WallpaperBing.items(bad); } catch (Error e) { rejected = true; }
+    assert(rejected);
+    // Missing pinned is also a parse error -- the field is load-bearing.
+    string missing = "[{\"provider\":\"bing\",\"date\":\"20260818\",\"market\":\"en-US\"," +
+                     "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260818.jpg\"," +
+                     "\"caption\":\"x\",\"copyright\":\"y\"}]";
+    rejected = false;
+    try { WallpaperBing.items(missing); } catch (Error e) { rejected = true; }
+    assert(rejected);
+}
+
 public int main(string[] args) {
     Test.init(ref args);
-    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path);
+    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path); Test.add_func("/ocs/bing-markets-parses-tsv", test_bing_markets_parses_tsv); Test.add_func("/ocs/bing-markets-tolerates-blank-lines-and-whitespace", test_bing_markets_tolerates_blank_lines_and_whitespace); Test.add_func("/ocs/bing-markets-empty", test_bing_markets_empty); Test.add_func("/ocs/bing-items-parses-list-array", test_bing_items_parses_list_array); Test.add_func("/ocs/bing-items-empty-array", test_bing_items_empty_array); Test.add_func("/ocs/bing-items-rejects-non-array-root", test_bing_items_rejects_non_array_root); Test.add_func("/ocs/bing-items-rejects-bad-pinned-field", test_bing_items_rejects_bad_pinned_field);
     return Test.run();
 }
