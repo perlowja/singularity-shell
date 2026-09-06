@@ -7,6 +7,9 @@ private string browse(string items, string provider = "pling", string category =
     return "{\"schema\":1,\"provider\":\"%s\",\"category\":\"%s\",\"items\":%s}".printf(provider, category, items);
 }
 private const string ITEM = "{\"provider\":\"pling\",\"id\":\"123\",\"name\":\"Space & <Stars>\",\"author\":null,\"preview\":null}";
+private const string ITEM_TAGGED = "{\"provider\":\"pling\",\"id\":\"456\",\"name\":\"Tagged\",\"tags\":[\"nature\",\" abstract \",\"nature\",\"\"]}";
+private const string ITEM_NO_TAGS = "{\"provider\":\"pling\",\"id\":\"789\",\"name\":\"Plain\"}";
+private const string ITEM_EMPTY_TAGS = "{\"provider\":\"pling\",\"id\":\"321\",\"name\":\"Empty\",\"tags\":[]}";
 private void test_providers() {
     try { var rows = WallpaperOcs.providers(PROVIDERS); assert(rows.size == 2); assert(rows[0].id == "kde-look"); assert(rows[1].id == "pling"); } catch (Error e) { error("%s", e.message); }
 }
@@ -14,7 +17,29 @@ private void test_categories() {
     try { var rows = WallpaperOcs.categories(INDEX, "pling"); assert(rows.size == 1); assert(rows[0].id == "300"); assert(rows[0].name == "Desktop"); } catch (Error e) { error("%s", e.message); }
 }
 private void test_items() {
-    try { var rows = WallpaperOcs.items(browse("[" + ITEM + "," + ITEM + "]"), "pling", "300"); assert(rows.size == 1); assert(rows[0].key == "pling:123"); assert(rows[0].author == ""); assert(rows[0].license == ""); assert(rows[0].preview == ""); assert(rows[0].name == "Space & <Stars>"); } catch (Error e) { error("%s", e.message); }
+    try { var rows = WallpaperOcs.items(browse("[" + ITEM + "," + ITEM + "]"), "pling", "300"); assert(rows.size == 1); assert(rows[0].key == "pling:123"); assert(rows[0].author == ""); assert(rows[0].license == ""); assert(rows[0].preview == ""); assert(rows[0].name == "Space & <Stars>"); assert(rows[0].tags.length == 0); } catch (Error e) { error("%s", e.message); }
+}
+private void test_tags() {
+    // Present, deduplicated, whitespace-stripped, blanks dropped, order preserved.
+    try {
+        var rows = WallpaperOcs.items(browse("[" + ITEM_TAGGED + "]"), "pling", "300");
+        assert(rows.size == 1);
+        assert(rows[0].tags.length == 2);
+        assert(rows[0].tags[0] == "nature");
+        assert(rows[0].tags[1] == "abstract");
+    } catch (Error e) { error("tagged: %s", e.message); }
+    // Explicit empty array collapses to empty.
+    try {
+        var rows = WallpaperOcs.items(browse("[" + ITEM_EMPTY_TAGS + "]"), "pling", "300");
+        assert(rows.size == 1);
+        assert(rows[0].tags.length == 0);
+    } catch (Error e) { error("empty-tags: %s", e.message); }
+    // Absent field collapses to empty (matches author/license/preview leniency).
+    try {
+        var rows = WallpaperOcs.items(browse("[" + ITEM_NO_TAGS + "]"), "pling", "300");
+        assert(rows.size == 1);
+        assert(rows[0].tags.length == 0);
+    } catch (Error e) { error("no-tags: %s", e.message); }
 }
 private void test_empty() {
     try { assert(WallpaperOcs.items(browse("[]"), "pling", "300").size == 0); } catch (Error e) { error("%s", e.message); }
@@ -24,7 +49,7 @@ private void test_invalid() {
     foreach (string data in bad) { bool rejected = false; try { WallpaperOcs.providers(data); } catch (Error e) { rejected = true; } assert(rejected); }
 }
 private void test_bad_items() {
-    string[] bad = { browse("[]", "kde-look"), browse("[]", "pling", "2"), browse("null"), browse("[null]"), browse("[{\"provider\":\"pling\",\"id\":123,\"name\":\"x\"}]"), browse("[" + ITEM.replace("pling", "kde-look") + "]"), browse("[" + ITEM.replace("null", "42") + "]") };
+    string[] bad = { browse("[]", "kde-look"), browse("[]", "pling", "2"), browse("null"), browse("[null]"), browse("[{\"provider\":\"pling\",\"id\":123,\"name\":\"x\"}]"), browse("[" + ITEM.replace("pling", "kde-look") + "]"), browse("[" + ITEM.replace("null", "42") + "]"), browse("[" + ITEM.replace("null", "{\"tags\":42}") + "]"), browse("[" + ITEM.replace("null", "{\"tags\":[\"ok\",42]}") + "]") };
     foreach (string data in bad) { bool rejected = false; try { WallpaperOcs.items(data, "pling", "300"); } catch (Error e) { rejected = true; } assert(rejected); }
 }
 private void test_bad_categories() {
@@ -59,6 +84,6 @@ private void test_import_complete() {
 }
 public int main(string[] args) {
     Test.init(ref args);
-    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete);
+    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete);
     return Test.run();
 }

@@ -15,6 +15,13 @@ namespace Singularity {
         public string author = "";
         public string license = "";
         public string preview = "";
+        // Tags emitted per item by the OCS browse response (JSON array of
+        // plain strings, possibly empty). Parsed leniently: absent field or
+        // explicit empty array both become an empty list, matching how the
+        // other optional string fields default to "". A value that is not
+        // an array of strings is a parse error, consistent with the other
+        // shape checks in this class.
+        public string[] tags = {};
         public string key { owned get { return provider + ":" + id; } }
     }
     // JSON from the helper is untrusted. Check types before Json-GLib getters,
@@ -54,6 +61,25 @@ namespace Singularity {
             if (node == null || node.get_node_type() != Json.NodeType.ARRAY)
                 throw new WallpaperOcsError.INVALID("Invalid OCS list: " + field);
             return node.get_array();
+        }
+        // Tags are emitted as a JSON array of strings. Absent field or empty
+        // array both collapse to an empty list; anything else (non-array, or
+        // any non-string element) is rejected so a malformed response cannot
+        // silently degrade the filter UI.
+        internal static string[] tag_array(Json.Object obj, string field) throws Error {
+            var node = obj.get_member(field);
+            if (node == null || node.is_null()) return {};
+            if (node.get_node_type() != Json.NodeType.ARRAY)
+                throw new WallpaperOcsError.INVALID("Invalid OCS list: " + field);
+            var arr = node.get_array();
+            var result = new Gee.ArrayList<string>();
+            foreach (var element in arr.get_elements()) {
+                if (element == null || element.get_value_type() != typeof(string))
+                    throw new WallpaperOcsError.INVALID("Invalid OCS tag entry: " + field);
+                string t = element.get_string().strip();
+                if (t != "" && !result.contains(t)) result.add(t);
+            }
+            return result.to_array();
         }
         internal static bool numeric_id(string id) {
             if (id.length == 0) return false;
@@ -112,6 +138,7 @@ namespace Singularity {
                 item.author = text(entry, "author", false);
                 item.license = text(entry, "license", false);
                 item.preview = text(entry, "preview", false);
+                item.tags = tag_array(entry, "tags");
                 if (seen.add(item.key)) result.add(item);
             }
             return result;
