@@ -149,7 +149,7 @@ namespace Singularity.Shell {
             string? identifier = process.get_identifier();
             int pid;
             if (identifier != null && int.try_parse(identifier, out pid) && pid > 1)
-                Posix.kill((Posix.pid_t) -pid, Posix.SIGKILL);
+                Posix.kill((Posix.pid_t) (-pid), Posix.Signal.KILL);
             process.force_exit();
         }
 
