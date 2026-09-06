@@ -463,10 +463,3 @@ wallpaper_gallery_test = executable('wallpaper-gallery-test',
   dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep],
 )
 test('wallpaper-gallery', wallpaper_gallery_test)
-
-executable('wallpaper-gallery-probe',
-  sources: ['src/core/wallpaper_gallery.vala', 'src/core/wallpaper_collections.vala',
-            'src/core/wallpaper_rotation_state.vala', 'scripts/wallpaper-gallery-probe.vala'],
-  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep],
-  install: false,
-)
