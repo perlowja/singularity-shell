@@ -1900,9 +1900,13 @@ namespace Singularity {
             // state file) must not empty the grid silently -- fall back to
             // whatever the first known collection is, same "never leave the
             // desktop with no wallpaper" principle the rotator script itself
-            // follows.
+            // follows. Persist the fallback so the source row and the state
+            // file agree with what's actually on screen instead of re-falling
+            // back (and re-logging the same mismatch) on every refresh.
             if (scan_dir == null && wallpaper_collections.size > 0) {
+                selected_id = wallpaper_collections[0].id;
                 scan_dir = wallpaper_collections[0].dir;
+                rotation_state.set_selected_collection(selected_id);
             }
 
             var collection_dirs = new ArrayList<string>();

@@ -23,9 +23,9 @@ namespace Singularity {
             var excluded = new HashSet<string>();
             var result = new ArrayList<WallpaperCandidate>();
             if (selected_dir == null) return result;
-            string root = File.new_for_path(selected_dir).get_path();
+            string root = canonical_path(selected_dir);
             foreach (string dir in collection_dirs) {
-                string other = File.new_for_path(dir).get_path();
+                string other = canonical_path(dir);
                 if (other != root) excluded.add(other);
             }
             scan_wallpaper_dir(root, scanned, members, new HashSet<string>(), excluded, 0);
@@ -42,6 +42,16 @@ namespace Singularity {
 
         // Bound traversal of user-controlled collection directories.
         private const int WALLPAPER_SCAN_MAX_DEPTH = 3;
+
+        // Dir= values across .collection files may point at the same
+        // directory through different symlinks (a pack install living
+        // outside /usr/share is a common layout) -- resolve to the real
+        // path before comparing, or the source-boundary exclusion above
+        // silently fails to recognize them as the same root.
+        private static string canonical_path(string path) {
+            string? real = Posix.realpath(path, null);
+            return real ?? File.new_for_path(path).get_path();
+        }
 
         // Other registered roots are separate sources, even when nested.
         private static void scan_wallpaper_dir(string path,
