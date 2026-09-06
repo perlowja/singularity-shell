@@ -198,7 +198,7 @@ namespace Singularity {
                     (Gtk.Application) GLib.Application.get_default(), wallpaper_collection_roots);
                 ocs_browser = browser;
                 browser.imported.connect(() => { refresh_wallpaper_sources(); populate_grid(); });
-                browser.destroy.connect(() => { ocs_browser = null; });
+                browser.dismissed.connect(() => { ocs_browser = null; });
                 browser.present();
             });
             online_row.set_child(online_button);

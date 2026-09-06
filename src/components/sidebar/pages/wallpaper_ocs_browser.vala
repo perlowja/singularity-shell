@@ -5,6 +5,7 @@ namespace Singularity.Shell {
     // Presentation only: the installed helper owns all OCS and import policy.
     public class WallpaperOcsBrowser : Gtk.Window {
         public signal void imported();
+        public signal void dismissed();
         private const string HELPER = "/usr/local/bin/ncz-wallpaper-ocs";
         private string[] collection_roots;
         private WallpaperOcsImports imports = new WallpaperOcsImports();
@@ -121,6 +122,7 @@ namespace Singularity.Shell {
                 generation++;
                 request.cancel();
                 session.abort();
+                dismissed();
                 return false;
             });
             var keys = new EventControllerKey();
