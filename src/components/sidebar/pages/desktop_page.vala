@@ -23,7 +23,7 @@ namespace Singularity {
         private FlowBox wallpaper_grid;
         private Gtk.Box wallpaper_source_container;
         private string[] wallpaper_collection_roots;
-        private WallpaperOcsBrowser? ocs_browser;
+        private Singularity.Shell.WallpaperOcsBrowser? ocs_browser;
 
         private Gee.ArrayList<WallpaperCollectionInfo> wallpaper_collections = new Gee.ArrayList<WallpaperCollectionInfo>();
         private WallpaperRotationState rotation_state = new WallpaperRotationState(
@@ -194,7 +194,7 @@ namespace Singularity {
             online_button.margin_top = online_button.margin_bottom = 8;
             online_button.clicked.connect(() => {
                 if (ocs_browser != null) { ocs_browser.present(); return; }
-                var browser = new WallpaperOcsBrowser(
+                var browser = new Singularity.Shell.WallpaperOcsBrowser(
                     (Gtk.Application) GLib.Application.get_default(), wallpaper_collection_roots);
                 ocs_browser = browser;
                 browser.imported.connect(() => { refresh_wallpaper_sources(); populate_grid(); });
