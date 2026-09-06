@@ -213,14 +213,16 @@ namespace Singularity.Shell {
                 foreach (var choice in choices) WallpaperOcs.categories(index, choice.id);
                 providers = choices;
                 category_index = index;
-                var names = new ArrayList<string>();
+                // Gtk.StringList expects a null-terminated strv. Gee.to_array()
+                // carries a length instead; append avoids reading past that array.
+                var names = new Gtk.StringList(null);
                 uint initial = 0;
                 for (int i = 0; i < providers.size; i++) {
-                    names.add(providers[i].name);
+                    names.append(providers[i].name);
                     if (providers[i].id == "pling") initial = (uint) i;
                 }
                 updating = true;
-                provider_box.model = new StringList(names.to_array());
+                provider_box.model = names;
                 provider_box.selected = initial;
                 updating = false;
                 loading = false;
@@ -237,14 +239,16 @@ namespace Singularity.Shell {
             if (provider_box.selected >= providers.size) return;
             try {
                 categories = WallpaperOcs.categories(category_index, providers[(int) provider_box.selected].id);
-                var names = new ArrayList<string>();
+                // Gtk.StringList expects a null-terminated strv. Gee.to_array()
+                // carries a length instead; append avoids reading past that array.
+                var names = new Gtk.StringList(null);
                 uint initial = 0;
                 for (int i = 0; i < categories.size; i++) {
-                    names.add(categories[i].name);
+                    names.append(categories[i].name);
                     if (categories[i].id == "300") initial = (uint) i;
                 }
                 updating = true;
-                category_box.model = new StringList(names.to_array());
+                category_box.model = names;
                 category_box.selected = categories.size > 0 ? initial : Gtk.INVALID_LIST_POSITION;
                 updating = false;
                 pages = 1;
