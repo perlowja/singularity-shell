@@ -25,6 +25,7 @@ namespace Singularity {
         private MenuButton button;
         private Label summary_label;
         private Box detail_box;
+        private static Gtk.CssProvider? compact_rows_provider = null;
         private SensorMonitor monitor;
         private bool show_frequency = true;
         private bool show_utilization = true;
@@ -74,17 +75,21 @@ namespace Singularity {
             button.child = summary_label;
             append(button);
 
-            // The popover body is now a stack of Singularity.Widgets.PreferencesGroups
-            // (one for the toggle, one per sensor kind in ungrouped mode, plus
-            // Processor / Memory / Storage from the utilization sections).
-            // detail_box itself is just a plain vertical Box -- the groups
-            // carry their own header chrome (the title + margin_bottom = 10
-            // baked into PreferencesGroup.construct) and the rows carry their
-            // own padding (PreferencesRow's internal main_box margin_start/end
-            // = 12), so the outer container sets NO margins of its own. Leaving
-            // the old 12px detail_box margins in place would double-pad the
-            // inner content relative to what it used to be.
-            detail_box = new Box(Orientation.VERTICAL, 0);
+            // Real Adw rows, with the original compact panel density rather
+            // than preferences-page group chrome and separators.
+            if (compact_rows_provider == null) {
+                compact_rows_provider = new Gtk.CssProvider();
+                compact_rows_provider.load_from_string(
+                    "row.sensors-compact-row { min-height: 0; padding: 0; " +
+                    "background: transparent; border: 0; box-shadow: none; }");
+                Gtk.StyleContext.add_provider_for_display(get_display(),
+                    compact_rows_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+            }
+            detail_box = new Box(Orientation.VERTICAL, 4);
+            detail_box.margin_top = 10;
+            detail_box.margin_bottom = 10;
+            detail_box.margin_start = 12;
+            detail_box.margin_end = 12;
             Popover popover = new Popover();
             // Bound the WHOLE popover, not just each group.
             //
@@ -449,47 +454,51 @@ namespace Singularity {
             }
         }
 
-        // add_heading() is gone. Each section's heading is now the title of the
-        // Singularity.Widgets.PreferencesGroup that wraps its rows; the group
-        // emits a Label with CSS class "heading" (see PreferencesGroup.title's
-        // setter in libsingularity) which is the same styling add_heading
-        // applied by hand. Centralising that styling in the group means the
-        // visual rhythm of "titled header then a list of rows" comes from one
-        // widget, not from a heading Label plus a row Box laid out separately.
+        // Adw.PreferencesRow is the native row container. Custom compact
+        // content preserves the name/heat/value layout and label width cap.
+        private void append_compact_row(Gtk.Widget content) {
+            var row = new Adw.PreferencesRow();
+            row.activatable = false;
+            row.selectable = false;
+            row.add_css_class("sensors-compact-row");
+            row.set_child(content);
+            detail_box.append(row);
+        }
+
+        private void add_heading(string title) {
+            Label heading = new Label(title);
+            heading.add_css_class("heading");
+            heading.halign = Align.START;
+            heading.margin_top = 4;
+            append_compact_row(heading);
+        }
 
         /**
          * Popover-wide Grouped/Ungrouped toggle. Rendered first, before any
          * sensor section, so its scope (every group below, not just one
          * subsection) is visible from where it sits.
          *
-         * Now an Singularity.Widgets.ActionRow whose TITLE shows the current
-         * state ("Grouped" / "Ungrouped") and whose row activation flips it.
-         * The label-doubles-as-state semantic the original plain Button had
-         * is preserved exactly -- clicking the row updates the title in place
-         * -- and we pick up the standard GNOME-preference convention where
-         * clicking anywhere on the row (not just a child button) triggers the
-         * toggle, matching SwitchRow's documented behaviour. The whole toggle
-         * sits inside its own PreferencesGroup titled "Sensors", which is the
-         * "Sensors" heading the original layout used to render as a plain
-         * Label next to the button.
-         *
-         * Choosing ActionRow over SelectionRow deliberately: the comment block
-         * above the original toggle specifically calls out that "an action-only
-         * 'Group'/'Ungroup' button would require remembering what you last
-         * clicked" -- the current state must be visible WITHOUT opening
-         * anything. SelectionRow's whole model is expand-to-pick: the value
-         * lives behind a click. ActionRow shows the value as its title, which
-         * is exactly the visual contract the design was after.
+         * The label doubles as the current state, not just an action verb
+         * ("Grouped" / "Ungrouped"), so glancing at it tells you which mode
+         * you are already in -- an action-only "Group"/"Ungroup" button
+         * would require remembering what you last clicked.
          */
         private void add_sensors_toggle() {
-            var group = new Singularity.Widgets.PreferencesGroup(_("Sensors"));
-            // ActionRow's constructor takes (title, subtitle, icon_name);
-            // we only want a plain title, so pass the title as the first
-            // argument and leave subtitle/icon_name null (the API exposes
-            // them as nullable with defaults).
-            var row = new Singularity.Widgets.ActionRow(
-                sensors_grouped ? _("Grouped") : _("Ungrouped"));
-            row.activated.connect(() => {
+            Box row = new Box(Orientation.HORIZONTAL, 6);
+            row.margin_top = 4;
+
+            Label heading = new Label(_("Sensors"));
+            heading.add_css_class("heading");
+            heading.halign = Align.START;
+            heading.hexpand = true;
+            row.append(heading);
+
+            Button toggle = new Button();
+            toggle.has_frame = false;
+            toggle.add_css_class("flat");
+            toggle.add_css_class("dim-label");
+            toggle.label = sensors_grouped ? _("Grouped") : _("Ungrouped");
+            toggle.clicked.connect(() => {
                 sensors_grouped = !sensors_grouped;
                 SettingsSchema? schema = settings.settings_schema;
                 if (schema != null && schema.has_key("sensors-grouped")) {
@@ -497,8 +506,9 @@ namespace Singularity {
                 }
                 rebuild_details();
             });
-            group.add_row(row);
-            detail_box.append(group);
+            row.append(toggle);
+
+            append_compact_row(row);
         }
 
         /**
@@ -606,74 +616,37 @@ namespace Singularity {
             cr.close_path();
         }
 
-        /**
-         * Build (and return) one row for the popover.
-         *
-         * Returns a Singularity.Widgets.ActionRow -- a real *Row
-         * widget, not a custom Box inside a custom Row. The row's
-         * title is the sensor name (ellipsized if it overflows); the
-         * row's suffix is a horizontal Box of the heat bar
-         * DrawingArea (when heat >= 0.0) and the value Label. The
-         * severity CSS class (warning/error/dim-label) lives on the
-         * value Label inside the suffix Box, where it can paint
-         * without fighting ActionRow's own title-area colour.
-         *
-         * Audit-pass fix: the 172913b implementation used
-         * `PreferencesRow.set_child(custom Box)` to wrap the
-         * name+bar+value layout, which is technically the convention
-         * at the PreferencesGroup level but not at the per-row level
-         * -- the rows themselves were Boxes, not Rows. This rewrites
-         * the row to be a proper ActionRow with the layout in the
-         * suffix slot, matching how desktop_page.vala puts buttons
-         * (Color picker, Eyedropper, ...) in suffix slots of
-         * ActionRows. ActionRow IS-A PreferencesRow, so every
-         * `group.add_row(build_row(...))` call site continues to
-         * compile unchanged.
-         */
-        private Singularity.Widgets.ActionRow build_row(string name, string value,
+        private void add_row(string name, string value,
                              Severity severity = Severity.NORMAL,
                              double heat = -1.0) {
-            var row = new Singularity.Widgets.ActionRow(name);
+            Box row = new Box(Orientation.HORIZONTAL, 12);
+            Label name_label = new Label(name);
+            name_label.halign = Align.START;
+            name_label.hexpand = true;
             // Long sensor names must not push the reading off the popover.
-            // ActionRow's title Label is the one that holds the row's
-            // title; ellipsize + max_width_chars on it cap the visual
-            // width and the tooltip_text keeps the full name available
-            // on hover.
-            row.title = name;
-            row.tooltip_text = name;
-            // ActionRow exposes `title_label` internally; max-width +
-            // ellipsize there mirror the original name_label config.
-            // The title label lives inside ActionRow's labels_box
-            // (labels_box.hexpand = true), so the title area will
-            // expand and the suffix Box will be right-aligned, which
-            // is the visual contract the original horizontal Box had.
-            // (ActionRow sets title_label.xalign = 0f; the labels_box
-            // is hexpand, which is what gives the trailing widgets
-            // their right alignment.)
+            name_label.ellipsize = Pango.EllipsizeMode.END;
+            name_label.max_width_chars = 22;
+            name_label.tooltip_text = name;
+            row.append(name_label);
 
-            // Suffix: horizontal Box containing the optional heat bar
-            // and the value label. The bar carries the MAGNITUDE, the
-            // label colour carries the ALARM. They are different
-            // questions: on a healthy machine every sensor is NORMAL
-            // and the labels say nothing, while the bars still show
-            // which part of the board is warmest.
-            var suffix = new Box(Orientation.HORIZONTAL, 12);
+            // The bar carries the MAGNITUDE, the label colour carries the
+            // ALARM. They are different questions: on a healthy machine every
+            // sensor is NORMAL and the labels say nothing, while the bars
+            // still show which part of the board is warmest. Measured on O6N:
+            // 20 readings, 19 of them NORMAL, and the NVMe at 0.74 is the only
+            // one that stands out -- but only because of the bar.
             if (heat >= 0.0) {
-                suffix.append(make_heat_bar(heat));
+                row.append(make_heat_bar(heat));
             }
+
             Label value_label = new Label(value);
             value_label.halign = Align.END;
-            // Severity CSS class on the value label. ActionRow does
-            // not paint colour on its title area the way the custom
-            // PreferencesRow did, so warning/error/dim-label here
-            // reads cleanly without fighting the row's own styling.
             string? css = severity_css(severity);
             if (css != null) {
                 value_label.add_css_class(css);
             }
-            suffix.append(value_label);
-            row.add_suffix(suffix);
-            return row;
+            row.append(value_label);
+            append_compact_row(row);
         }
 
         /**
@@ -688,20 +661,13 @@ namespace Singularity {
                 return;
             }
 
-            // Each subsection is its own PreferencesGroup, titled with the
-            // same string add_heading() used to render. The "Processor" /
-            // "Memory" / "Storage" headings previously came from add_heading();
-            // the group title carries the same CSS class ("heading") and is
-            // visually equivalent, so callers see no change other than the
-            // row separators the group now adds.
-
             // ---- processor ----
             UtilizationReading[] cores = util.per_cpu();
             if (util.cpu_fraction >= 0.0 || cores.length > 0) {
-                var group = new Singularity.Widgets.PreferencesGroup(_("Processor"));
+                add_heading(_("Processor"));
                 if (util.cpu_fraction >= 0.0) {
-                    group.add_row(build_row(_("Total"), "%d%%".printf(percent_of(util.cpu_fraction)),
-                            Severity.NORMAL, util.cpu_fraction));
+                    add_row(_("Total"), "%d%%".printf(percent_of(util.cpu_fraction)),
+                            Severity.NORMAL, util.cpu_fraction);
                 }
                 // Same cap-and-count convention as add_group(). Sky1 has 12
                 // cores and server parts have far more; the popover scrolls,
@@ -715,8 +681,8 @@ namespace Singularity {
                         continue;   // first sample: no rate yet
                     }
                     if (shown < MAX_ROWS_PER_GROUP) {
-                        group.add_row(build_row(core.label, "%d%%".printf(percent_of(core.fraction)),
-                                Severity.NORMAL, core.fraction));
+                        add_row(core.label, "%d%%".printf(percent_of(core.fraction)),
+                                Severity.NORMAL, core.fraction);
                         shown++;
                     } else {
                         hidden++;
@@ -728,36 +694,34 @@ namespace Singularity {
                 // still tells you roughly how busy the other 58 are, instead
                 // of discarding that information entirely.
                 if (hidden > 0) {
-                    group.add_row(build_row(_("%d more").printf(hidden),
-                            "%d%%".printf(percent_of(hidden_sum / hidden))));
+                    add_row(_("%d more").printf(hidden),
+                            "%d%%".printf(percent_of(hidden_sum / hidden)));
                 }
-                detail_box.append(group);
             }
 
             // ---- memory ----
             if (util.memory_fraction >= 0.0) {
-                var group = new Singularity.Widgets.PreferencesGroup(_("Memory"));
-                group.add_row(build_row(_("RAM"),
+                add_heading(_("Memory"));
+                add_row(_("RAM"),
                         _("%s / %s").printf(format_bytes(util.memory_used_bytes),
                                             format_bytes(util.memory_total_bytes)),
                         capacity_severity(util.memory_fraction),
-                        util.memory_fraction));
+                        util.memory_fraction);
                 // Omitted entirely when there is no swap. A "Swap 0%" row on a
                 // swapless machine says the swap is empty, not that there is
                 // none, which is a different and misleading claim.
                 if (util.swap_fraction >= 0.0) {
-                    group.add_row(build_row(_("Swap"), "%d%%".printf(percent_of(util.swap_fraction)),
+                    add_row(_("Swap"), "%d%%".printf(percent_of(util.swap_fraction)),
                             capacity_severity(util.swap_fraction),
-                            util.swap_fraction));
+                            util.swap_fraction);
                 }
-                detail_box.append(group);
             }
 
             // ---- storage ----
             CapacityReading[] volumes = util.filesystems();
             UtilizationReading[] spindles = util.disks();
             if (volumes.length > 0 || spindles.length > 0) {
-                var group = new Singularity.Widgets.PreferencesGroup(_("Storage"));
+                add_heading(_("Storage"));
 
                 int shown = 0;
                 // Capacity and activity get SEPARATE overflow counters, not
@@ -773,17 +737,17 @@ namespace Singularity {
                         continue;
                     }
                     if (shown < MAX_ROWS_PER_GROUP) {
-                        group.add_row(build_row(vol.label,
+                        add_row(vol.label,
                                 _("%s / %s").printf(format_bytes(vol.used_bytes),
                                                     format_bytes(vol.total_bytes)),
-                                capacity_severity(vol.fraction), vol.fraction));
+                                capacity_severity(vol.fraction), vol.fraction);
                         shown++;
                     } else {
                         hidden_volumes++;
                     }
                 }
                 if (hidden_volumes > 0) {
-                    group.add_row(build_row(_("%d more").printf(hidden_volumes), ""));
+                    add_row(_("%d more").printf(hidden_volumes), "");
                 }
 
                 // Busy percentage is a RATE, not a fill level, so it is listed
@@ -797,9 +761,9 @@ namespace Singularity {
                         continue;
                     }
                     if (shown < MAX_ROWS_PER_GROUP) {
-                        group.add_row(build_row(_("%s activity").printf(disk.label),
+                        add_row(_("%s activity").printf(disk.label),
                                 "%d%%".printf(percent_of(disk.fraction)),
-                                Severity.NORMAL, disk.fraction));
+                                Severity.NORMAL, disk.fraction);
                         shown++;
                     } else {
                         hidden_disks++;
@@ -807,15 +771,13 @@ namespace Singularity {
                     }
                 }
                 if (hidden_disks > 0) {
-                    group.add_row(build_row(_("%d more").printf(hidden_disks),
-                            "%d%%".printf(percent_of(hidden_disk_sum / hidden_disks))));
+                    add_row(_("%d more").printf(hidden_disks),
+                            "%d%%".printf(percent_of(hidden_disk_sum / hidden_disks)));
                 }
-                detail_box.append(group);
             }
         }
 
-        private void add_group(SensorKind kind, string title,
-                             Singularity.Widgets.PreferencesGroup? flat = null) {
+        private void add_group(SensorKind kind, string title) {
             SensorReading[] matching = {};
             foreach (SensorReading reading in monitor.readings()) {
                 if (reading.kind == kind) {
@@ -837,24 +799,15 @@ namespace Singularity {
                 // limit, and averaging across sensors -- let alone an entire
                 // family of them -- has no single threshold to colour or
                 // scale a bar against.
-                //
-                // The row goes into the flat-sensors PreferencesGroup passed
-                // in by rebuild_details() -- one row per kind, no per-kind
-                // headings, same flat list the original layout showed when
-                // sensors were grouped.
                 int64 sum = 0;
                 foreach (SensorReading reading in matching) {
                     sum += reading.millidegrees;
                 }
-                flat.add_row(build_row(title, format_celsius((int) (sum / matching.length))));
+                add_row(title, format_celsius((int) (sum / matching.length)));
                 return;
             }
 
-            // Ungrouped: each kind gets its own titled PreferencesGroup, with
-            // the per-sensor rows listed below the title. The title replaces
-            // add_heading() (the group emits the same "heading"-class Label
-            // under the hood) so callers see no change to the visual rhythm.
-            var group = new Singularity.Widgets.PreferencesGroup(title);
+            add_heading(title);
             // Cap the rows. Sensor count varies enormously by platform: an ARM
             // dev board reports 5, a Qualcomm SC8280XP reports 55. Listing all
             // of them turns the popover into a wall of near-identical numbers,
@@ -864,8 +817,8 @@ namespace Singularity {
             int64 hidden_millidegrees_sum = 0;
             foreach (SensorReading reading in matching) {
                 if (shown < MAX_ROWS_PER_GROUP) {
-                    group.add_row(build_row(reading.label, format_celsius(reading.millidegrees),
-                            reading.severity, reading.heat_fraction));
+                    add_row(reading.label, format_celsius(reading.millidegrees),
+                            reading.severity, reading.heat_fraction);
                     shown++;
                 } else {
                     hidden++;
@@ -879,10 +832,9 @@ namespace Singularity {
             // sensor's own limit, and averaging across sensors that may have
             // different limits has no single threshold to colour against.
             if (hidden > 0) {
-                group.add_row(build_row(_("%d more").printf(hidden),
-                        format_celsius((int) (hidden_millidegrees_sum / hidden))));
+                add_row(_("%d more").printf(hidden),
+                        format_celsius((int) (hidden_millidegrees_sum / hidden)));
             }
-            detail_box.append(group);
         }
 
         /**
@@ -903,7 +855,7 @@ namespace Singularity {
          * aggregate temperature for the whole CPU, and clock broken out by
          * cluster underneath it.
          */
-        private void add_cpu_section(Singularity.Widgets.PreferencesGroup? flat = null) {
+        private void add_cpu_section() {
             SensorReading[] cpu_temps = {};
             foreach (SensorReading reading in monitor.readings()) {
                 if (reading.kind == SensorKind.CPU) {
@@ -925,7 +877,7 @@ namespace Singularity {
                     foreach (SensorReading reading in cpu_temps) {
                         sum += reading.millidegrees;
                     }
-                    flat.add_row(build_row(_("CPU"), format_celsius((int) (sum / cpu_temps.length))));
+                    add_row(_("CPU"), format_celsius((int) (sum / cpu_temps.length)));
                 }
                 // Group by max_khz -- the actual performance-tier signal.
                 // clocks() is one entry per cpufreq POLICY, and a policy is
@@ -983,21 +935,19 @@ namespace Singularity {
                     string value = tier_max[i] > 0
                         ? "%s / %s".printf(format_clock(avg_khz), format_clock(tier_max[i]))
                         : format_clock(avg_khz);
-                    flat.add_row(build_row(label, value));
+                    add_row(label, value);
                 }
                 return;
             }
 
-            // Ungrouped: own titled PreferencesGroup with temp rows + raw
-            // clock rows. add_heading() is gone -- the group title replaces it.
-            var group = new Singularity.Widgets.PreferencesGroup(_("CPU"));
+            add_heading(_("CPU"));
             int shown = 0;
             int hidden = 0;
             int64 hidden_millidegrees_sum = 0;
             foreach (SensorReading reading in cpu_temps) {
                 if (shown < MAX_ROWS_PER_GROUP) {
-                    group.add_row(build_row(reading.label, format_celsius(reading.millidegrees),
-                            reading.severity, reading.heat_fraction));
+                    add_row(reading.label, format_celsius(reading.millidegrees),
+                            reading.severity, reading.heat_fraction);
                     shown++;
                 } else {
                     hidden++;
@@ -1005,8 +955,8 @@ namespace Singularity {
                 }
             }
             if (hidden > 0) {
-                group.add_row(build_row(_("%d more").printf(hidden),
-                        format_celsius((int) (hidden_millidegrees_sum / hidden))));
+                add_row(_("%d more").printf(hidden),
+                        format_celsius((int) (hidden_millidegrees_sum / hidden)));
             }
             // Raw, one row per cpufreq policy, in whatever order clocks()
             // returned them -- no grouping, no averaging. The label is the
@@ -1017,9 +967,8 @@ namespace Singularity {
                 string value = c.max_khz > 0
                     ? "%s / %s".printf(format_clock(c.khz), format_clock(c.max_khz))
                     : format_clock(c.khz);
-                group.add_row(build_row(c.label, value));
+                add_row(c.label, value);
             }
-            detail_box.append(group);
         }
 
         /** Built only while the popover is open. */
@@ -1033,23 +982,7 @@ namespace Singularity {
             // One control for the whole popover, at the top so its scope is
             // obvious before any section renders: it decides whether every
             // group below (CPU/GPU/NPU/... and Clocks) shows its heading.
-            // add_sensors_toggle() appends its own titled PreferencesGroup,
-            // so the "Sensors" heading the old layout rendered as a hand-made
-            // Label comes from the group title.
             add_sensors_toggle();
-
-            // In grouped mode, every per-kind section collapses to a single
-            // row inside ONE shared PreferencesGroup rather than each kind
-            // getting its own titled group. We construct that group here and
-            // pass it to add_cpu_section()/add_group(); when sensors_grouped
-            // is true they append a row to it, when it is false they create
-            // their own per-kind group. Either way the caller never has to
-            // know which branch fired.
-            Singularity.Widgets.PreferencesGroup? flat = null;
-            if (sensors_grouped) {
-                flat = new Singularity.Widgets.PreferencesGroup();
-                detail_box.append(flat);
-            }
 
             // Every kind the backend can name, hottest-silicon first and the
             // board last. add_group() skips a kind with no sensors, so a PC
@@ -1059,29 +992,16 @@ namespace Singularity {
             // kinds were classified and then silently dropped -- on Sky1 that
             // hid eleven of nineteen readings, including the NVMe that was the
             // only one worth looking at.
-            add_cpu_section(flat);
-            add_group(SensorKind.GPU,     _("GPU"),     flat);
-            add_group(SensorKind.NPU,     _("NPU"),     flat);
-            add_group(SensorKind.VPU,     _("VPU"),     flat);
-            add_group(SensorKind.MEMORY,  _("Memory"),  flat);
-            add_group(SensorKind.STORAGE, _("Storage"), flat);
-            add_group(SensorKind.NETWORK, _("Network"), flat);
-            add_group(SensorKind.BOARD,   _("Board"),   flat);
-            add_group(SensorKind.SYSTEM,  _("System"),  flat);
+            add_cpu_section();
+            add_group(SensorKind.GPU,     _("GPU"));
+            add_group(SensorKind.NPU,     _("NPU"));
+            add_group(SensorKind.VPU,     _("VPU"));
+            add_group(SensorKind.MEMORY,  _("Memory"));
+            add_group(SensorKind.STORAGE, _("Storage"));
+            add_group(SensorKind.NETWORK, _("Network"));
+            add_group(SensorKind.BOARD,   _("Board"));
+            add_group(SensorKind.SYSTEM,  _("System"));
 
-            // If the grouped-mode flat group ended up empty (no sensor kinds
-            // matched this rebuild), unhook it: leaving an empty PreferencesGroup
-            // appended to detail_box would render a blank header_box worth of
-            // padding that the old layout never produced. add_group() and
-            // add_cpu_section() both early-return on no data, so the only
-            // remaining case where this fires is the genuinely empty machine.
-            if (flat != null && flat.get_rows().size == 0) {
-                detail_box.remove(flat);
-            }
-
-            // Processor / Memory / Storage each create their own titled
-            // PreferencesGroup internally (see add_utilization_details());
-            // appending to detail_box is done inside that function.
             add_utilization_details();
         }
     }

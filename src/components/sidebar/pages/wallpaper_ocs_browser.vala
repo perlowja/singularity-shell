@@ -44,61 +44,18 @@ namespace Singularity.Shell {
         private ArrayList<WallpaperOcsChoice> providers = new ArrayList<WallpaperOcsChoice>();
         private ArrayList<WallpaperOcsChoice> categories = new ArrayList<WallpaperOcsChoice>();
         private ArrayList<OcsCard> cards = new ArrayList<OcsCard>();
-        // Filter state. "" means "no filter active"; otherwise the matching
-        // category id or exactly one active tag must match (AND between the
-        // three axes: text, category, tag).
-        //
-        // The tag axis used to be multi-select (a HashSet of tags feeding
-        // card_matches() with AND-logic across the union). That contract
-        // was implemented as a FlowBox of Chip widgets -- and Chip clicks
-        // proved unreliable on live hardware (only the inner Button hit
-        // area received clicks, not the chip's rounded pill background).
-        // The operator's fix is to drop the multi-select chip row and use
-        // a single-select SelectionRow dropdown instead. libsingularity has
-        // no native multi-select dropdown widget, and rolling our own would
-        // either duplicate ExpanderRow's machinery or borrow a checkbox
-        // pattern that has no precedent in this codebase. We accept the
-        // single-select tradeoff: only one tag can be active at a time, and
-        // card_matches() still ANDs across text + category + (single) tag,
-        // so the same UI affordance -- "narrow the grid to wallpapers
-        // carrying exactly one tag I care about" -- is preserved.
-        //
-        // active_tag_ids stays a HashSet so card_matches() and the
-        // rebuild helpers do not need to be rewritten to deal with both the
-        // old multi-select and new single-select shapes; SelectionRow sets
-        // it to a one-element or empty set.
+        // Filters use stable provider/tag IDs; display labels are separate.
         private string active_category_id = "";
         private HashSet<string> active_tag_ids = new HashSet<string>();
-        // Live union of tags across every card currently in memory. Updated
-        // incrementally on add_card(); rebuilt on demand for the dropdown.
         private HashSet<string> known_tag_ids = new HashSet<string>();
-
-        // Provider/category chrome.
-        // Provider category row (single-select chip row kept for now: the category
-        // axis is naturally a single active value). Below it, the new tag
-        // filter is a single-select SelectionRow instead of a chip row -- see
-        // the rationale block in initialize() for why the tag axis was
-        // downgraded from multi-select chip to single-select dropdown.
-        private PreferencesGroup provider_group;
-        private PreferencesGroup filter_group;
-        private SelectionRow provider_row;
-        private SelectionRow tag_row;
-        // filter_box was the old vertical Box that wrapped the search
-        // row + category chips + tag SelectionRow. Each of those now
-        // lives in its own PreferencesGroup, so the wrapper is gone.
-        // Removed in the audit pass; if any future code reaches for it
-        // again, the right answer is another PreferencesGroup, not a
-        // Box.
+        private Adw.PreferencesGroup provider_group;
+        private Adw.PreferencesGroup filter_group;
+        private Adw.ComboRow provider_row;
+        private Adw.ComboRow tag_row;
+        private string[] provider_ids = {};
+        private string[] tag_ids = {};
         private FlowBox category_chips;
-        // The search box is an EntryRow (libsingularity). Its inner
-        // Entry is `protected` and not reachable from outside the
-        // class, so we hold the EntryRow reference and reach the
-        // text / sensitive / entry_changed signal through its public
-        // API. The row title doubles as the entry placeholder (bound
-        // via SYNC_CREATE in EntryRow.construct), so the title set
-        // here shows up both as the row label and as the placeholder
-        // text inside the empty entry.
-        private EntryRow? search_row;
+        private Adw.EntryRow? search_row;
         private Button refresh;
         private Button close_button;
         private Spinner spinner;
@@ -132,135 +89,71 @@ namespace Singularity.Shell {
             imports.discover(WallpaperCollections.parse(roots));
             session.timeout = 25;
             session.user_agent = "Singularity-Wallpaper-Browser/1";
-            // Outer chrome (title + Close) follows the same shape as the
-            // desktop_page preferences groups so this window reads as a
-            // continuation of the settings panel that launched it.
-            var content = new Box(Orientation.VERTICAL, 12);
-            content.margin_start = content.margin_end = 20;
-            content.margin_top = content.margin_bottom = 16;
-            set_child(content);
-
-            // Window chrome: PreferencesGroup "Browser" containing
-            // the description text and the window title row (title +
-            // Close button). Mirrors the desktop_page online-row
-            // pattern (PreferencesRow.set_child(custom Box)). The
-            // Browser group is untitled -- the page title lives in
-            // the row itself, matching how the settings sidebar's
-            // own pages put the page title in a row rather than
-            // above the group.
-            var browser_group = new PreferencesGroup(null);
-            var description = new Label(_("Browse and import wallpapers from OCS uploaders. Added packs appear in Wallpaper Source."));
-            description.wrap = true;
-            description.xalign = 0;
-            description.margin_start = 4;
-            description.margin_end = 4;
-            description.margin_top = 6;
-            description.margin_bottom = 2;
-            var description_row = new PreferencesRow();
-            description_row.activatable = false;
-            description_row.set_child(description);
-            browser_group.add_row(description_row);
-            var title_row = new PreferencesRow();
-            title_row.activatable = false;
-            var title_box = new Box(Orientation.HORIZONTAL, 12);
-            var title_label = new Label(_("Online Wallpapers"));
-            title_label.add_css_class("title-2");
-            title_label.hexpand = true;
-            title_label.xalign = 0;
-            title_box.append(title_label);
+            var page = new Adw.PreferencesPage();
+            set_child(page);
+            var browser_group = new Adw.PreferencesGroup();
+            var title_row = new Adw.ActionRow();
+            title_row.title = _("Online Wallpapers");
+            title_row.subtitle = _("Browse and import wallpapers from OCS uploaders. Added packs appear in Wallpaper Source.");
+            title_row.use_markup = false;
             close_button = new Button.with_label(_("Close"));
-            close_button.add_css_class("pill");
             close_button.valign = Align.CENTER;
             close_button.clicked.connect(() => close());
-            title_box.append(close_button);
-            title_row.set_child(title_box);
-            browser_group.add_row(title_row);
-            content.append(browser_group);
-            // Provider selection: PreferencesGroup + SelectionRow, same
-            // pattern desktop_page.vala uses for the "Wallpaper Source"
-            // row. Items populated after the helper reports available
-            // providers (see initialize()).
-            provider_group = new PreferencesGroup(_("Provider"));
-            provider_row = new SelectionRow(_("Online source"), new string[0]);
-            provider_group.add_row(provider_row);
-            content.append(provider_group);
+            title_row.add_suffix(close_button);
+            browser_group.add(title_row);
+            page.add(browser_group);
 
-            // Filter UI: EntryRow for search + ActionRow for refresh in
-            // a "Filter" PreferencesGroup. EntryRow binds its
-            // placeholder to the row title by default ("Search"); we
-            // override it post-construct with the original
-            // "Filter loaded wallpapers" placeholder so the search
-            // intent is clear when the entry is empty. The refresh
-            // row uses an ActionRow with a refresh icon and the
-            // activated() signal -- standard row-click convention.
-            var search_group = new PreferencesGroup(_("Filter"));
-            // EntryRow binds its inner entry's placeholder-text to
-            // its own title via bind_property() with SYNC_CREATE, so
-            // the row label AND the entry placeholder both read
-            // "Filter loaded wallpapers" -- the same descriptive
-            // text the original Gtk.SearchEntry used. The user sees a
-            // titled row whose empty entry hints at what to type.
-            var search_entry_row = new EntryRow(_("Filter loaded wallpapers"));
-            search_entry_row.entry_changed.connect(filter_cards);
-            search_row = search_entry_row;
-            search_group.add_row(search_entry_row);
-            refresh = new Button.with_label(_("Refresh / Retry"));
-            refresh.add_css_class("pill");
+            provider_group = new Adw.PreferencesGroup();
+            provider_row = new Adw.ComboRow();
+            provider_row.title = _("Online source");
+            provider_row.use_markup = false;
+            provider_group.add(provider_row);
+            page.add(provider_group);
+
+            var search_group = new Adw.PreferencesGroup();
+            search_row = new Adw.EntryRow();
+            search_row.title = _("Filter loaded wallpapers");
+            search_row.changed.connect(filter_cards);
+            refresh = new Button.from_icon_name("view-refresh-symbolic");
+            refresh.tooltip_text = _("Refresh / Retry");
             refresh.valign = Align.CENTER;
-            var refresh_row = new ActionRow(_("Refresh / Retry"));
-            refresh_row.icon_name = "view-refresh-symbolic";
-            refresh_row.add_suffix(refresh);
-            refresh_row.activated.connect(() => {
+            refresh.clicked.connect(() => {
                 if (category_index == "") initialize.begin();
                 else browse_all.begin();
             });
-            search_group.add_row(refresh_row);
-            content.append(search_group);
+            search_row.add_suffix(refresh);
+            search_group.add(search_row);
+            page.add(search_group);
 
-            // Category filter: chip FlowBox inside a PreferencesRow
-            // inside a "Category" PreferencesGroup. The chips
-            // themselves remain Singularity.Widgets.Chip
-            // (operator-approved for single-select categories; their
-            // click target works fine here, unlike the multi-select
-            // tag case).
-            var category_group = new PreferencesGroup(_("Category"));
-            var category_chips_row = new PreferencesRow();
-            category_chips_row.activatable = false;
+            var category_group = new Adw.PreferencesGroup();
+            category_group.title = _("Category");
+            var category_row = new Adw.PreferencesRow();
+            category_row.activatable = false;
             category_chips = new FlowBox();
             category_chips.selection_mode = SelectionMode.NONE;
             category_chips.max_children_per_line = 8;
             category_chips.column_spacing = 6;
             category_chips.row_spacing = 6;
             category_chips.hexpand = true;
-            category_chips.margin_start = 4;
-            category_chips.margin_end = 4;
-            category_chips.margin_top = 6;
-            category_chips.margin_bottom = 6;
-            category_chips_row.set_child(category_chips);
-            category_group.add_row(category_chips_row);
-            content.append(category_group);
+            category_chips.margin_start = category_chips.margin_end = 8;
+            category_chips.margin_top = category_chips.margin_bottom = 6;
+            category_row.set_child(category_chips);
+            category_group.add(category_row);
+            page.add(category_group);
 
-            // Tag filter: SelectionRow in a "Tag" PreferencesGroup.
-            // Items populated lazily as the crawl discovers new
-            // tags (rebuild_tag_row()). SelectionRow handles an
-            // empty list by showing the expander with no rows.
-            filter_group = new PreferencesGroup(_("Tag"));
-            tag_row = new SelectionRow(_("Tag"), new string[0]);
-            filter_group.add_row(tag_row);
-            content.append(filter_group);
-            // Status row: spinner + a count-bearing status line.
-            // Wrapped in a PreferencesRow inside a (no-title) footer
-            // PreferencesGroup so the visual rhythm of the page is
-            // PreferencesGroup -> row -> row -> row -> footer, with
-            // no ad-hoc horizontal Box breaking the convention.
-            var footer_group = new PreferencesGroup(null);
-            var progress_row = new PreferencesRow();
+            filter_group = new Adw.PreferencesGroup();
+            tag_row = new Adw.ComboRow();
+            tag_row.title = _("Tag");
+            tag_row.use_markup = false;
+            filter_group.add(tag_row);
+            page.add(filter_group);
+
+            var results_group = new Adw.PreferencesGroup();
+            var progress_row = new Adw.PreferencesRow();
             progress_row.activatable = false;
             var progress = new Box(Orientation.HORIZONTAL, 8);
-            progress.margin_start = 4;
-            progress.margin_end = 4;
-            progress.margin_top = 4;
-            progress.margin_bottom = 4;
+            progress.margin_start = progress.margin_end = 8;
+            progress.margin_top = progress.margin_bottom = 6;
             spinner = new Spinner();
             spinner.valign = Align.CENTER;
             progress.append(spinner);
@@ -270,17 +163,8 @@ namespace Singularity.Shell {
             status.hexpand = true;
             progress.append(status);
             progress_row.set_child(progress);
-            footer_group.add_row(progress_row);
-            content.append(footer_group);
-            // Grid.
-            var scroll = new ScrolledWindow();
-            scroll.vexpand = true;
-            scroll.hscrollbar_policy = PolicyType.NEVER;
+            results_group.add(progress_row);
             grid = new FlowBox();
-            // Match the main Desktop wallpaper picker's grid surface:
-            // .wallpaper-gallery adds the rounded gallery chrome; 2 cols
-            // match the sidebar's effective width so the cards (172x104
-            // via WallpaperCard) sit at the same density.
             grid.add_css_class("wallpaper-gallery");
             grid.valign = Align.START;
             grid.halign = Align.FILL;
@@ -290,26 +174,20 @@ namespace Singularity.Shell {
             grid.selection_mode = SelectionMode.NONE;
             grid.column_spacing = 14;
             grid.row_spacing = 14;
-            grid.margin_top = 10;
-            grid.margin_bottom = 10;
-            grid.margin_start = 10;
-            grid.margin_end = 10;
-            scroll.set_child(grid);
-            content.append(scroll);
-            // Signals. Filter recompute lives on the chip and search box;
-            // provider selection drives a fresh aggregate crawl.
-            provider_row.selected.connect((id) => { if (!updating) select_provider(id); });
-            // Tag SelectionRow callback. SelectionRow emits `selected(id)`
-            // when the user picks a row; the first option ("" / no tag
-            // selected) clears active_tag_ids. Programmatic rebuilds via
-            // rebuild_tag_row() flip `updating` to skip the callback, same
-            // pattern provider_row already uses.
-            tag_row.selected.connect((id) => { if (!updating) on_tag_row_selected(id); });
-            // search_entry_row.entry_changed is already wired to
-            // filter_cards() in the EntryRow construction block, and
-            // refresh_row.activated is wired to the same begin() / 
-            // browse_all() body the old refresh.clicked handler used.
-            // No additional direct signal connections needed here.
+            grid.margin_top = grid.margin_bottom = 10;
+            grid.margin_start = grid.margin_end = 10;
+            var grid_row = new Adw.PreferencesRow();
+            grid_row.activatable = false;
+            grid_row.set_child(grid);
+            results_group.add(grid_row);
+            page.add(results_group);
+
+            provider_row.notify["selected"].connect(() => {
+                if (!updating) select_provider(selected_id(provider_row, provider_ids));
+            });
+            tag_row.notify["selected"].connect(() => {
+                if (!updating) on_tag_row_selected(selected_id(tag_row, tag_ids));
+            });
             close_request.connect(() => {
                 if (imports.busy) {
                     status.label = _("Import in progress. You can close this window when it finishes.");
@@ -452,8 +330,7 @@ namespace Singularity.Shell {
                     if (choice.id == "pling") initial = choice.id;
                 }
                 updating = true;
-                provider_row.set_options(provider_options);
-                provider_row.current_value = initial;
+                provider_ids = set_choices(provider_row, provider_options, initial);
                 updating = false;
                 loading = false;
                 select_provider(initial);
@@ -603,11 +480,16 @@ namespace Singularity.Shell {
         // Walk every direct child of `host`, casting each one to a Chip and
         // running `should_be_active` to decide its `active` property. GTK4
         // containers no longer expose a bulk get_children() helper, so the
-        // walk is over get_first_child()/get_next_sibling().
-        private void repaint_chips(Gtk.Widget host, ChipActivePredicate should_be_active) {
+        // walk is over get_first_child()/get_next_sibling(). Each direct
+        // child of a FlowBox is a Gtk.FlowBoxChild that wraps the actual
+        // Chip we appended via add_filter_chip(); casting the FlowBoxChild
+        // directly to Chip silently fails (returns null and the active
+        // state never repaints), so unwrap with get_child() first.
+        private void repaint_chips(Gtk.FlowBox host, ChipActivePredicate should_be_active) {
             Gtk.Widget? w = host.get_first_child();
             while (w != null) {
-                var chip = w as Singularity.Widgets.Chip;
+                var fbc = w as Gtk.FlowBoxChild;
+                var chip = fbc != null ? fbc.get_child() as Singularity.Widgets.Chip : null;
                 if (chip != null) chip.active = should_be_active(chip);
                 w = w.get_next_sibling();
             }
@@ -625,13 +507,13 @@ namespace Singularity.Shell {
             request.cancel();
             request = new Cancellable();
             var cancel = request;
-            if (provider_row.current_value == "") {
+            if (selected_id(provider_row, provider_ids) == "") {
                 loading = false;
                 status.label = _("No usable wallpaper providers.");
                 update_controls();
                 return;
             }
-            string provider = provider_row.current_value;
+            string provider = selected_id(provider_row, provider_ids);
             // Snapshot the category list under the current generation so a
             // provider change mid-crawl cannot mutate the work queue.
             var todo = new ArrayList<string>();
@@ -664,29 +546,28 @@ namespace Singularity.Shell {
             worker.begin(state);
             for (int i = 1; i < CRAWL_WORKERS && i < total; i++)
                 worker.begin(state);
-            // Wait for the crawl to finish. We poll once per 100 ms via a
-            // GLib.Timeout callback so the main loop keeps painting (spinner,
-            // status, thumbnails) between worker yields. Vala has no
-            // built-in "wait until" primitive on GLib.MainLoop, hence the
-            // explicit poll loop.
+            // Poll completion at 100 ms intervals. A timeout must invoke the
+            // async continuation; changing a flag cannot resume a bare yield.
             while (gen == generation && state.done_count < total && !closed && !cancel.is_cancelled()) {
                 state.count_lock.lock();
                 int snapshot;
                 try { snapshot = state.item_count; } finally { state.count_lock.unlock(); }
                 if (snapshot >= CRAWL_ITEM_CAP) {
-                    request.cancel();
+                    // Workers check the same cap before adding cards or
+                    // starting another category. Keep the request alive for
+                    // thumbnails; closing/restarting still cancels both.
                     break;
                 }
-                bool woken = false;
+                SourceFunc resume = browse_all.callback;
                 Timeout.add(100, () => {
-                    woken = true;
+                    if (resume != null) {
+                        SourceFunc cb = (owned) resume;
+                        resume = null;
+                        cb();
+                    }
                     return Source.REMOVE;
                 });
-                // Bare yield returns the async function to the GLib main
-                // loop, which both runs the Timeout callback above AND
-                // reschedules the other worker coroutines. The loop keeps
-                // yielding until the timeout fires and flips `woken`.
-                while (!woken) yield;
+                yield;
             }
             if (gen != generation || closed) return;
             loading = false;
@@ -752,8 +633,8 @@ namespace Singularity.Shell {
                     return;
                 }
                 string category = state.todo[my_index];
-                bool new_tag = false;
                 string? error = null;
+                bool any_new_tag = false;
                 try {
                     string data;
                     Gee.ArrayList<WallpaperOcsItem> items;
@@ -791,7 +672,9 @@ namespace Singularity.Shell {
                             state.count_lock.unlock();
                         }
                         if (overflow) break;
-                        add_card(item, category, out new_tag);
+                        bool card_new_tag;
+                        add_card(item, category, out card_new_tag);
+                        any_new_tag = any_new_tag || card_new_tag;
                     }
                 } catch (Error e) {
                     if (e is GLib.IOError.CANCELLED) return;
@@ -802,7 +685,7 @@ namespace Singularity.Shell {
                 int snap;
                 try { d = ++state.done_count; snap = state.item_count; } finally { state.count_lock.unlock(); }
                 // Status + tag chip updates live on the main thread. The
-                // captured `d`/`snap`/`category`/`error`/`new_tag` are
+                // captured `d`/`snap`/`category`/`error`/`any_new_tag` are
                 // local-scope value captures -- safe to use in the Idle
                 // callback that fires after this async function yields.
                 Idle.add(() => {
@@ -814,26 +697,35 @@ namespace Singularity.Shell {
                     } else {
                         status.label = _("Loaded %d/%d categories · %d wallpapers so far").printf(d, state.total, snap);
                     }
-                    if (new_tag) rebuild_tag_row();
+                    if (any_new_tag) rebuild_tag_row();
                     return Source.REMOVE;
                 });
             }
         }
 
-        // (Re)build the tag SelectionRow's option list from the live tag union.
-        // Tags are derived from the loaded data, never hardcoded. The first
-        // option is "Any tag" (id "" -> clears the filter); the rest are
-        // sorted alphabetically by tag id. active_tag_ids is intentionally
-        // preserved across rebuilds so a tag the user has already picked
-        // survives the next category that streams in -- the SelectionRow
-        // keeps showing whichever single tag is currently in active_tag_ids,
-        // or "Any tag" if the set is empty.
-        //
-        // We use set_options (id + label) rather than set_items (label only)
-        // because "Any tag" needs to map back to id "" for the filter to
-        // clear cleanly: the SelectionRow callback hands us back the *label*
-        // string, so an empty string and a friendly label "Any tag" must be
-        // resolved through an explicit id.
+        // ComboRow positions map to stable IDs, including the empty "Any tag"
+        // choice. Rebuilding the model preserves the selected ID.
+        private static string selected_id(Adw.ComboRow row, string[] ids) {
+            return row.selected < ids.length ? ids[row.selected] : "";
+        }
+
+        // Called under updating so model/selection notifications cannot start
+        // a crawl against a partially replaced ID map.
+        private static string[] set_choices(Adw.ComboRow row,
+                Gee.ArrayList<Singularity.Core.AppSettingOption> options, string current) {
+            var labels = new Gtk.StringList(null);
+            string[] ids = {};
+            uint selected = 0;
+            foreach (var option in options) {
+                if (option.id == current) selected = (uint) ids.length;
+                ids += option.id;
+                labels.append(option.label);
+            }
+            row.model = labels;
+            row.selected = ids.length > 0 ? selected : Gtk.INVALID_LIST_POSITION;
+            return ids;
+        }
+
         private void rebuild_tag_row() {
             var sorted = new ArrayList<string>();
             foreach (var id in known_tag_ids) sorted.add(id);
@@ -847,8 +739,7 @@ namespace Singularity.Shell {
             // label) so set_options() can match it after the rebuild.
             string current_id = active_tag_ids.size > 0 ? active_tag_ids.to_array()[0] : "";
             updating = true;
-            tag_row.set_options(options);
-            tag_row.current_value = current_id;
+            tag_ids = set_choices(tag_row, options, current_id);
             updating = false;
         }
 
