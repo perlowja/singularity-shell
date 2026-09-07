@@ -135,49 +135,25 @@ namespace Singularity {
             var preview_group = new PreferencesGroup(_("Current Wallpaper"));
             var preview_widget = new WallpaperPreviewWidget();
             preview_widget.select_clicked.connect(() => {
-                int64 ts = GLib.get_real_time();
-                // Hand the result back through the per-user runtime dir (0700)
-                // rather than a predictable name in world-writable /tmp.
-                string rdir = GLib.Path.build_filename(GLib.Environment.get_user_runtime_dir(), "singularity");
-                GLib.DirUtils.create_with_parents(rdir, 0700);
-                string result_path = GLib.Path.build_filename(rdir, "wallpaper-%lld.uris".printf(ts));
-                try {
-                    string exe = GLib.FileUtils.read_link("/proc/self/exe");
-                    string exe_dir = GLib.Path.get_dirname(exe);
-                    string files_bin = GLib.Path.build_filename(exe_dir, "singularity-files");
-                    if (!GLib.FileUtils.test(files_bin, GLib.FileTest.IS_EXECUTABLE)) {
-                        files_bin = "singularity-files";
+                var dialog = new Gtk.FileDialog();
+                dialog.title = _("Select Wallpaper");
+                var images = new Gtk.FileFilter();
+                images.name = _("Images");
+                images.add_pixbuf_formats();
+                var filters = new GLib.ListStore(typeof(Gtk.FileFilter));
+                filters.append(images);
+                dialog.filters = filters;
+                dialog.default_filter = images;
+                dialog.open.begin(get_root() as Gtk.Window, null, (obj, result) => {
+                    try {
+                        var file = dialog.open.end(result);
+                        set_wallpaper(file.get_uri());
+                    } catch (Gtk.DialogError.DISMISSED e) {
+                        // The user dismissed the portal chooser.
+                    } catch (Error e) {
+                        warning("Wallpaper picker failed: %s", e.message);
                     }
-                    var launcher = new GLib.SubprocessLauncher(
-                        GLib.SubprocessFlags.STDIN_INHERIT |
-                        GLib.SubprocessFlags.STDOUT_SILENCE |
-                        GLib.SubprocessFlags.STDERR_SILENCE
-                    );
-                    launcher.setenv("SINGULARITY_PORTAL_RESULT_FILE", result_path, true);
-                    string[] argv = { files_bin, "--portal-mode", "--title=Select Wallpaper" };
-                    var proc = launcher.spawnv(argv);
-                    proc.wait_async.begin(null, (obj, res) => {
-                        try { proc.wait_async.end(res); } catch (Error e) {}
-                        if (GLib.FileUtils.test(result_path, GLib.FileTest.EXISTS)) {
-                            try {
-                                string content;
-                                GLib.FileUtils.get_contents(result_path, out content);
-                                GLib.FileUtils.unlink(result_path);
-                                foreach (var line in content.strip().split("\n")) {
-                                    string uri = line.strip();
-                                    if (uri.length > 0) {
-                                        set_wallpaper(uri);
-                                        break;
-                                    }
-                                }
-                            } catch (Error e) {
-                                GLib.FileUtils.unlink(result_path);
-                            }
-                        }
-                    });
-                } catch (Error e) {
-                    warning("Wallpaper picker: could not launch singularity-files: %s", e.message);
-                }
+                });
             });
             this.preview_widget = preview_widget;
             var preview_row = new PreferencesRow();
