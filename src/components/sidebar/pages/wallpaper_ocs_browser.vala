@@ -83,9 +83,20 @@ namespace Singularity.Shell {
         private PreferencesGroup filter_group;
         private SelectionRow provider_row;
         private SelectionRow tag_row;
-        private Box filter_box;
+        // filter_box was the old vertical Box that wrapped the search
+        // row + category chips + tag SelectionRow. Each of those now
+        // lives in its own PreferencesGroup, so the wrapper is gone.
+        // Removed in the audit pass; if any future code reaches for it
+        // again, the right answer is another PreferencesGroup, not a
+        // Box.
         private FlowBox category_chips;
-        private Gtk.SearchEntry search;
+        // The search entry used to be a Gtk.SearchEntry; now it's
+        // borrowed from the EntryRow (libsingularity) the Search row
+        // wraps. Entry exposes .text, .placeholder_text, .changed,
+        // and .sensitive -- everything filter_cards() and
+        // update_controls() need. The original search_changed
+        // signal (SearchEntry-only) is replaced by Entry.changed.
+        private Entry search;
         private Button refresh;
         private Button close_button;
         private Spinner spinner;
@@ -126,89 +137,134 @@ namespace Singularity.Shell {
             content.margin_start = content.margin_end = 20;
             content.margin_top = content.margin_bottom = 16;
             set_child(content);
-            var header = new Box(Orientation.HORIZONTAL, 12);
+
+            // Window chrome: PreferencesGroup "Browser" containing
+            // the description text and the window title row (title +
+            // Close button). Mirrors the desktop_page online-row
+            // pattern (PreferencesRow.set_child(custom Box)). The
+            // Browser group is untitled -- the page title lives in
+            // the row itself, matching how the settings sidebar's
+            // own pages put the page title in a row rather than
+            // above the group.
+            var browser_group = new PreferencesGroup(null);
+            var description = new Label(_("Browse and import wallpapers from OCS uploaders. Added packs appear in Wallpaper Source."));
+            description.wrap = true;
+            description.xalign = 0;
+            description.margin_start = 4;
+            description.margin_end = 4;
+            description.margin_top = 6;
+            description.margin_bottom = 2;
+            var description_row = new PreferencesRow();
+            description_row.activatable = false;
+            description_row.set_child(description);
+            browser_group.add_row(description_row);
+            var title_row = new PreferencesRow();
+            title_row.activatable = false;
+            var title_box = new Box(Orientation.HORIZONTAL, 12);
             var title_label = new Label(_("Online Wallpapers"));
             title_label.add_css_class("title-2");
             title_label.hexpand = true;
             title_label.xalign = 0;
-            header.append(title_label);
+            title_box.append(title_label);
             close_button = new Button.with_label(_("Close"));
+            close_button.add_css_class("pill");
+            close_button.valign = Align.CENTER;
             close_button.clicked.connect(() => close());
-            header.append(close_button);
-            content.append(header);
-            var description = new Label(_("Browse and import wallpapers from OCS uploaders. Added packs appear in Wallpaper Source."));
-            description.wrap = true;
-            description.xalign = 0;
-            content.append(description);
-            // Provider selection: the same PreferencesGroup + SelectionRow
-            // pattern desktop_page.vala uses for the "Wallpaper Source" row.
-            // The items list is populated after the helper reports the
-            // available providers (see initialize()).
+            title_box.append(close_button);
+            title_row.set_child(title_box);
+            browser_group.add_row(title_row);
+            content.append(browser_group);
+            // Provider selection: PreferencesGroup + SelectionRow, same
+            // pattern desktop_page.vala uses for the "Wallpaper Source"
+            // row. Items populated after the helper reports available
+            // providers (see initialize()).
             provider_group = new PreferencesGroup(_("Provider"));
             provider_row = new SelectionRow(_("Online source"), new string[0]);
             provider_group.add_row(provider_row);
             content.append(provider_group);
-            // Filters: search box + the post-load chip rows. Categories and
-            // tags are both filters over already-loaded items, not gates on
-            // loading -- the grid is populated up front by the aggregate crawl.
-            filter_box = new Box(Orientation.VERTICAL, 6);
-            // Filter UI -- two native Singularity affordances matching the rest of
-            // the settings surface: the category axis stays a single-select
-            // Chip row (categories are naturally a single active value and
-            // work fine on live hardware), the tag axis becomes a single-
-            // select SelectionRow dropdown. The multi-select tag chip row
-            // was unreliable on live hardware -- Chip clicks only fired on
-            // the inner Button, not the chip's rounded pill background --
-            // so the operator directed the move to a dropdown here.
-            // Tradeoff: only one tag can be active at a time. card_matches()
-            // still ANDs across text + category + (single) tag, so the
-            // contract of "narrow the grid to wallpapers carrying the tag
-            // I care about" is preserved.
-            var search_row = new Box(Orientation.HORIZONTAL, 8);
-            search = new Gtk.SearchEntry();
-            search.placeholder_text = _("Filter loaded wallpapers");
-            search.hexpand = true;
-            search_row.append(search);
+
+            // Filter UI: EntryRow for search + ActionRow for refresh in
+            // a "Filter" PreferencesGroup. EntryRow binds its
+            // placeholder to the row title by default ("Search"); we
+            // override it post-construct with the original
+            // "Filter loaded wallpapers" placeholder so the search
+            // intent is clear when the entry is empty. The refresh
+            // row uses an ActionRow with a refresh icon and the
+            // activated() signal -- standard row-click convention.
+            var search_group = new PreferencesGroup(_("Filter"));
+            var search_entry_row = new EntryRow(_("Search"));
+            search_entry_row.entry.placeholder_text = _("Filter loaded wallpapers");
+            search_entry_row.entry_changed.connect(filter_cards);
+            search = search_entry_row.entry;
+            search_group.add_row(search_entry_row);
             refresh = new Button.with_label(_("Refresh / Retry"));
-            search_row.append(refresh);
-            filter_box.append(search_row);
-            // Category chips wrap into multiple rows if the catalog has many
-            // categories, so a FlowBox rather than a ChipBar (which is
-            // horizontal-only and single-active).
-            var category_label = new Label(_("Filter by category"));
-            category_label.xalign = 0;
-            category_label.add_css_class("dim-label");
-            filter_box.append(category_label);
+            refresh.add_css_class("pill");
+            refresh.valign = Align.CENTER;
+            var refresh_row = new ActionRow(_("Refresh / Retry"));
+            refresh_row.icon_name = "view-refresh-symbolic";
+            refresh_row.add_suffix(refresh);
+            refresh_row.activated.connect(() => {
+                if (category_index == "") initialize.begin();
+                else browse_all.begin();
+            });
+            search_group.add_row(refresh_row);
+            content.append(search_group);
+
+            // Category filter: chip FlowBox inside a PreferencesRow
+            // inside a "Category" PreferencesGroup. The chips
+            // themselves remain Singularity.Widgets.Chip
+            // (operator-approved for single-select categories; their
+            // click target works fine here, unlike the multi-select
+            // tag case).
+            var category_group = new PreferencesGroup(_("Category"));
+            var category_chips_row = new PreferencesRow();
+            category_chips_row.activatable = false;
             category_chips = new FlowBox();
             category_chips.selection_mode = SelectionMode.NONE;
             category_chips.max_children_per_line = 8;
             category_chips.column_spacing = 6;
             category_chips.row_spacing = 6;
             category_chips.hexpand = true;
-            filter_box.append(category_chips);
-            // Tag SelectionRow inside a PreferencesGroup so it reads as the
-            // same kind of control as the provider row above. Items are
-            // populated lazily as the crawl discovers new tags.
-            filter_group = new PreferencesGroup(null);
-            // Empty item list until the first category streams in; the
-            // SelectionRow handles an empty list by showing the expander
-            // with no rows (no crash). SelectionRow.selected() is wired in
-            // initialize() but only acts once tags exist.
+            category_chips.margin_start = 4;
+            category_chips.margin_end = 4;
+            category_chips.margin_top = 6;
+            category_chips.margin_bottom = 6;
+            category_chips_row.set_child(category_chips);
+            category_group.add_row(category_chips_row);
+            content.append(category_group);
+
+            // Tag filter: SelectionRow in a "Tag" PreferencesGroup.
+            // Items populated lazily as the crawl discovers new
+            // tags (rebuild_tag_row()). SelectionRow handles an
+            // empty list by showing the expander with no rows.
+            filter_group = new PreferencesGroup(_("Tag"));
             tag_row = new SelectionRow(_("Tag"), new string[0]);
             filter_group.add_row(tag_row);
-            filter_box.append(filter_group);
-            content.append(filter_box);
-            // Status row: spinner + a count-bearing status line that the
-            // aggregate crawl updates as categories stream in.
+            content.append(filter_group);
+            // Status row: spinner + a count-bearing status line.
+            // Wrapped in a PreferencesRow inside a (no-title) footer
+            // PreferencesGroup so the visual rhythm of the page is
+            // PreferencesGroup -> row -> row -> row -> footer, with
+            // no ad-hoc horizontal Box breaking the convention.
+            var footer_group = new PreferencesGroup(null);
+            var progress_row = new PreferencesRow();
+            progress_row.activatable = false;
             var progress = new Box(Orientation.HORIZONTAL, 8);
+            progress.margin_start = 4;
+            progress.margin_end = 4;
+            progress.margin_top = 4;
+            progress.margin_bottom = 4;
             spinner = new Spinner();
+            spinner.valign = Align.CENTER;
             progress.append(spinner);
             status = new Label("");
             status.wrap = true;
             status.xalign = 0;
             status.hexpand = true;
             progress.append(status);
-            content.append(progress);
+            progress_row.set_child(progress);
+            footer_group.add_row(progress_row);
+            content.append(footer_group);
             // Grid.
             var scroll = new ScrolledWindow();
             scroll.vexpand = true;
@@ -242,11 +298,11 @@ namespace Singularity.Shell {
             // rebuild_tag_row() flip `updating` to skip the callback, same
             // pattern provider_row already uses.
             tag_row.selected.connect((id) => { if (!updating) on_tag_row_selected(id); });
-            search.search_changed.connect(filter_cards);
-            refresh.clicked.connect(() => {
-                if (category_index == "") initialize.begin();
-                else browse_all.begin();
-            });
+            // search_entry_row.entry_changed is already wired to
+            // filter_cards() in the EntryRow construction block, and
+            // refresh_row.activated is wired to the same begin() / 
+            // browse_all() body the old refresh.clicked handler used.
+            // No additional direct signal connections needed here.
             close_request.connect(() => {
                 if (imports.busy) {
                     status.label = _("Import in progress. You can close this window when it finishes.");

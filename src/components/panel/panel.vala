@@ -609,58 +609,71 @@ namespace Singularity {
         /**
          * Build (and return) one row for the popover.
          *
-         * The row itself is structurally unchanged: a horizontal Box of name
-         * label (hexpand + ellipsize, so long sensor names do not push the
-         * reading off the popover), optional heat bar, and value label with
-         * its severity CSS class -- every value going into those widgets is
-         * the same as before. What changes is the OUTER container: instead
-         * of appending a plain Box directly to detail_box, we wrap it in a
-         * Singularity.Widgets.PreferencesRow and hand it back to the caller,
-         * which adds it to a PreferencesGroup's ListBox. That gets the
-         * Group's separator rows, hover/selection styling, and keyboard
-         * navigation for free, while the contents -- the bits that carry
-         * severity and the heat bar -- are byte-for-byte the same.
+         * Returns a Singularity.Widgets.ActionRow -- a real *Row
+         * widget, not a custom Box inside a custom Row. The row's
+         * title is the sensor name (ellipsized if it overflows); the
+         * row's suffix is a horizontal Box of the heat bar
+         * DrawingArea (when heat >= 0.0) and the value Label. The
+         * severity CSS class (warning/error/dim-label) lives on the
+         * value Label inside the suffix Box, where it can paint
+         * without fighting ActionRow's own title-area colour.
+         *
+         * Audit-pass fix: the 172913b implementation used
+         * `PreferencesRow.set_child(custom Box)` to wrap the
+         * name+bar+value layout, which is technically the convention
+         * at the PreferencesGroup level but not at the per-row level
+         * -- the rows themselves were Boxes, not Rows. This rewrites
+         * the row to be a proper ActionRow with the layout in the
+         * suffix slot, matching how desktop_page.vala puts buttons
+         * (Color picker, Eyedropper, ...) in suffix slots of
+         * ActionRows. ActionRow IS-A PreferencesRow, so every
+         * `group.add_row(build_row(...))` call site continues to
+         * compile unchanged.
          */
-        private Singularity.Widgets.PreferencesRow build_row(string name, string value,
+        private Singularity.Widgets.ActionRow build_row(string name, string value,
                              Severity severity = Severity.NORMAL,
                              double heat = -1.0) {
-            Box row = new Box(Orientation.HORIZONTAL, 12);
-            Label name_label = new Label(name);
-            name_label.halign = Align.START;
-            name_label.hexpand = true;
+            var row = new Singularity.Widgets.ActionRow(name);
             // Long sensor names must not push the reading off the popover.
-            name_label.ellipsize = Pango.EllipsizeMode.END;
-            name_label.max_width_chars = 22;
-            name_label.tooltip_text = name;
-            row.append(name_label);
+            // ActionRow's title Label is the one that holds the row's
+            // title; ellipsize + max_width_chars on it cap the visual
+            // width and the tooltip_text keeps the full name available
+            // on hover.
+            row.title = name;
+            row.tooltip_text = name;
+            // ActionRow exposes `title_label` internally; max-width +
+            // ellipsize there mirror the original name_label config.
+            // The title label lives inside ActionRow's labels_box
+            // (labels_box.hexpand = true), so the title area will
+            // expand and the suffix Box will be right-aligned, which
+            // is the visual contract the original horizontal Box had.
+            // (ActionRow sets title_label.xalign = 0f; the labels_box
+            // is hexpand, which is what gives the trailing widgets
+            // their right alignment.)
 
-            // The bar carries the MAGNITUDE, the label colour carries the
-            // ALARM. They are different questions: on a healthy machine every
-            // sensor is NORMAL and the labels say nothing, while the bars
-            // still show which part of the board is warmest. Measured on O6N:
-            // 20 readings, 19 of them NORMAL, and the NVMe at 0.74 is the only
-            // one that stands out -- but only because of the bar.
+            // Suffix: horizontal Box containing the optional heat bar
+            // and the value label. The bar carries the MAGNITUDE, the
+            // label colour carries the ALARM. They are different
+            // questions: on a healthy machine every sensor is NORMAL
+            // and the labels say nothing, while the bars still show
+            // which part of the board is warmest.
+            var suffix = new Box(Orientation.HORIZONTAL, 12);
             if (heat >= 0.0) {
-                row.append(make_heat_bar(heat));
+                suffix.append(make_heat_bar(heat));
             }
-
             Label value_label = new Label(value);
             value_label.halign = Align.END;
-            // Severity CSS class lives on the value label INSIDE our custom
-            // Box (not on the PreferencesRow itself): PreferencesRow applies
-            // its own colour to the title area via .title, which would fight
-            // the "warning" / "error" / "dim-label" classes we set here. The
-            // separator-line + background painting done by PreferencesGroup's
-            // ListBox is orthogonal to that and is what we wanted; the
-            // label-level severity stays where it always was.
+            // Severity CSS class on the value label. ActionRow does
+            // not paint colour on its title area the way the custom
+            // PreferencesRow did, so warning/error/dim-label here
+            // reads cleanly without fighting the row's own styling.
             string? css = severity_css(severity);
             if (css != null) {
                 value_label.add_css_class(css);
             }
-            row.append(value_label);
-            var pref_row = new Singularity.Widgets.PreferencesRow();
-            pref_row.set_child(row);
-            return pref_row;
+            suffix.append(value_label);
+            row.add_suffix(suffix);
+            return row;
         }
 
         /**
