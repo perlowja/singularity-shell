@@ -90,13 +90,15 @@ namespace Singularity.Shell {
         // again, the right answer is another PreferencesGroup, not a
         // Box.
         private FlowBox category_chips;
-        // The search entry used to be a Gtk.SearchEntry; now it's
-        // borrowed from the EntryRow (libsingularity) the Search row
-        // wraps. Entry exposes .text, .placeholder_text, .changed,
-        // and .sensitive -- everything filter_cards() and
-        // update_controls() need. The original search_changed
-        // signal (SearchEntry-only) is replaced by Entry.changed.
-        private Entry search;
+        // The search box is an EntryRow (libsingularity). Its inner
+        // Entry is `protected` and not reachable from outside the
+        // class, so we hold the EntryRow reference and reach the
+        // text / sensitive / entry_changed signal through its public
+        // API. The row title doubles as the entry placeholder (bound
+        // via SYNC_CREATE in EntryRow.construct), so the title set
+        // here shows up both as the row label and as the placeholder
+        // text inside the empty entry.
+        private EntryRow? search_row;
         private Button refresh;
         private Button close_button;
         private Spinner spinner;
@@ -192,10 +194,15 @@ namespace Singularity.Shell {
             // row uses an ActionRow with a refresh icon and the
             // activated() signal -- standard row-click convention.
             var search_group = new PreferencesGroup(_("Filter"));
-            var search_entry_row = new EntryRow(_("Search"));
-            search_entry_row.entry.placeholder_text = _("Filter loaded wallpapers");
+            // EntryRow binds its inner entry's placeholder-text to
+            // its own title via bind_property() with SYNC_CREATE, so
+            // the row label AND the entry placeholder both read
+            // "Filter loaded wallpapers" -- the same descriptive
+            // text the original Gtk.SearchEntry used. The user sees a
+            // titled row whose empty entry hints at what to type.
+            var search_entry_row = new EntryRow(_("Filter loaded wallpapers"));
             search_entry_row.entry_changed.connect(filter_cards);
-            search = search_entry_row.entry;
+            search_row = search_entry_row;
             search_group.add_row(search_entry_row);
             refresh = new Button.with_label(_("Refresh / Retry"));
             refresh.add_css_class("pill");
@@ -330,7 +337,7 @@ namespace Singularity.Shell {
         private bool updating = false;
 
         private void update_controls() {
-            search.sensitive = !imports.busy;
+            if (search_row != null) search_row.sensitive = !imports.busy;
             refresh.sensitive = !imports.busy && !loading;
             close_button.sensitive = !imports.busy;
             foreach (var card in cards)
@@ -846,7 +853,7 @@ namespace Singularity.Shell {
         }
 
         private void filter_cards() {
-            string query = search.text.strip().casefold();
+            string query = (search_row != null ? search_row.text : "").strip().casefold();
             int count = 0;
             foreach (var card in cards) {
                 bool matches = card_matches(card.item, query, active_category_id, active_tag_ids);
