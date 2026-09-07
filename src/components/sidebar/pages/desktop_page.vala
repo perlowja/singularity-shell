@@ -127,9 +127,18 @@ namespace Singularity {
                 // overlay would keep showing stale attribution
                 // from the previous wallpaper even after the user
                 // clicked "Reset to Default".
+                // Stage all three writes as one atomic dconf transaction --
+                // committing them separately fired three independent
+                // "changed" signals in a row, and WallpaperManager.reload()
+                // (which listens to all three keys) ran once per signal,
+                // rendering a visibly flickering sequence of mismatched
+                // picture/attribution combinations before settling on the
+                // final, correct state.
+                settings.delay();
                 settings.reset("background-picture-uri");
                 settings.set_string("background-attribution-title", "");
                 settings.set_string("background-attribution-author", "");
+                settings.apply();
                 update_preview();
             });
             header.append(reset_btn);
@@ -1750,25 +1759,33 @@ namespace Singularity {
         }
 
         private void set_wallpaper(string uri) {
-            settings.set_string("background-picture-uri", uri);
             string local_path = "";
             if (uri != null && uri.length > 0) {
                 var f = GLib.File.new_for_uri(uri);
                 local_path = f.get_path() ?? "";
             }
-            if (local_path == "") {
-                settings.set_string("background-attribution-title", "");
-                settings.set_string("background-attribution-author", "");
-            } else {
+            string title = "";
+            string author = "";
+            if (local_path != "") {
                 var attr = Singularity.WallpaperSidecar.read(local_path);
                 if (attr.valid) {
-                    settings.set_string("background-attribution-title", attr.title);
-                    settings.set_string("background-attribution-author", attr.author);
-                } else {
-                    settings.set_string("background-attribution-title", "");
-                    settings.set_string("background-attribution-author", "");
+                    title = attr.title;
+                    author = attr.author;
                 }
             }
+            // Stage all three writes as one atomic dconf transaction -- see
+            // the identical comment on the Reset-to-Default handler above.
+            // Committing background-picture-uri, then the two attribution
+            // keys, as three separate writes let WallpaperManager.reload()
+            // (which listens to all three) run three times in a row, each
+            // with a different partially-updated combination, producing a
+            // visibly flickering/incorrect attribution overlay before it
+            // settled on the right text a couple of dconf round-trips later.
+            settings.delay();
+            settings.set_string("background-picture-uri", uri);
+            settings.set_string("background-attribution-title", title);
+            settings.set_string("background-attribution-author", author);
+            settings.apply();
             add_to_recent(uri);
             update_preview();
         }
