@@ -2332,12 +2332,40 @@ namespace Singularity {
             preview_picture.set_paintable(paintable);
         }
     }
+    // Visual parity with the main Desktop wallpaper picker. Both the local
+    // wallpaper picker (desktop_page) and the OCS/Bing browser reuse this
+    // widget so the thumbnail grid LOOKs identical regardless of source.
+    // Two construction paths exist:
+    //   * WallpaperCard(uri, is_recent)            -- local-file thumbnail,
+    //                                               title from basename.
+    //   * WallpaperCard.for_remote(uri, title,
+    //                              is_recent, loader)
+    //                                             -- caller-supplied async
+    //                                               thumbnail loader (used
+    //                                               by OCS Soup and Bing
+    //                                               local-file loads); an
+    //                                               explicit title string
+    //                                               (not basename).
+    // Both paths produce the same chrome: 172x104 clipped rounded frame,
+    // Picture with ContentFit.COVER, title overlay with object-select check,
+    // and the same wallpaper-card / workspace-preview CSS classes.
     internal class WallpaperCard : Box {
         public signal void clicked();
         public signal void delete_clicked();
         public string uri { get; private set; }
         private Picture picture;
+        // The overlay that hosts picture, title, action button, etc. Exposed
+        // for subclasses / extensions that want to add their own overlays.
+        private Overlay card_overlay;
         private string thumb_path;
+        // Optional remote-thumbnail loader set by WallpaperCard.for_remote().
+        // If non-null, replaces the local-file path; runs on a worker thread
+        // bounded by thumb_mutex (same cap as the local loader).
+        // Public so for_remote()'s parameter list is well-typed -- a public
+        // method cannot take a private delegate parameter without an
+        // accessibility error from valac.
+        public delegate Gdk.Pixbuf? RemoteThumbnailLoader() throws Error;
+        private RemoteThumbnailLoader? remote_loader;
         private static Mutex thumb_mutex = Mutex();
         private static Cond thumb_cond = Cond();
         private static int active_thumb_loads = 0;
@@ -2345,6 +2373,72 @@ namespace Singularity {
         public WallpaperCard(string uri, bool is_recent) {
             Object(orientation: Orientation.VERTICAL, spacing: 0);
             this.uri = uri;
+            var file = File.new_for_uri(uri);
+            string title = file.get_basename() ?? _("Wallpaper");
+            // If the URI is a local path, the existing loader handles it.
+            // For remote URIs (no path), the local loader would just no-op
+            // since thumb_path is "" -- call sites that need a remote
+            // thumbnail MUST use WallpaperCard.for_remote() instead.
+            thumb_path = file.get_path() ?? "";
+            // The recents-only trash button lives in this constructor only;
+            // for_remote() / placeholder_only() never carry a delete
+            // affordance.
+            Button? del_btn = null;
+            if (is_recent) {
+                del_btn = new Button.from_icon_name("user-trash-symbolic");
+                // flat+osd classes give the trash button the same chrome as
+                // set_action_button() would, so the visual treatment stays
+                // consistent regardless of whether the button is the
+                // recents trash or a caller-supplied action button.
+                del_btn.add_css_class("flat");
+                del_btn.add_css_class("osd");
+                del_btn.valign = Align.START;
+                del_btn.halign = Align.END;
+                del_btn.margin_top = 4;
+                del_btn.margin_end = 4;
+                del_btn.clicked.connect(() => delete_clicked());
+            }
+            build_card(title, del_btn);
+            if (thumb_path != "") load_thumbnail_async();
+        }
+
+        // Remote-thumbnail variant. `loader` runs on a worker thread (same
+        // concurrency cap as the local file loader) and must return a
+        // decoded Pixbuf or throw; throws are swallowed silently the same
+        // way local-file failures are, leaving the placeholder visible.
+        // `is_recent` is accepted for signature symmetry with the local
+        // constructor but is unused (remote sources never carry the
+        // recents-trash affordance).
+        public WallpaperCard.for_remote(string uri, string title, bool is_recent, owned RemoteThumbnailLoader loader) {
+            Object(orientation: Orientation.VERTICAL, spacing: 0);
+            this.uri = uri;
+            thumb_path = "";
+            remote_loader = (owned) loader;
+            build_card(title, null);
+            if (remote_loader != null) load_remote_thumbnail_async();
+        }
+
+        // Placeholder-only variant. Builds the same chrome as for_remote
+        // but does NOT start any worker thread for thumbnail loading --
+        // the caller takes full responsibility for calling set_paintable()
+        // when the thumbnail is ready. Used by the OCS/Bing browser, which
+        // needs generation-aware / cancellable thumbnail loads that the
+        // built-in loader does not provide.
+        public WallpaperCard.placeholder_only(string uri, string title) {
+            Object(orientation: Orientation.VERTICAL, spacing: 0);
+            this.uri = uri;
+            thumb_path = "";
+            build_card(title, null);
+        }
+
+        // Shared chrome assembly. Both constructors funnel through here so
+        // visual parity is guaranteed (same ScrolledWindow clipper, same
+        // Picture, same title overlay, same checkmark, same CSS classes).
+        // The chain-init Object() call happens in each constructor -- not
+        // here -- because Vala only allows Object() in a constructor
+        // context. `del_btn` is the recents-only trash button, built by
+        // the caller; pass null otherwise.
+        private void build_card(string title, Button? del_btn) {
             add_css_class("wallpaper-card");
             add_css_class("workspace-preview");
             halign = Align.CENTER;
@@ -2359,29 +2453,14 @@ namespace Singularity {
             clipper.hscrollbar_policy = PolicyType.NEVER;
             clipper.vscrollbar_policy = PolicyType.NEVER;
             clipper.has_frame = false;
-            var overlay = new Overlay();
-            clipper.set_child(overlay);
+            card_overlay = new Overlay();
+            clipper.set_child(card_overlay);
             picture = new Picture();
             picture.add_css_class("wallpaper-card-picture");
             picture.content_fit = ContentFit.COVER;
             picture.can_shrink = true;
-            overlay.set_child(picture);
-            var file = File.new_for_uri(uri);
-            thumb_path = file.get_path() ?? "";
-            if (thumb_path != "") {
-                load_thumbnail_async();
-            }
-            if (is_recent) {
-                var del_btn = new Button.from_icon_name("user-trash-symbolic");
-                del_btn.add_css_class("flat");
-                del_btn.add_css_class("osd");
-                del_btn.valign = Align.START;
-                del_btn.halign = Align.END;
-                del_btn.margin_top = 4;
-                del_btn.margin_end = 4;
-                del_btn.clicked.connect(() => delete_clicked());
-                overlay.add_overlay(del_btn);
-            }
+            card_overlay.set_child(picture);
+            if (del_btn != null) card_overlay.add_overlay(del_btn);
             var title_box = new Box(Orientation.HORIZONTAL, 6);
             title_box.add_css_class("wallpaper-card-title");
             title_box.valign = Align.END;
@@ -2390,25 +2469,83 @@ namespace Singularity {
             title_box.margin_start = 8;
             title_box.margin_end = 8;
             title_box.margin_bottom = 8;
-            var title = new Label(file.get_basename() ?? _("Wallpaper"));
-            title.ellipsize = Pango.EllipsizeMode.END;
-            title.xalign = 0;
-            title.hexpand = true;
-            title_box.append(title);
+            var title_label = new Label(title);
+            title_label.ellipsize = Pango.EllipsizeMode.END;
+            title_label.xalign = 0;
+            title_label.hexpand = true;
+            title_box.append(title_label);
             var check = new Image.from_icon_name("object-select-symbolic");
             check.add_css_class("wallpaper-card-check");
             check.pixel_size = 14;
             title_box.append(check);
-            overlay.add_overlay(title_box);
+            card_overlay.add_overlay(title_box);
             append(clipper);
             var click_ctrl = new GestureClick();
             click_ctrl.pressed.connect(() => clicked());
             add_controller(click_ctrl);
         }
 
+        // Wire an external action button into the card. Positioned as an
+        // overlay at the bottom-right of the frame, mirroring the trash
+        // button's chrome (flat + osd) so the visual treatment stays
+        // consistent. Used by the OCS/Bing browser to add an Import/Pin
+        // button without rebuilding the card chrome from scratch.
+        public void set_action_button(Button btn) {
+            btn.add_css_class("flat");
+            btn.add_css_class("osd");
+            btn.valign = Align.END;
+            btn.halign = Align.END;
+            btn.margin_end = 6;
+            btn.margin_bottom = 6;
+            card_overlay.add_overlay(btn);
+        }
+
+        // Adds a small attribution/licence label above the title bar so
+        // OCS/Bing items can show uploader + licence without inflating
+        // the card height. Null/empty clears any previous badge. Reuses
+        // the wallpaper-card-title styling so it reads as part of the
+        // existing title overlay rather than a new ad-hoc element.
+        public void set_badge(string? text) {
+            // Strip any previous badge: tracked by the data key so we
+            // never collide with user code that happens to set the same
+            // key for something else.
+            Widget? prev = get_data<Widget>("singularity-wallpaper-badge");
+            if (prev != null) {
+                card_overlay.remove_overlay(prev);
+                set_data<Widget>("singularity-wallpaper-badge", null);
+            }
+            if (text == null || text == "") return;
+            var badge = new Label(text);
+            badge.add_css_class("wallpaper-card-title");
+            badge.ellipsize = Pango.EllipsizeMode.END;
+            badge.xalign = 0;
+            badge.max_width_chars = 22;
+            badge.halign = Align.START;
+            badge.valign = Align.START;
+            badge.margin_start = 8;
+            badge.margin_top = 6;
+            card_overlay.add_overlay(badge);
+            set_data<Widget>("singularity-wallpaper-badge", badge);
+        }
+
         public void set_selected(bool selected) {
             if (selected) add_css_class("selected");
             else remove_css_class("selected");
+        }
+
+        // Public so call sites (e.g. OCS/Bing browser) can paint a thumbnail
+        // they fetched themselves, bypassing the local-file or remote-loader
+        // path entirely. Safe to call multiple times; replaces any prior
+        // paintable on the picture.
+        public void set_paintable(Gdk.Paintable? paintable) {
+            picture.set_paintable(paintable);
+        }
+
+        // Exposed for tests/diagnostics; lets a caller ask whether a
+        // thumbnail is currently displayed (true once set_paintable has
+        // received a non-null value, regardless of source).
+        public bool has_thumbnail {
+            get { return picture.get_paintable() != null; }
         }
 
         private void load_thumbnail_async() {
@@ -2424,6 +2561,39 @@ namespace Singularity {
                 try {
                     pb = new Gdk.Pixbuf.from_file_at_scale(thumb_path, 344, 208, true);
                 } catch (Error e) {}
+
+                thumb_mutex.lock();
+                active_thumb_loads--;
+                thumb_cond.signal();
+                thumb_mutex.unlock();
+
+                GLib.Idle.add(() => {
+                    if (pb != null)
+                        picture.set_paintable(Gdk.Texture.for_pixbuf(pb));
+                    return GLib.Source.REMOVE;
+                });
+            });
+        }
+
+        // Remote-thumbnail worker. Same concurrency cap as the local-file
+        // loader so a flood of remote loads does not starve other paths.
+        // Loader exceptions are swallowed silently (matching the local-file
+        // loader's behaviour) and the placeholder stays visible.
+        private void load_remote_thumbnail_async() {
+            new GLib.Thread<void>("wallpaper-thumb-remote", () => {
+                Gdk.Pixbuf? pb = null;
+                thumb_mutex.lock();
+                while (active_thumb_loads >= 3) {
+                    thumb_cond.wait(thumb_mutex);
+                }
+                active_thumb_loads++;
+                thumb_mutex.unlock();
+
+                if (remote_loader != null) {
+                    try {
+                        pb = remote_loader();
+                    } catch (Error e) {}
+                }
 
                 thumb_mutex.lock();
                 active_thumb_loads--;

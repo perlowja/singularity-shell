@@ -45,20 +45,46 @@ namespace Singularity.Shell {
         private ArrayList<WallpaperOcsChoice> categories = new ArrayList<WallpaperOcsChoice>();
         private ArrayList<OcsCard> cards = new ArrayList<OcsCard>();
         // Filter state. "" means "no filter active"; otherwise the matching
-        // category id or one or more tags must match (AND between the three
-        // axes: text, category, tag set).
+        // category id or exactly one active tag must match (AND between the
+        // three axes: text, category, tag).
+        //
+        // The tag axis used to be multi-select (a HashSet of tags feeding
+        // card_matches() with AND-logic across the union). That contract
+        // was implemented as a FlowBox of Chip widgets -- and Chip clicks
+        // proved unreliable on live hardware (only the inner Button hit
+        // area received clicks, not the chip's rounded pill background).
+        // The operator's fix is to drop the multi-select chip row and use
+        // a single-select SelectionRow dropdown instead. libsingularity has
+        // no native multi-select dropdown widget, and rolling our own would
+        // either duplicate ExpanderRow's machinery or borrow a checkbox
+        // pattern that has no precedent in this codebase. We accept the
+        // single-select tradeoff: only one tag can be active at a time, and
+        // card_matches() still ANDs across text + category + (single) tag,
+        // so the same UI affordance -- "narrow the grid to wallpapers
+        // carrying exactly one tag I care about" -- is preserved.
+        //
+        // active_tag_ids stays a HashSet so card_matches() and the
+        // rebuild helpers do not need to be rewritten to deal with both the
+        // old multi-select and new single-select shapes; SelectionRow sets
+        // it to a one-element or empty set.
         private string active_category_id = "";
         private HashSet<string> active_tag_ids = new HashSet<string>();
         // Live union of tags across every card currently in memory. Updated
-        // incrementally on add_card(); rebuilt on demand for the chip row.
+        // incrementally on add_card(); rebuilt on demand for the dropdown.
         private HashSet<string> known_tag_ids = new HashSet<string>();
 
         // Provider/category chrome.
+        // Provider category row (single-select chip row kept for now: the category
+        // axis is naturally a single active value). Below it, the new tag
+        // filter is a single-select SelectionRow instead of a chip row -- see
+        // the rationale block in initialize() for why the tag axis was
+        // downgraded from multi-select chip to single-select dropdown.
         private PreferencesGroup provider_group;
+        private PreferencesGroup filter_group;
         private SelectionRow provider_row;
+        private SelectionRow tag_row;
         private Box filter_box;
         private FlowBox category_chips;
-        private FlowBox tag_chips;
         private Gtk.SearchEntry search;
         private Button refresh;
         private Button close_button;
@@ -72,13 +98,19 @@ namespace Singularity.Shell {
         private bool closed = false;
         private string category_index = "";
 
+        // One card per wallpapers item in the grid. The visible widget is
+        // a WallpaperCard (reused from desktop_page.vala so the OCS/Bing
+        // grid LOOKS identical to the main wallpaper picker); action button,
+        // attribution, and licence text all attach via WallpaperCard's
+        // set_action_button() / set_badge() helpers so the visual chrome
+        // is owned by the shared class, not duplicated here. Status text
+        // for long-running ops (Import / Pin) goes to the global status
+        // label rather than a per-card inline message, since WallpaperCard
+        // has no room for one.
         private class OcsCard : Object {
             public WallpaperOcsItem item;
-            public FlowBoxChild child;
-            public Picture picture;
+            public WallpaperCard card;
             public Button button;
-            public Label message;
-            public Spinner spinner;
         }
 
         public WallpaperOcsBrowser(Gtk.Application app, string[] roots) {
@@ -120,6 +152,18 @@ namespace Singularity.Shell {
             // tags are both filters over already-loaded items, not gates on
             // loading -- the grid is populated up front by the aggregate crawl.
             filter_box = new Box(Orientation.VERTICAL, 6);
+            // Filter UI -- two native Singularity affordances matching the rest of
+            // the settings surface: the category axis stays a single-select
+            // Chip row (categories are naturally a single active value and
+            // work fine on live hardware), the tag axis becomes a single-
+            // select SelectionRow dropdown. The multi-select tag chip row
+            // was unreliable on live hardware -- Chip clicks only fired on
+            // the inner Button, not the chip's rounded pill background --
+            // so the operator directed the move to a dropdown here.
+            // Tradeoff: only one tag can be active at a time. card_matches()
+            // still ANDs across text + category + (single) tag, so the
+            // contract of "narrow the grid to wallpapers carrying the tag
+            // I care about" is preserved.
             var search_row = new Box(Orientation.HORIZONTAL, 8);
             search = new Gtk.SearchEntry();
             search.placeholder_text = _("Filter loaded wallpapers");
@@ -130,12 +174,7 @@ namespace Singularity.Shell {
             filter_box.append(search_row);
             // Category chips wrap into multiple rows if the catalog has many
             // categories, so a FlowBox rather than a ChipBar (which is
-            // horizontal-only and single-active). Raw `Chip` widgets in a
-            // FlowBox are used here AND for tags; reasoning recorded in the
-            // commit message. The visible close (×) on each chip is a
-            // widget-rendering fact of libsingularity's Chip that cannot be
-            // suppressed; for filter chips it is wired to a no-op so it does
-            // not silently do something surprising like "delete this tag".
+            // horizontal-only and single-active).
             var category_label = new Label(_("Filter by category"));
             category_label.xalign = 0;
             category_label.add_css_class("dim-label");
@@ -147,17 +186,17 @@ namespace Singularity.Shell {
             category_chips.row_spacing = 6;
             category_chips.hexpand = true;
             filter_box.append(category_chips);
-            var tag_label = new Label(_("Filter by tag"));
-            tag_label.xalign = 0;
-            tag_label.add_css_class("dim-label");
-            filter_box.append(tag_label);
-            tag_chips = new FlowBox();
-            tag_chips.selection_mode = SelectionMode.NONE;
-            tag_chips.max_children_per_line = 10;
-            tag_chips.column_spacing = 6;
-            tag_chips.row_spacing = 6;
-            tag_chips.hexpand = true;
-            filter_box.append(tag_chips);
+            // Tag SelectionRow inside a PreferencesGroup so it reads as the
+            // same kind of control as the provider row above. Items are
+            // populated lazily as the crawl discovers new tags.
+            filter_group = new PreferencesGroup(null);
+            // Empty item list until the first category streams in; the
+            // SelectionRow handles an empty list by showing the expander
+            // with no rows (no crash). SelectionRow.selected() is wired in
+            // initialize() but only acts once tags exist.
+            tag_row = new SelectionRow(_("Tag"), new string[0]);
+            filter_group.add_row(tag_row);
+            filter_box.append(filter_group);
             content.append(filter_box);
             // Status row: spinner + a count-bearing status line that the
             // aggregate crawl updates as categories stream in.
@@ -175,16 +214,34 @@ namespace Singularity.Shell {
             scroll.vexpand = true;
             scroll.hscrollbar_policy = PolicyType.NEVER;
             grid = new FlowBox();
-            grid.selection_mode = SelectionMode.NONE;
-            grid.min_children_per_line = 1;
-            grid.max_children_per_line = 3;
-            grid.column_spacing = grid.row_spacing = 12;
+            // Match the main Desktop wallpaper picker's grid surface:
+            // .wallpaper-gallery adds the rounded gallery chrome; 2 cols
+            // match the sidebar's effective width so the cards (172x104
+            // via WallpaperCard) sit at the same density.
+            grid.add_css_class("wallpaper-gallery");
             grid.valign = Align.START;
+            grid.halign = Align.FILL;
+            grid.hexpand = true;
+            grid.max_children_per_line = 2;
+            grid.min_children_per_line = 2;
+            grid.selection_mode = SelectionMode.NONE;
+            grid.column_spacing = 14;
+            grid.row_spacing = 14;
+            grid.margin_top = 10;
+            grid.margin_bottom = 10;
+            grid.margin_start = 10;
+            grid.margin_end = 10;
             scroll.set_child(grid);
             content.append(scroll);
             // Signals. Filter recompute lives on the chip and search box;
             // provider selection drives a fresh aggregate crawl.
             provider_row.selected.connect((id) => { if (!updating) select_provider(id); });
+            // Tag SelectionRow callback. SelectionRow emits `selected(id)`
+            // when the user picks a row; the first option ("" / no tag
+            // selected) clears active_tag_ids. Programmatic rebuilds via
+            // rebuild_tag_row() flip `updating` to skip the callback, same
+            // pattern provider_row already uses.
+            tag_row.selected.connect((id) => { if (!updating) on_tag_row_selected(id); });
             search.search_changed.connect(filter_cards);
             refresh.clicked.connect(() => {
                 if (category_index == "") initialize.begin();
@@ -222,11 +279,14 @@ namespace Singularity.Shell {
             close_button.sensitive = !imports.busy;
             foreach (var card in cards)
                 card.button.sensitive = !imports.busy && !imports.is_added(card.item.key);
-            // Filter chips are filter UI, not destructive: a busy import
-            // does not warrant disabling them, but a still-loading grid
-            // would mean clicking them changes nothing visible.
+            // Filter UI is filter UI, not destructive: a busy import does
+            // not warrant disabling it, but a still-loading grid would
+            // mean picking a category or tag changes nothing visible, so
+            // the category chips disable while loading. The tag SelectionRow
+            // stays enabled while loading because its expander is empty
+            // (no tags streamed in yet) and disabling a SelectionRow while
+            // empty would be confusing.
             category_chips.sensitive = !loading;
-            tag_chips.sensitive = !loading;
             if (loading || imports.busy) spinner.start(); else spinner.stop();
         }
 
@@ -371,7 +431,7 @@ namespace Singularity.Shell {
             active_tag_ids.clear();
             known_tag_ids.clear();
             rebuild_category_chips();
-            tag_chips.remove_all();
+            rebuild_tag_row();
             cards.clear();
             grid.remove_all();
             update_controls();
@@ -399,7 +459,7 @@ namespace Singularity.Shell {
                 active_tag_ids.clear();
                 known_tag_ids.clear();
                 rebuild_category_chips();
-                tag_chips.remove_all();
+                rebuild_tag_row();
                 cards.clear();
                 grid.remove_all();
                 loading = false;
@@ -424,21 +484,22 @@ namespace Singularity.Shell {
                 add_filter_chip(category_chips, choice.id, choice.name, "", false);
         }
 
-        // Add a single Chip to a FlowBox, wiring it as a filter toggle. id is
-        // the stable key (category id or tag string); label is the visible
-        // text. active_predicate tells us whether the chip should start in
-        // the highlighted state. The (×) close button is wired to a no-op so
-        // it cannot silently do something surprising (e.g. look like a
-        // "delete this tag from existence" affordance).
+        // Add a single Chip to the category FlowBox. The category chip row
+        // is the only chip-based filter left: categories are naturally
+        // single-select (single-active) and ChipBar.set_active() works fine
+        // for them, but we use raw Chips in a FlowBox because the catalog
+        // can have arbitrarily many categories and ChipBar is horizontal-
+        // scroll only. Tags moved to SelectionRow (see tag_row above); the
+        // tag chip wiring lives in on_tag_chip_clicked() for the duration
+        // of this commit and is then dropped.
         private void add_filter_chip(FlowBox host, string id, string label, string icon_name, bool active) {
             var chip = new Singularity.Widgets.Chip(id, icon_name);
             chip.set_label(label);
             chip.active = active;
             chip.activated.connect(() => {
-                // Different hosts interpret "active" differently: categories
-                // are single-select (radio), tags are multi-select (AND/OR).
-                if (host == category_chips) on_category_chip_clicked(id);
-                else                          on_tag_chip_clicked(id);
+                // Categories are single-select only (radio). Tags moved off
+                // chips entirely; see on_tag_chip_clicked / on_tag_row_selected.
+                on_category_chip_clicked(id);
                 filter_cards();
             });
             // Close (×) is decorative-only for filter chips; do nothing on
@@ -454,17 +515,26 @@ namespace Singularity.Shell {
             repaint_chips(category_chips, (chip) => chip.chip_id == id);
         }
 
-        private void on_tag_chip_clicked(string id) {
-            if (id in active_tag_ids) active_tag_ids.remove(id);
-            else                     active_tag_ids.add(id);
-            // Repaint chip active state to reflect the multi-select set.
-            repaint_chips(tag_chips, (chip) => chip.chip_id in active_tag_ids);
+        // Drop-in replacement for the old multi-select on_tag_chip_clicked.
+        // SelectionRow is single-select so this just toggles one entry: if
+        // the user re-selects the active tag, clear it (back to "all tags");
+        // otherwise swap the active tag. active_tag_ids remains a HashSet so
+        // card_matches() can AND across it without shape changes.
+        private void on_tag_row_selected(string id) {
+            if (id == "") {
+                active_tag_ids.clear();
+            } else if (id in active_tag_ids) {
+                active_tag_ids.remove(id);
+            } else {
+                active_tag_ids.clear();
+                active_tag_ids.add(id);
+            }
+            filter_cards();
         }
 
         // Local predicate delegate: takes a Chip and returns whether it
         // should be highlighted right now. Used by repaint_chips() to keep
-        // the two filter rows (single-select category, multi-select tags)
-        // honest about which chip is "active".
+        // the category filter row honest about which chip is "active".
         private delegate bool ChipActivePredicate(Singularity.Widgets.Chip chip);
 
         // Walk every direct child of `host`, casting each one to a Chip and
@@ -507,7 +577,7 @@ namespace Singularity.Shell {
             cards.clear();
             grid.remove_all();
             known_tag_ids.clear();
-            rebuild_tag_chips(new HashSet<string>());
+            rebuild_tag_row();
             if (total == 0) {
                 loading = false;
                 status.label = _("No usable wallpaper categories for this provider.");
@@ -681,23 +751,42 @@ namespace Singularity.Shell {
                     } else {
                         status.label = _("Loaded %d/%d categories · %d wallpapers so far").printf(d, state.total, snap);
                     }
-                    if (new_tag) rebuild_tag_chips(known_tag_ids);
+                    if (new_tag) rebuild_tag_row();
                     return Source.REMOVE;
                 });
             }
         }
 
-        // (Re)build the tag chip row from the live tag union. Tags are
-        // derived from the loaded data, never hardcoded. active_tag_ids is
-        // intentionally preserved across rebuilds so a tag the user has
-        // already picked survives the next category that streams in.
-        private void rebuild_tag_chips(HashSet<string> ids) {
+        // (Re)build the tag SelectionRow's option list from the live tag union.
+        // Tags are derived from the loaded data, never hardcoded. The first
+        // option is "Any tag" (id "" -> clears the filter); the rest are
+        // sorted alphabetically by tag id. active_tag_ids is intentionally
+        // preserved across rebuilds so a tag the user has already picked
+        // survives the next category that streams in -- the SelectionRow
+        // keeps showing whichever single tag is currently in active_tag_ids,
+        // or "Any tag" if the set is empty.
+        //
+        // We use set_options (id + label) rather than set_items (label only)
+        // because "Any tag" needs to map back to id "" for the filter to
+        // clear cleanly: the SelectionRow callback hands us back the *label*
+        // string, so an empty string and a friendly label "Any tag" must be
+        // resolved through an explicit id.
+        private void rebuild_tag_row() {
             var sorted = new ArrayList<string>();
-            foreach (var id in ids) sorted.add(id);
+            foreach (var id in known_tag_ids) sorted.add(id);
             sorted.sort((a, b) => a.collate(b));
-            tag_chips.remove_all();
-            foreach (var id in sorted)
-                add_filter_chip(tag_chips, id, id, "", id in active_tag_ids);
+            var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            options.add(new Singularity.Core.AppSettingOption() { id = "", label = _("Any tag") });
+            foreach (var id in sorted) {
+                options.add(new Singularity.Core.AppSettingOption() { id = id, label = id });
+            }
+            // Resolve the row's current value to the id domain (not the
+            // label) so set_options() can match it after the rebuild.
+            string current_id = active_tag_ids.size > 0 ? active_tag_ids.to_array()[0] : "";
+            updating = true;
+            tag_row.set_options(options);
+            tag_row.current_value = current_id;
+            updating = false;
         }
 
         private void filter_cards() {
@@ -705,7 +794,7 @@ namespace Singularity.Shell {
             int count = 0;
             foreach (var card in cards) {
                 bool matches = card_matches(card.item, query, active_category_id, active_tag_ids);
-                card.child.visible = matches;
+                card.card.visible = matches;
                 if (matches) count++;
             }
             if (!loading && !imports.busy) {
@@ -740,89 +829,42 @@ namespace Singularity.Shell {
         }
 
 
+        // (Re)build a card for one wallpapers item. The visible chrome is a
+        // WallpaperCard (visual parity with the main Desktop wallpaper
+        // picker -- same 172x104 clipped rounded frame, same Picture with
+        // ContentFit.COVER, same title overlay with object-select check,
+        // same wallpaper-card / workspace-preview CSS classes). Action
+        // button (Import / Pin) attaches through WallpaperCard.set_action_
+        // button() so the visual chrome stays consistent with the local
+        // picker's trash button. Attribution + licence live as a small
+        // badge on the card via WallpaperCard.set_badge().
         private void add_card(WallpaperOcsItem item, string source_category, out bool new_tag_added) {
             new_tag_added = false;
             item_category.set(item.key, source_category);
             foreach (var t in item.tags) if (known_tag_ids.add(t)) new_tag_added = true;
             var card = new OcsCard();
             card.item = item;
-            card.child = new FlowBoxChild();
-            var box = new Box(Orientation.VERTICAL, 6);
-            box.set_size_request(220, -1);
-            box.margin_start = box.margin_end = 8;
-            box.margin_top = box.margin_bottom = 8;
-            box.add_css_class("card");
-            card.picture = new Picture();
-            card.picture.set_size_request(220, 130);
-            card.picture.content_fit = ContentFit.COVER;
-            card.picture.can_shrink = true;
-            var overlay = new Overlay();
-            var placeholder = new Image.from_icon_name("image-x-generic-symbolic");
-            placeholder.pixel_size = 48;
-            overlay.set_child(placeholder);
-            overlay.add_overlay(card.picture);
-            overlay.set_size_request(220, 130);
-            box.append(overlay);
-            var name = new Label(item.name);
-            name.xalign = 0;
-            name.ellipsize = Pango.EllipsizeMode.END;
-            name.max_width_chars = 26;
-            name.tooltip_text = item.name;
-            name.add_css_class("heading");
-            box.append(name);
+            // Use placeholder_only: the OCS browser drives its own async
+            // thumbnail load (with generation/close guards) via load_one_
+            // thumbnail() rather than letting WallpaperCard's built-in
+            // worker handle it (which has no generation awareness).
+            string card_title = item.name != "" ? item.name : (item.provider == BING_PROVIDER_ID ? _("Bing wallpaper") : _("Wallpaper"));
+            card.card = new WallpaperCard.placeholder_only(item.key, card_title);
+            // Attribution / licence badge. OCS shows uploader · provider;
+            // Bing shows market · "Bing". Honour dim-label style so the
+            // badge reads as supporting text, not primary title.
             string attribution;
             if (item.provider == BING_PROVIDER_ID)
                 attribution = "%s · %s".printf(_("Bing"), item.market != "" ? item.market : item.provider);
             else
                 attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"), item.provider);
-            var credit = new Label(attribution);
-            credit.xalign = 0;
-            credit.ellipsize = Pango.EllipsizeMode.END;
-            credit.max_width_chars = 26;
-            credit.tooltip_text = attribution;
-            box.append(credit);
-            var license = new Label(item.license != "" ? item.license : _("No license stated"));
-            license.xalign = 0;
-            license.ellipsize = Pango.EllipsizeMode.END;
-            license.max_width_chars = 26;
-            license.tooltip_text = license.label;
-            license.add_css_class("dim-label");
-            box.append(license);
-            // Tag chips on the card surface every per-item tag, mirroring
-            // the filter row above. Reusing the raw Chip keeps the visual
-            // vocabulary consistent across the window.
-            if (item.tags.length > 0) {
-                var tag_row = new FlowBox();
-                tag_row.selection_mode = SelectionMode.NONE;
-                tag_row.max_children_per_line = 4;
-                tag_row.column_spacing = 4;
-                tag_row.row_spacing = 4;
-                foreach (var t in item.tags) {
-                    var tag_chip = new Singularity.Widgets.Chip("tag:" + t, null);
-                    tag_chip.set_label(t);
-                    // Clicking a tag chip on a card jumps straight to that
-                    // tag in the filter row. Convenience for the user; the
-                    // chip itself stays a passive display element.
-                    tag_chip.activated.connect(() => {
-                        if (!(t in active_tag_ids)) {
-                            active_tag_ids.add(t);
-                            rebuild_tag_chips(known_tag_ids);
-                            filter_cards();
-                        }
-                    });
-                    tag_chip.close_requested.connect(() => {});
-                    tag_row.append(tag_chip);
-                }
-                box.append(tag_row);
-            }
-            card.message = new Label("");
-            card.message.wrap = true;
-            card.message.max_width_chars = 26;
-            card.message.xalign = 0;
-            box.append(card.message);
-            var action = new Box(Orientation.HORIZONTAL, 8);
-            card.spinner = new Spinner();
-            action.append(card.spinner);
+            string license_text = item.license != "" ? item.license : _("No license stated");
+            card.card.set_badge(attribution + "  ·  " + license_text);
+            // Card click: WallpaperCard emits clicked() on the GestureClick
+            // wired in build_card(); for OCS/Bing this is purely a visual
+            // affordance -- the meaningful user action is Import / Pin --
+            // so we leave it unconnected. The checkmark stays decorative.
+            // Action button (Import / Pin / Added / Pinned).
             if (item.provider == BING_PROVIDER_ID) {
                 // Pin/Pinned: the image is already part of a persistent
                 // Wallpaper Source the moment it was archived; toggling
@@ -831,90 +873,142 @@ namespace Singularity.Shell {
                 // pack: explicit operator decision not to misattribute
                 // a Bing photo into the "Imported from OCS" collection.
                 card.button = new Button.with_label(item.pinned ? _("Pinned") : _("Pin"));
-                card.button.hexpand = true;
-                card.button.clicked.connect(() => pin_card.begin(card));
             } else {
                 card.button = new Button.with_label(imports.is_added(item.key) ? _("Added") : _("Import"));
-                card.button.hexpand = true;
-                card.button.clicked.connect(() => import_card.begin(card));
             }
-            action.append(card.button);
-            box.append(action);
-            card.child.set_child(box);
-            grid.append(card.child);
+            card.button.clicked.connect(() => {
+                if (item.provider == BING_PROVIDER_ID) pin_card.begin(card);
+                else                                  import_card.begin(card);
+            });
+            card.card.set_action_button(card.button);
+            grid.append(card.card);
             cards.add(card);
         }
 
+        // Async thumbnail loader, fanned out 3-at-a-time from browse_all().
+        // Two source paths:
+        //   * Bing items: thumbnail_path is a local file (helper pre-
+        //     downloaded the 400x240 JPEG before the `list` response was
+        //     built). Read the bytes, then decode via MemoryInputStream so
+        //     the loader does not block on the open InputStream (passing
+        //     an already-open stream to from_stream_at_scale_async can
+        //     deadlock on the read loop -- the loader assumes it owns the
+        //     stream and reads it synchronously until EOF).
+        //   * OCS items: item.preview is a remote URL, fetched via Soup.
+        //   * Either path failure just leaves the placeholder visible;
+        //     a missing preview must not prevent browsing or importing.
+        //
+        // Each thumbnail write is marshalled onto the main thread via
+        // Idle.add() so the Picture widget's set_paintable is always
+        // called from the UI thread (GTK4 widget APIs are not safe to
+        // call from arbitrary worker contexts).
         private async void thumbnails(int start, int gen, Cancellable cancel) {
-            for (int i = start; i < cards.size && gen == generation && !closed; i += 3) {
+            for (int i = start; i < cards.size && gen == generation && !closed && !cancel.is_cancelled(); i += 3) {
                 var card = cards[i];
-                // Bing thumbnails live on the local filesystem already (the
-                // helper downloads the 400x240 JPEG before the `list`
-                // response is built); load them directly via a file-based
-                // pixbuf stream -- no Soup, no network round-trip. Empty
-                // thumbnail_path means OCS, which uses the Soup path below.
+                Gdk.Pixbuf? pixbuf = null;
                 if (card.item.thumbnail_path != "") {
+                    // Bing local-file path.
                     try {
                         var file = File.new_for_path(card.item.thumbnail_path);
                         if (!file.query_exists()) {
-                            if (gen == generation && !closed) card.picture.tooltip_text = _("Preview unavailable");
+                            show_thumb_unavailable(card);
                             continue;
                         }
                         var stream = yield file.read_async(Priority.DEFAULT, cancel);
-                        // No try/finally -- Vala forbids `yield` inside a
-                        // finally block ("jump out of finally block not
-                        // permitted"). Close inline after the load and
-                        // again on the error path so a partially-decoded
-                        // stream never leaks the FD. Mirrors the existing
-                        // Soup path's flat try/catch + inline-close shape
-                        // in this same function.
+                        // Drain to a ByteArray so we own the bytes: the
+                        // loader does not have to fight an open file
+                        // descriptor for sync reads.
+                        var bytes = new ByteArray();
                         try {
-                            var pixbuf = yield new Gdk.Pixbuf.from_stream_at_scale_async(stream, 440, 260, true, cancel);
+                            while (true) {
+                                var part = yield stream.read_bytes_async(65536, Priority.DEFAULT, cancel);
+                                if (part.get_size() == 0) break;
+                                if (bytes.len + part.get_size() > 4 * 1024 * 1024) {
+                                    throw new IOError.FAILED("Thumbnail exceeds size limit");
+                                }
+                                bytes.append(part.get_data());
+                            }
+                        } finally {
+                            // Vala forbids `yield` inside finally, so the
+                            // close is a plain call: a non-cancellable
+                            // close on a Cancellable-bound stream is
+                            // acceptable here -- we're throwing it away.
                             try { stream.close(); } catch (Error e) {}
-                            if (gen == generation && !closed) card.picture.paintable = Gdk.Texture.for_pixbuf(pixbuf);
-                        } catch (Error e) {
-                            // Eat the error here rather than re-throwing:
-                            // the inner throw made Vala's flow analysis
-                            // mark `i` (the for-loop counter) as possibly
-                            // unassigned across the function, which broke
-                            // compilation. The outer catch below already
-                            // shows the same "Preview unavailable"
-                            // tooltip when stream.close() fails, so we
-                            // mirror that here -- a corrupt or unreadable
-                            // thumbnail file just shows the placeholder.
-                            try { stream.close(); } catch (Error e2) {}
                         }
+                        if (cancel.is_cancelled()) continue;
+                        var input = new MemoryInputStream.from_bytes(ByteArray.free_to_bytes((owned) bytes));
+                        pixbuf = yield new Gdk.Pixbuf.from_stream_at_scale_async(input, 344, 208, true, cancel);
                     } catch (Error e) {
-                        if (gen == generation && !closed) card.picture.tooltip_text = _("Preview unavailable");
+                        if (!(e is GLib.IOError.CANCELLED)) show_thumb_unavailable(card);
+                        continue;
                     }
-                    continue;
-                }
-                string url = card.item.preview;
-                if (!url.has_prefix("https://") && !url.has_prefix("http://")) continue;
-                try {
+                } else {
+                    // OCS Soup path.
+                    string url = card.item.preview;
+                    if (!url.has_prefix("https://") && !url.has_prefix("http://")) continue;
                     var message = new Soup.Message("GET", url);
                     if (message == null) continue;
-                    var stream = yield session.send_async(message, Priority.DEFAULT, cancel);
-                    if (message.status_code != 200) { yield stream.close_async(Priority.DEFAULT, null); continue; }
-                    var bytes = new ByteArray();
-                    while (true) {
-                        var part = yield stream.read_bytes_async(65536, Priority.DEFAULT, cancel);
-                        if (part.get_size() == 0) break;
-                        if (bytes.len + part.get_size() > 4 * 1024 * 1024) {
-                            yield stream.close_async(Priority.DEFAULT, null);
-                            throw new IOError.FAILED("Thumbnail exceeds size limit");
+                    InputStream? stream = null;
+                    bool skip_card = false;
+                    try {
+                        stream = yield session.send_async(message, Priority.DEFAULT, cancel);
+                        if (cancel.is_cancelled()) { skip_card = true; }
+                        else if (message.status_code != 200) { skip_card = true; }
+                        else {
+                            var bytes = new ByteArray();
+                            while (true) {
+                                var part = yield stream.read_bytes_async(65536, Priority.DEFAULT, cancel);
+                                if (part.get_size() == 0) break;
+                                if (bytes.len + part.get_size() > 4 * 1024 * 1024) {
+                                    throw new IOError.FAILED("Thumbnail exceeds size limit");
+                                }
+                                bytes.append(part.get_data());
+                            }
+                            var input = new MemoryInputStream.from_bytes(ByteArray.free_to_bytes((owned) bytes));
+                            pixbuf = yield new Gdk.Pixbuf.from_stream_at_scale_async(input, 344, 208, true, cancel);
                         }
-                        bytes.append(part.get_data());
+                    } catch (Error e) {
+                        if (!(e is GLib.IOError.CANCELLED)) show_thumb_unavailable(card);
+                        skip_card = true;
+                    } finally {
+                        // Synchronous close() (not close_async()) because
+                        // Vala forbids yield inside finally. Soup response
+                        // streams are safe to close synchronously.
+                        if (stream != null) {
+                            try { stream.close(); } catch (Error e) {}
+                        }
                     }
-                    yield stream.close_async(Priority.DEFAULT, null);
-                    var input = new MemoryInputStream.from_bytes(ByteArray.free_to_bytes((owned) bytes));
-                    var pixbuf = yield new Gdk.Pixbuf.from_stream_at_scale_async(input, 440, 260, true, cancel);
-                    if (gen == generation && !closed) card.picture.paintable = Gdk.Texture.for_pixbuf(pixbuf);
-                } catch (Error e) {
-                    // A missing preview must not prevent browsing or importing.
-                    if (gen == generation && !closed) card.picture.tooltip_text = _("Preview unavailable");
+                    if (skip_card) continue;
                 }
+                if (pixbuf == null) continue;
+                if (gen != generation || closed || cancel.is_cancelled()) continue;
+                // Marshal the paintable assignment onto the main thread so
+                // Picture.set_paintable is always called from a UI context.
+                // The local var capture is safe: pixbuf is a fresh heap
+                // object and `card` is a strong ref into the cards[] list.
+                Gdk.Pixbuf captured_pb = pixbuf;
+                OcsCard captured_card = card;
+                Idle.add(() => {
+                    if (gen == generation && !closed && captured_card.card != null)
+                        captured_card.card.set_paintable(Gdk.Texture.for_pixbuf(captured_pb));
+                    return GLib.Source.REMOVE;
+                });
             }
+        }
+
+        // Surface a "preview unavailable" tooltip on the card without
+        // touching the picture's paintable (the placeholder stays
+        // visible). Marshalled to the main thread so it can run from any
+        // async context safely.
+        private void show_thumb_unavailable(OcsCard card) {
+            Idle.add(() => {
+                if (generation >= 0 && !closed && card.card != null) {
+                    // Tooltip on the WallpaperCard itself rather than on
+                    // an internal Picture -- the picture is private.
+                    card.card.tooltip_text = _("Preview unavailable");
+                }
+                return GLib.Source.REMOVE;
+            });
         }
 
         // Toggle pin/unpin for a Bing card. The helper takes
@@ -924,18 +1018,21 @@ namespace Singularity.Shell {
         // helper. No file copy, no new pack, no WallpaperOcsImports --
         // this is the entire Bing per-item action: write or remove a
         // .pinned marker file so the retention timer skips this image.
+        //
+        // Status text lives on the global status label (card.message used
+        // to be a per-card line; with WallpaperCard the card surface no
+        // longer has room for an inline message label, and the global
+        // status line is what the user watches for long-running ops).
         private async void pin_card(OcsCard card) {
             int colon = card.item.id.index_of(":");
             if (colon <= 0 || colon >= card.item.id.length - 1) {
-                card.message.label = _("Invalid Bing item identity");
+                status.label = _("Invalid Bing item identity");
                 return;
             }
             string market = card.item.id.substring(0, colon);
             string date = card.item.id.substring(colon + 1);
             string[] verb = card.item.pinned ? new string[] {"unpin"} : new string[] {"pin"};
-            card.spinner.start();
             card.button.label = card.item.pinned ? _("Unpinning…") : _("Pinning…");
-            card.message.label = "";
             status.label = card.item.pinned ? _("Unpinning Bing image…") : _("Pinning Bing image…");
             update_controls();
             try {
@@ -947,41 +1044,31 @@ namespace Singularity.Shell {
                 yield command({BING_HELPER, verb[0], market, date}, null, 15);
                 card.item.pinned = !card.item.pinned;
                 card.button.label = card.item.pinned ? _("Pinned") : _("Pin");
-                card.message.label = card.item.pinned
-                    ? _("Pinned. This image will not be auto-pruned.")
-                    : _("Unpinned. This image may be auto-pruned.");
                 status.label = card.item.pinned
                     ? _("Bing image pinned.")
                     : _("Bing image unpinned.");
             } catch (Error e) {
-                card.message.label = _("Could not toggle pin: %s").printf(e.message);
-                status.label = _("Pin toggle failed. Try again.");
+                status.label = _("Pin toggle failed: %s").printf(e.message);
             }
-            card.spinner.stop();
             update_controls();
         }
 
         private async void import_card(OcsCard card) {
             if (!imports.begin(card.item.key)) return;
-            card.spinner.start();
             card.button.label = _("Importing…");
-            card.message.label = "";
             status.label = _("Downloading and preparing wallpaper pack…");
             update_controls();
             try {
                 string data = yield command({HELPER, "import", card.item.provider, card.item.id}, null, 600);
                 imports.complete(card.item.key, data, collection_roots);
                 card.button.label = _("Added");
-                card.message.label = _("Available in Wallpaper Source");
                 status.label = _("Pack added. Choose it in Wallpaper Source.");
                 imported();
             } catch (Error e) {
                 imports.fail(card.item.key);
                 card.button.label = _("Retry import");
-                card.message.label = _("Could not import: %s").printf(e.message);
-                status.label = _("Import failed. You can retry.");
+                status.label = _("Import failed: %s").printf(e.message);
             }
-            card.spinner.stop();
             update_controls();
         }
     }
