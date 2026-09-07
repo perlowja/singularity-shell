@@ -118,7 +118,17 @@ namespace Singularity {
             reset_btn.tooltip_text = _("Reset to Default");
             reset_btn.add_css_class("navigation-button");
             reset_btn.clicked.connect(() => {
+                // Reset ALL three wallpaper keys so the desktop
+                // returns to a true default state. settings.reset()
+                // is per-key, so the attribution keys do not
+                // auto-reset when only background-picture-uri is
+                // reset -- without the explicit resets below, the
+                // overlay would keep showing stale attribution
+                // from the previous wallpaper even after the user
+                // clicked "Reset to Default".
                 settings.reset("background-picture-uri");
+                settings.set_string("background-attribution-title", "");
+                settings.set_string("background-attribution-author", "");
                 update_preview();
             });
             header.append(reset_btn);
@@ -1774,7 +1784,20 @@ namespace Singularity {
         }
 
         private void set_wallpaper(string uri) {
+            // No call site of set_wallpaper currently carries a
+            // WallpaperOcsItem context (the OCS browser imports
+            // packs but does not directly set the wallpaper URI;
+            // users then click an item from the local gallery,
+            // which has only a URI string). The attribution
+            // overlay therefore has no metadata to show for any
+            // gallery / portal-picker result, so clear the keys
+            // here. A future apply-OCS-item flow would add an
+            // overload that takes (uri, title, author) and calls
+            // settings.set_string on all three keys; this default
+            // path is the no-metadata case.
             settings.set_string("background-picture-uri", uri);
+            settings.set_string("background-attribution-title", "");
+            settings.set_string("background-attribution-author", "");
             add_to_recent(uri);
             update_preview();
         }

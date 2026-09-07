@@ -583,7 +583,16 @@ namespace Singularity {
             }
             if (content_type.has_prefix("image/")) {
                 menu.add_item("Set as Wallpaper", "preferences-desktop-wallpaper-symbolic", () => {
+                    // A drag-and-drop file from the file manager
+                    // has no OCS/Bing metadata, so the attribution
+                    // overlay has nothing to show for this URI.
+                    // Explicit clear (rather than rely on the
+                    // schema default) so a previous OCS-imported
+                    // wallpapers title/author cannot bleed through
+                    // and appear over this new image.
                     settings.set_string("background-picture-uri", file.get_uri());
+                    settings.set_string("background-attribution-title", "");
+                    settings.set_string("background-attribution-author", "");
                 });
             }
             menu.add_separator();
