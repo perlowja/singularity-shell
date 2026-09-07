@@ -8,6 +8,7 @@ namespace Singularity {
     public class DesktopPage : SettingsPage {
         private GLib.Settings settings;
         private GLib.Settings? wm_settings;
+        private SettingsView view;
         private bool decorations_updating_ui = false;
         private bool decorations_ignore_change = false;
         private Box? decorations_start_box;
@@ -23,7 +24,6 @@ namespace Singularity {
         private FlowBox wallpaper_grid;
         private Gtk.Box wallpaper_source_container;
         private string[] wallpaper_collection_roots;
-        private Singularity.Shell.WallpaperOcsBrowser? ocs_browser;
 
         private Gee.ArrayList<WallpaperCollectionInfo> wallpaper_collections = new Gee.ArrayList<WallpaperCollectionInfo>();
         private WallpaperRotationState rotation_state = new WallpaperRotationState(
@@ -76,6 +76,7 @@ namespace Singularity {
             base(_("Desktop"));
             ensure_wallpaper_css();
             settings = new GLib.Settings("dev.sinty.desktop");
+            this.view = view;
             back_clicked.connect(() => {
                 view.go_home();
             });
@@ -162,12 +163,7 @@ namespace Singularity {
             add_group(preview_group);
             var grid_group = new PreferencesGroup(_("Wallpapers"));
 
-            var collection_roots = new Gee.ArrayList<string>();
-            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
-                collection_roots.add(GLib.Path.build_filename(d, "ncz-wallpapers", "collections"));
-            collection_roots.add(GLib.Path.build_filename(
-                GLib.Environment.get_user_data_dir(), "ncz-wallpapers", "collections"));
-            wallpaper_collection_roots = collection_roots.to_array();
+            wallpaper_collection_roots = compute_collection_roots();
             wallpaper_source_container = new Gtk.Box(Orientation.VERTICAL, 0);
             var source_container_row = new PreferencesRow();
             source_container_row.set_child(wallpaper_source_container);
@@ -179,13 +175,7 @@ namespace Singularity {
             online_button.margin_start = online_button.margin_end = 10;
             online_button.margin_top = online_button.margin_bottom = 8;
             online_button.clicked.connect(() => {
-                if (ocs_browser != null) { ocs_browser.present(); return; }
-                var browser = new Singularity.Shell.WallpaperOcsBrowser(
-                    (Gtk.Application) GLib.Application.get_default(), wallpaper_collection_roots);
-                ocs_browser = browser;
-                browser.imported.connect(() => { refresh_wallpaper_sources(); populate_grid(); });
-                browser.dismissed.connect(() => { ocs_browser = null; });
-                browser.present();
+                view.navigate_to("wallpaper-browser");
             });
             online_row.set_child(online_button);
             grid_group.add_row(online_row);
@@ -1760,20 +1750,25 @@ namespace Singularity {
         }
 
         private void set_wallpaper(string uri) {
-            // No call site of set_wallpaper currently carries a
-            // WallpaperOcsItem context (the OCS browser imports
-            // packs but does not directly set the wallpaper URI;
-            // users then click an item from the local gallery,
-            // which has only a URI string). The attribution
-            // overlay therefore has no metadata to show for any
-            // gallery / portal-picker result, so clear the keys
-            // here. A future apply-OCS-item flow would add an
-            // overload that takes (uri, title, author) and calls
-            // settings.set_string on all three keys; this default
-            // path is the no-metadata case.
             settings.set_string("background-picture-uri", uri);
-            settings.set_string("background-attribution-title", "");
-            settings.set_string("background-attribution-author", "");
+            string local_path = "";
+            if (uri != null && uri.length > 0) {
+                var f = GLib.File.new_for_uri(uri);
+                local_path = f.get_path() ?? "";
+            }
+            if (local_path == "") {
+                settings.set_string("background-attribution-title", "");
+                settings.set_string("background-attribution-author", "");
+            } else {
+                var attr = Singularity.WallpaperSidecar.read(local_path);
+                if (attr.valid) {
+                    settings.set_string("background-attribution-title", attr.title);
+                    settings.set_string("background-attribution-author", attr.author);
+                } else {
+                    settings.set_string("background-attribution-title", "");
+                    settings.set_string("background-attribution-author", "");
+                }
+            }
             add_to_recent(uri);
             update_preview();
         }
@@ -1885,6 +1880,20 @@ namespace Singularity {
                     return GLib.Source.REMOVE;
                 });
             });
+        }
+
+        public static string[] compute_collection_roots() {
+            var roots = new Gee.ArrayList<string>();
+            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
+                roots.add(GLib.Path.build_filename(d, "ncz-wallpapers", "collections"));
+            roots.add(GLib.Path.build_filename(
+                GLib.Environment.get_user_data_dir(), "ncz-wallpapers", "collections"));
+            return roots.to_array();
+        }
+
+        public void refresh_after_import() {
+            refresh_wallpaper_sources();
+            populate_grid();
         }
 
         private void refresh_wallpaper_sources() {
@@ -2353,8 +2362,7 @@ namespace Singularity {
         public signal void delete_clicked();
         public string uri { get; private set; }
         private Picture picture;
-        // The overlay that hosts picture, title, action button, etc. Exposed
-        // for subclasses / extensions that want to add their own overlays.
+        // The overlay that hosts the picture, title, badges, and recents action.
         private Overlay card_overlay;
         private string thumb_path;
         // Optional remote-thumbnail loader set by WallpaperCard.for_remote().
@@ -2385,10 +2393,7 @@ namespace Singularity {
             Button? del_btn = null;
             if (is_recent) {
                 del_btn = new Button.from_icon_name("user-trash-symbolic");
-                // flat+osd classes give the trash button the same chrome as
-                // set_action_button() would, so the visual treatment stays
-                // consistent regardless of whether the button is the
-                // recents trash or a caller-supplied action button.
+                // flat+osd keeps the recents action legible over the image.
                 del_btn.add_css_class("flat");
                 del_btn.add_css_class("osd");
                 del_btn.valign = Align.START;
@@ -2484,19 +2489,15 @@ namespace Singularity {
             add_controller(click_ctrl);
         }
 
-        // Wire an external action button into the card. Positioned as an
-        // overlay at the bottom-right of the frame, mirroring the trash
-        // button's chrome (flat + osd) so the visual treatment stays
-        // consistent. Used by the OCS/Bing browser to add an Import/Pin
-        // button without rebuilding the card chrome from scratch.
-        public void set_action_button(Button btn) {
+        // Place a full-width action below the thumbnail, matching the
+        // wallpaper preview's image/separator/button convention.
+        public void append_action_button(Button btn) {
+            var sep = new Separator(Orientation.HORIZONTAL);
             btn.add_css_class("flat");
-            btn.add_css_class("osd");
-            btn.valign = Align.END;
-            btn.halign = Align.END;
-            btn.margin_end = 6;
-            btn.margin_bottom = 6;
-            card_overlay.add_overlay(btn);
+            btn.hexpand = true;
+            btn.height_request = 36;
+            append(sep);
+            append(btn);
         }
 
         // Adds a small attribution/licence label above the title bar so

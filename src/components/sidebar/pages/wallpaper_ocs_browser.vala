@@ -4,9 +4,8 @@ using Singularity.Widgets;
 
 namespace Singularity.Shell {
     // Presentation only: the installed helper owns all OCS and import policy.
-    public class WallpaperOcsBrowser : Gtk.Window {
+    public class WallpaperOcsBrowserPage : SettingsPage {
         public signal void imported();
-        public signal void dismissed();
         private const string HELPER = "/usr/local/bin/ncz-wallpaper-ocs";
         // Bing lives behind its own helper because its commands and JSON
         // shapes are different (markets -> TSV, list -> bare array, no
@@ -17,7 +16,7 @@ namespace Singularity.Shell {
         // per-item action here is PIN (which protects it from retention
         // pruning), not import.
         private const string BING_HELPER = "/usr/local/bin/ncz-wallpaper-bing";
-        // The synthetic provider id used by the SelectionRow, the worker
+        // The synthetic provider id used by the provider dropdown, the worker
         // branching, and the card layout. Same value as WallpaperBing.PROVIDER_ID
         // in core/ -- duplicated here so the browser can branch on it
         // without pulling in a core class field reference at the call site.
@@ -51,13 +50,13 @@ namespace Singularity.Shell {
         private Adw.PreferencesGroup provider_group;
         private Adw.PreferencesGroup filter_group;
         private Adw.ComboRow provider_row;
+        private Adw.ComboRow category_row;
         private Adw.ComboRow tag_row;
         private string[] provider_ids = {};
+        private string[] category_ids = {};
         private string[] tag_ids = {};
-        private FlowBox category_chips;
         private Adw.EntryRow? search_row;
         private Button refresh;
-        private Button close_button;
         private Spinner spinner;
         private Label status;
         private FlowBox grid;
@@ -65,15 +64,13 @@ namespace Singularity.Shell {
         private Cancellable request = new Cancellable();
         private int generation = 0;
         private bool loading = false;
-        private bool closed = false;
         private string category_index = "";
 
         // One card per wallpapers item in the grid. The visible widget is
         // a WallpaperCard (reused from desktop_page.vala so the OCS/Bing
-        // grid LOOKS identical to the main wallpaper picker); action button,
-        // attribution, and licence text all attach via WallpaperCard's
-        // set_action_button() / set_badge() helpers so the visual chrome
-        // is owned by the shared class, not duplicated here. Status text
+        // grid LOOKS identical to the main wallpaper picker). The action button
+        // sits below the thumbnail; attribution and licence text use the card
+        // badge. Status text
         // for long-running ops (Import / Pin) goes to the global status
         // label rather than a per-card inline message, since WallpaperCard
         // has no room for one.
@@ -83,32 +80,20 @@ namespace Singularity.Shell {
             public Button button;
         }
 
-        public WallpaperOcsBrowser(Gtk.Application app, string[] roots) {
-            Object(application: app, title: _("Online Wallpapers"), default_width: 880, default_height: 720);
+        public WallpaperOcsBrowserPage(SettingsView view, string[] roots) {
+            base(_("Online Wallpapers"));
             collection_roots = roots;
             imports.discover(WallpaperCollections.parse(roots));
             session.timeout = 25;
             session.user_agent = "Singularity-Wallpaper-Browser/1";
-            var page = new Adw.PreferencesPage();
-            set_child(page);
-            var browser_group = new Adw.PreferencesGroup();
-            var title_row = new Adw.ActionRow();
-            title_row.title = _("Online Wallpapers");
-            title_row.subtitle = _("Browse and import wallpapers from OCS uploaders. Added packs appear in Wallpaper Source.");
-            title_row.use_markup = false;
-            close_button = new Button.with_label(_("Close"));
-            close_button.valign = Align.CENTER;
-            close_button.clicked.connect(() => close());
-            title_row.add_suffix(close_button);
-            browser_group.add(title_row);
-            page.add(browser_group);
+            back_clicked.connect(() => view.navigate_to("desktop"));
 
             provider_group = new Adw.PreferencesGroup();
             provider_row = new Adw.ComboRow();
             provider_row.title = _("Online source");
             provider_row.use_markup = false;
             provider_group.add(provider_row);
-            page.add(provider_group);
+            add_group(provider_group);
 
             var search_group = new Adw.PreferencesGroup();
             search_row = new Adw.EntryRow();
@@ -123,30 +108,21 @@ namespace Singularity.Shell {
             });
             search_row.add_suffix(refresh);
             search_group.add(search_row);
-            page.add(search_group);
+            add_group(search_group);
 
             var category_group = new Adw.PreferencesGroup();
-            category_group.title = _("Category");
-            var category_row = new Adw.PreferencesRow();
-            category_row.activatable = false;
-            category_chips = new FlowBox();
-            category_chips.selection_mode = SelectionMode.NONE;
-            category_chips.max_children_per_line = 8;
-            category_chips.column_spacing = 6;
-            category_chips.row_spacing = 6;
-            category_chips.hexpand = true;
-            category_chips.margin_start = category_chips.margin_end = 8;
-            category_chips.margin_top = category_chips.margin_bottom = 6;
-            category_row.set_child(category_chips);
+            category_row = new Adw.ComboRow();
+            category_row.title = _("Category");
+            category_row.use_markup = false;
             category_group.add(category_row);
-            page.add(category_group);
+            add_group(category_group);
 
             filter_group = new Adw.PreferencesGroup();
             tag_row = new Adw.ComboRow();
             tag_row.title = _("Tag");
             tag_row.use_markup = false;
             filter_group.add(tag_row);
-            page.add(filter_group);
+            add_group(filter_group);
 
             var results_group = new Adw.PreferencesGroup();
             var progress_row = new Adw.PreferencesRow();
@@ -180,36 +156,21 @@ namespace Singularity.Shell {
             grid_row.activatable = false;
             grid_row.set_child(grid);
             results_group.add(grid_row);
-            page.add(results_group);
+            add_group(results_group);
 
             provider_row.notify["selected"].connect(() => {
                 if (!updating) select_provider(selected_id(provider_row, provider_ids));
             });
+            category_row.notify["selected"].connect(() => {
+                if (!updating) on_category_row_selected(selected_id(category_row, category_ids));
+            });
             tag_row.notify["selected"].connect(() => {
                 if (!updating) on_tag_row_selected(selected_id(tag_row, tag_ids));
             });
-            close_request.connect(() => {
-                if (imports.busy) {
-                    status.label = _("Import in progress. You can close this window when it finishes.");
-                    return true;
-                }
-                closed = true;
-                generation++;
-                request.cancel();
-                session.abort();
-                dismissed();
-                return false;
-            });
-            var keys = new EventControllerKey();
-            keys.key_pressed.connect((key, code, modifiers) => {
-                if (key == Gdk.Key.Escape) { close(); return true; }
-                return false;
-            });
-            ((Gtk.Widget) this).add_controller(keys);
             initialize.begin();
         }
 
-        // The SelectionRow callback fires for both user-driven changes (where
+        // ComboRow notifications fire for both user-driven changes (where
         // updating is false) and programmatic rebuilds (where updating is
         // true). The previous bare DropDown code had the same guard; keep it.
         private bool updating = false;
@@ -217,17 +178,14 @@ namespace Singularity.Shell {
         private void update_controls() {
             if (search_row != null) search_row.sensitive = !imports.busy;
             refresh.sensitive = !imports.busy && !loading;
-            close_button.sensitive = !imports.busy;
             foreach (var card in cards)
                 card.button.sensitive = !imports.busy && !imports.is_added(card.item.key);
             // Filter UI is filter UI, not destructive: a busy import does
             // not warrant disabling it, but a still-loading grid would
             // mean picking a category or tag changes nothing visible, so
-            // the category chips disable while loading. The tag SelectionRow
-            // stays enabled while loading because its expander is empty
-            // (no tags streamed in yet) and disabling a SelectionRow while
-            // empty would be confusing.
-            category_chips.sensitive = !loading;
+            // the category dropdown disables while loading. The tag dropdown
+            // stays enabled while loading because it has no tags yet.
+            category_row.sensitive = !loading;
             if (loading || imports.busy) spinner.start(); else spinner.stop();
         }
 
@@ -293,7 +251,7 @@ namespace Singularity.Shell {
                 uint8[] contents;
                 yield File.new_for_path("/usr/share/ncz-wallpapers/ocs-category-index.json").load_contents_async(cancel, out contents, null);
                 string index = (string) contents;
-                if (gen != generation || closed) return;
+                if (gen != generation) return;
                 if (choices.size == 0) throw new IOError.FAILED(_("No wallpaper providers available."));
                 // Validate before retaining the index so Retry can reload bad data.
                 foreach (var choice in choices) WallpaperOcs.categories(index, choice.id);
@@ -335,17 +293,17 @@ namespace Singularity.Shell {
                 loading = false;
                 select_provider(initial);
             } catch (Error e) {
-                if (gen != generation || closed) return;
+                if (gen != generation) return;
                 loading = false;
                 status.label = _("Could not load wallpaper providers: %s").printf(e.message);
                 update_controls();
             }
         }
 
-        // Provider selected -> rebuild the category chip row, then kick off
+        // Provider selected -> rebuild the category dropdown, then kick off
         // the aggregate crawl for every usable category under that provider.
         // For Bing the "categories" are actually markets fetched from a
-        // different helper; the chip row is the same widget, but the
+        // different helper; the dropdown is the same widget, but the
         // underlying command and parser branch.
         private void select_provider(string provider_id) {
             if (provider_id == "") return;
@@ -365,12 +323,12 @@ namespace Singularity.Shell {
                 status.label = e.message;
                 return;
             }
-            // Wipe the active filter when the provider changes -- old chip
+            // Wipe the active filter when the provider changes -- old category
             // selections refer to categories that no longer exist.
             active_category_id = "";
             active_tag_ids.clear();
             known_tag_ids.clear();
-            rebuild_category_chips();
+            rebuild_category_row();
             rebuild_tag_row();
             cards.clear();
             grid.remove_all();
@@ -380,7 +338,7 @@ namespace Singularity.Shell {
 
         // Bing equivalent of the OCS provider/category-index load: one
         // synchronous `ncz-wallpaper-bing markets` call, TSV-parsed into the
-        // same WallpaperOcsChoice list the chip row already knows how to
+        // same WallpaperOcsChoice list the category dropdown already knows how to
         // render. Errors are surfaced through `status` exactly like an OCS
         // category-index parse failure.
         private async void select_provider_bing() {
@@ -393,12 +351,12 @@ namespace Singularity.Shell {
             update_controls();
             try {
                 string data = yield command({BING_HELPER, "markets"}, cancel, 30);
-                if (gen != generation || closed) return;
+                if (gen != generation) return;
                 categories = WallpaperBing.markets(data);
                 active_category_id = "";
                 active_tag_ids.clear();
                 known_tag_ids.clear();
-                rebuild_category_chips();
+                rebuild_category_row();
                 rebuild_tag_row();
                 cards.clear();
                 grid.remove_all();
@@ -406,93 +364,33 @@ namespace Singularity.Shell {
                 update_controls();
                 browse_all.begin();
             } catch (Error e) {
-                if (gen != generation || closed) return;
+                if (gen != generation) return;
                 loading = false;
                 status.label = _("Could not load Bing markets: %s").printf(e.message);
                 update_controls();
             }
         }
 
-        // Build a row of category filter chips from the cached list. First
-        // chip is "All categories" (id ""), then one chip per usable category
-        // sorted alphabetically by display name. Only one category can be
-        // active at a time -- the chip row drives a single category filter.
-        private void rebuild_category_chips() {
-            category_chips.remove_all();
-            add_filter_chip(category_chips, "", _("All categories"), "", true);
-            foreach (var choice in categories)
-                add_filter_chip(category_chips, choice.id, choice.name, "", false);
-        }
-
-        // Add a single Chip to the category FlowBox. The category chip row
-        // is the only chip-based filter left: categories are naturally
-        // single-select (single-active) and ChipBar.set_active() works fine
-        // for them, but we use raw Chips in a FlowBox because the catalog
-        // can have arbitrarily many categories and ChipBar is horizontal-
-        // scroll only. Tags moved to SelectionRow (see tag_row above); the
-        // tag chip wiring lives in on_tag_chip_clicked() for the duration
-        // of this commit and is then dropped.
-        private void add_filter_chip(FlowBox host, string id, string label, string icon_name, bool active) {
-            var chip = new Singularity.Widgets.Chip(id, icon_name);
-            chip.set_label(label);
-            chip.active = active;
-            chip.activated.connect(() => {
-                // Categories are single-select only (radio). Tags moved off
-                // chips entirely; see on_tag_chip_clicked / on_tag_row_selected.
-                on_category_chip_clicked(id);
-                filter_cards();
-            });
-            // Close (×) is decorative-only for filter chips; do nothing on
-            // click so a stray click can't degrade the filter UI silently.
-            chip.close_requested.connect(() => {});
-            host.append(chip);
-        }
-
-        private void on_category_chip_clicked(string id) {
-            active_category_id = id;
-            // Repaint every chip's active state to match the single-select
-            // contract: only the clicked chip stays highlighted.
-            repaint_chips(category_chips, (chip) => chip.chip_id == id);
-        }
-
-        // Drop-in replacement for the old multi-select on_tag_chip_clicked.
-        // SelectionRow is single-select so this just toggles one entry: if
-        // the user re-selects the active tag, clear it (back to "all tags");
-        // otherwise swap the active tag. active_tag_ids remains a HashSet so
-        // card_matches() can AND across it without shape changes.
-        private void on_tag_row_selected(string id) {
-            if (id == "") {
-                active_tag_ids.clear();
-            } else if (id in active_tag_ids) {
-                active_tag_ids.remove(id);
-            } else {
-                active_tag_ids.clear();
-                active_tag_ids.add(id);
+        private void rebuild_category_row() {
+            var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            options.add(new Singularity.Core.AppSettingOption() { id = "", label = _("Any category") });
+            foreach (var choice in categories) {
+                options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
             }
+            updating = true;
+            category_ids = set_choices(category_row, options, active_category_id);
+            updating = false;
+        }
+
+        private void on_category_row_selected(string id) {
+            active_category_id = id;
             filter_cards();
         }
 
-        // Local predicate delegate: takes a Chip and returns whether it
-        // should be highlighted right now. Used by repaint_chips() to keep
-        // the category filter row honest about which chip is "active".
-        private delegate bool ChipActivePredicate(Singularity.Widgets.Chip chip);
-
-        // Walk every direct child of `host`, casting each one to a Chip and
-        // running `should_be_active` to decide its `active` property. GTK4
-        // containers no longer expose a bulk get_children() helper, so the
-        // walk is over get_first_child()/get_next_sibling(). Each direct
-        // child of a FlowBox is a Gtk.FlowBoxChild that wraps the actual
-        // Chip we appended via add_filter_chip(); casting the FlowBoxChild
-        // directly to Chip silently fails (returns null and the active
-        // state never repaints), so unwrap with get_child() first.
-        private void repaint_chips(Gtk.FlowBox host, ChipActivePredicate should_be_active) {
-            Gtk.Widget? w = host.get_first_child();
-            while (w != null) {
-                var fbc = w as Gtk.FlowBoxChild;
-                var chip = fbc != null ? fbc.get_child() as Singularity.Widgets.Chip : null;
-                if (chip != null) chip.active = should_be_active(chip);
-                w = w.get_next_sibling();
-            }
+        private void on_tag_row_selected(string id) {
+            active_tag_ids.clear();
+            if (id != "") active_tag_ids.add(id);
+            filter_cards();
         }
 
         // The aggregate crawl. Pulls a single page from every usable category
@@ -500,7 +398,7 @@ namespace Singularity.Shell {
         // then merges results into the grid. Live progress ("Loaded K of N
         // categories · M wallpapers so far") is reported through `status`
         // each time a category finishes. The Cancellable cuts the rest of
-        // the crawl off cleanly when the user closes the window or starts a
+        // the crawl off cleanly when the user starts a
         // fresh crawl.
         private async void browse_all() {
             int gen = ++generation;
@@ -548,7 +446,7 @@ namespace Singularity.Shell {
                 worker.begin(state);
             // Poll completion at 100 ms intervals. A timeout must invoke the
             // async continuation; changing a flag cannot resume a bare yield.
-            while (gen == generation && state.done_count < total && !closed && !cancel.is_cancelled()) {
+            while (gen == generation && state.done_count < total && !cancel.is_cancelled()) {
                 state.count_lock.lock();
                 int snapshot;
                 try { snapshot = state.item_count; } finally { state.count_lock.unlock(); }
@@ -569,7 +467,7 @@ namespace Singularity.Shell {
                 });
                 yield;
             }
-            if (gen != generation || closed) return;
+            if (gen != generation) return;
             loading = false;
             filter_cards();
             update_controls();
@@ -602,7 +500,7 @@ namespace Singularity.Shell {
         // helper, so no extra concurrency limiter is needed there.
         private async void worker(CrawlState state) {
             // Read everything through state.X; never capture local refs.
-            while (state.generation == generation && !closed && !state.cancel.is_cancelled()) {
+            while (state.generation == generation && !state.cancel.is_cancelled()) {
                 int my_index = 0;
                 state.todo_lock.lock();
                 try {
@@ -646,15 +544,15 @@ namespace Singularity.Shell {
                         // applies so a single slow market cannot stall a
                         // worker beyond the user's patience.
                         data = yield command({BING_HELPER, "list", category}, state.cancel, CRAWL_CATEGORY_TIMEOUT);
-                        if (state.generation != generation || closed || state.cancel.is_cancelled()) return;
+                        if (state.generation != generation || state.cancel.is_cancelled()) return;
                         items = WallpaperBing.items(data);
                         // For Bing, `category` IS the market id and the
                         // item_category map uses it as the filter key the
-                        // same way OCS does (chip row -> string equality
+                        // same way OCS does (category row -> string equality
                         // against item_category[key]).
                     } else {
                         data = yield command({HELPER, "browse", state.provider, category, "--pages", "1"}, state.cancel, CRAWL_CATEGORY_TIMEOUT);
-                        if (state.generation != generation || closed || state.cancel.is_cancelled()) return;
+                        if (state.generation != generation || state.cancel.is_cancelled()) return;
                         items = WallpaperOcs.items(data, state.provider, category);
                     }
                     foreach (var item in items) {
@@ -834,7 +732,7 @@ namespace Singularity.Shell {
                 if (item.provider == BING_PROVIDER_ID) pin_card.begin(card);
                 else                                  import_card.begin(card);
             });
-            card.card.set_action_button(card.button);
+            card.card.append_action_button(card.button);
             grid.append(card.card);
             cards.add(card);
         }
@@ -857,7 +755,7 @@ namespace Singularity.Shell {
         // called from the UI thread (GTK4 widget APIs are not safe to
         // call from arbitrary worker contexts).
         private async void thumbnails(int start, int gen, Cancellable cancel) {
-            for (int i = start; i < cards.size && gen == generation && !closed && !cancel.is_cancelled(); i += 3) {
+            for (int i = start; i < cards.size && gen == generation && !cancel.is_cancelled(); i += 3) {
                 var card = cards[i];
                 Gdk.Pixbuf? pixbuf = null;
                 if (card.item.thumbnail_path != "") {
@@ -935,7 +833,7 @@ namespace Singularity.Shell {
                     if (skip_card) continue;
                 }
                 if (pixbuf == null) continue;
-                if (gen != generation || closed || cancel.is_cancelled()) continue;
+                if (gen != generation || cancel.is_cancelled()) continue;
                 // Marshal the paintable assignment onto the main thread so
                 // Picture.set_paintable is always called from a UI context.
                 // The local var capture is safe: pixbuf is a fresh heap
@@ -943,7 +841,7 @@ namespace Singularity.Shell {
                 Gdk.Pixbuf captured_pb = pixbuf;
                 OcsCard captured_card = card;
                 Idle.add(() => {
-                    if (gen == generation && !closed && captured_card.card != null)
+                    if (gen == generation && captured_card.card != null)
                         captured_card.card.set_paintable(Gdk.Texture.for_pixbuf(captured_pb));
                     return GLib.Source.REMOVE;
                 });
@@ -956,7 +854,7 @@ namespace Singularity.Shell {
         // async context safely.
         private void show_thumb_unavailable(OcsCard card) {
             Idle.add(() => {
-                if (generation >= 0 && !closed && card.card != null) {
+                if (generation >= 0 && card.card != null) {
                     // Tooltip on the WallpaperCard itself rather than on
                     // an internal Picture -- the picture is private.
                     card.card.tooltip_text = _("Preview unavailable");
