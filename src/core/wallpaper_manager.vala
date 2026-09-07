@@ -16,6 +16,19 @@ namespace Singularity {
         private int _load_serial = 0;
         private Mutex _mutex = Mutex ();
 
+        // Attribution metadata for the current wallpaper. Mirrors the
+        // dev.sinty.desktop gschema keys background-attribution-title
+        // and background-attribution-author. Updated by reload() from
+        // the schema; both empty means the Background overlay widget
+        // should hide itself. WallpaperManager fires wallpaper_changed
+        // whenever these change, so a wallpaper-set call that clears
+        // the keys (local pack pick, drag-drop, reset) re-paints the
+        // overlay to hide it, and a future call site that sets them
+        // alongside the URI (the OCS apply-this-image flow) re-paints
+        // to show them.
+        public string attribution_title { get; private set; default = ""; }
+        public string attribution_author { get; private set; default = ""; }
+
         public signal void wallpaper_changed();
 
         public static WallpaperManager get_default() {
@@ -30,10 +43,43 @@ namespace Singularity {
             settings.changed["background-picture-uri"].connect(() => {
                 reload();
             });
+            // Attribution keys are subscribed independently so they can
+            // move without the URI changing (the future apply-OCS-item
+            // flow will set attribution without re-pointing the wallpaper
+            // file if the URI is already current). Guarded with
+            // schema.has_key() so a binary running against an older
+            // schema (no attribution keys defined yet) does not critical
+            // on missing-key connect.
+            SettingsSchema? schema = settings.settings_schema;
+            if (schema != null) {
+                if (schema.has_key("background-attribution-title"))
+                    settings.changed["background-attribution-title"].connect(() => reload());
+                if (schema.has_key("background-attribution-author"))
+                    settings.changed["background-attribution-author"].connect(() => reload());
+            }
             reload();
         }
 
         public void reload() {
+            // Read attribution keys defensively: a schema that doesn't
+            // have them yet (older deploy, ad-hoc bisect, dev mode) must
+            // not abort here -- "" is the right empty value, and the
+            // overlay widget treats both-empty as "hide".
+            SettingsSchema? schema = settings.settings_schema;
+            string new_title = "";
+            string new_author = "";
+            if (schema != null) {
+                if (schema.has_key("background-attribution-title"))
+                    new_title = settings.get_string("background-attribution-title");
+                if (schema.has_key("background-attribution-author"))
+                    new_author = settings.get_string("background-attribution-author");
+            }
+            bool attribution_changed =
+                new_title != attribution_title ||
+                new_author != attribution_author;
+            attribution_title = new_title;
+            attribution_author = new_author;
+
             string custom_uri = settings.get_string("background-picture-uri");
             string? path = resolve_path(custom_uri);
             if (path == null) {
@@ -66,7 +112,16 @@ namespace Singularity {
                 }
             }
             if (path != null) {
-                if (path == _cached_path) return;
+                if (path == _cached_path) {
+                    // Wallpaper file unchanged; if only the attribution
+                    // metadata moved (URI stays the same but the keys
+                    // were updated), the overlay widget still needs to
+                    // repaint, so fire wallpaper_changed(). Otherwise
+                    // return -- the texture reload below is what fires
+                    // the signal for a true wallpaper change.
+                    if (attribution_changed) wallpaper_changed();
+                    return;
+                }
                 _cached_path = path;
                 wallpaper_path = path;
 
@@ -217,6 +272,77 @@ namespace Singularity {
                 target_w = int.max(target_w, geom.width * scale);
                 target_h = int.max(target_h, geom.height * scale);
             }
+        }
+
+        // Sample the average luminance of an arbitrary rectangular
+        // sub-region of the cached display pixbuf. Used by the
+        // attribution overlay (Background.vala) to pick light or dark
+        // text the same way panel.vala does for the top band, but
+        // sampling the corner rect the overlay occupies instead of the
+        // top strip the panel covers.
+        //
+        // Returns -1.0 if the display pixbuf is not yet loaded or the
+        // rect is fully out of range. Callers compare against
+        // topbar_lum_threshold (0.72, panel.vala) and pick light text
+        // when luminance > threshold, matching the .light-bg CSS class
+        // the panel uses for the same decision.
+        //
+        // Coordinates are in DISPLAY pixbuf pixels (the medium-resolution
+        // texture the panel already samples), not the on-screen output
+        // size. The pixbuf aspect ratio matches the screen aspect, so
+        // a corner in screen-pixel units maps to a corner in pixbuf
+        // pixels at the same proportional position -- callers pass
+        // (x, y, w, h) directly. The rect is clamped into the pixbuf
+        // bounds so a corner that's partially off-screen at the time
+        // the overlay measures still gets a meaningful sample.
+        // Fractional-coordinate variant of corner_luminance. The pixbuf
+        // aspect ratio matches the screen aspect ratio (medium_texture
+        // is built from_file_at_scale preserving aspect), so a
+        // fractional rect (0..1, 0..1) samples the same proportional
+        // position of the screen. Callers don't need to know the
+        // cached pixbuf's pixel size, only where on the screen they
+        // want to sample.
+        public double corner_luminance_frac(double fx, double fy, double fw, double fh) {
+            var pb = _display_pixbuf;
+            if (pb == null) return -1.0;
+            int pw = pb.get_width();
+            int ph = pb.get_height();
+            int x = (int) Math.round(fx * pw);
+            int y = (int) Math.round(fy * ph);
+            int w = (int) Math.round(fw * pw);
+            int h = (int) Math.round(fh * ph);
+            return corner_luminance(x, y, w, h);
+        }
+
+        public double corner_luminance(int x, int y, int w, int h) {
+            var pb = _display_pixbuf;
+            if (pb == null) return -1.0;
+            if (pb.get_bits_per_sample() != 8) return -1.0;
+            int channels = pb.get_n_channels();
+            if (channels < 3) return -1.0;
+            int pw = pb.get_width();
+            int ph = pb.get_height();
+            x = int.max(0, int.min(x, pw - 1));
+            y = int.max(0, int.min(y, ph - 1));
+            w = int.max(1, int.min(w, pw - x));
+            h = int.max(1, int.min(h, ph - y));
+            int rowstride = pb.get_rowstride();
+            uint8[] data = pb.get_pixels_with_length();
+            int n = data.length;
+            double total = 0.0;
+            int count = 0;
+            for (int yy = y; yy < y + h; yy++) {
+                for (int xx = x; xx < x + w; xx++) {
+                    int idx = yy * rowstride + xx * channels;
+                    if (idx + 2 >= n) continue;
+                    double r = data[idx]     / 255.0;
+                    double g = data[idx + 1] / 255.0;
+                    double b = data[idx + 2] / 255.0;
+                    total += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                    count++;
+                }
+            }
+            return count > 0 ? total / count : -1.0;
         }
 
         private static Pixbuf? ensure_alpha(Pixbuf? pb) {
