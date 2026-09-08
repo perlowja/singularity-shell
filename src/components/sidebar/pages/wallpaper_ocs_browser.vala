@@ -15,7 +15,10 @@ namespace Singularity.Shell {
         // images in bing.collection; browsing only reads that local archive.
         private const string BING_HELPER = "/usr/local/bin/ncz-wallpaper-bing";
         private const string OPENVERSE_HELPER = "/usr/local/bin/ncz-wallpaper-openverse";
-        private ProviderCredentialGroup credentials;
+        private const string UNSPLASH_HELPER = "/usr/local/bin/ncz-wallpaper-unsplash";
+        private const string STOCK_PROVIDER_ID = "stock";
+        private ProviderCredentialGroup openverse_credentials;
+        private ProviderCredentialGroup unsplash_credentials;
         private Adw.PreferencesGroup online_search_group;
         private Adw.EntryRow online_search;
         private Button previous_page;
@@ -103,13 +106,17 @@ namespace Singularity.Shell {
             provider_group.add(provider_row);
             add_group(provider_group);
 
-            credentials = new ProviderCredentialGroup(_("Openverse account"), _("Your email address"), false,
+            openverse_credentials = new ProviderCredentialGroup(_("Openverse account"), _("Your email address"), false,
                 _("Optional per-user registration. Openverse sends a verification email; until verified, anonymous-tier limits apply. Credentials stay on this computer."));
-            credentials.submitted.connect((value) => register_openverse.begin(value));
-            add_group(credentials);
+            openverse_credentials.submitted.connect((value) => register_openverse.begin(value));
+            add_group(openverse_credentials);
+            unsplash_credentials = new ProviderCredentialGroup(_("Unsplash account"), _("Your Unsplash Access Key"), true,
+                _("Optional personal key. Without one, Stock Photos still searches Openverse. The key stays on this computer."));
+            unsplash_credentials.submitted.connect((value) => configure_unsplash.begin(value));
+            add_group(unsplash_credentials);
             online_search_group = new Adw.PreferencesGroup();
             online_search = new Adw.EntryRow();
-            online_search.title = _("Search Openverse");
+            online_search.title = _("Search Stock Photos");
             online_search.text = "nature";
             online_search.show_apply_button = true;
             online_search.apply.connect(() => { photo_page = 1; browse_all.begin(); });
@@ -281,7 +288,7 @@ namespace Singularity.Shell {
             providers.clear();
             providers.add(new WallpaperOcsChoice("ocs", _("OCS")));
             providers.add(new WallpaperOcsChoice("bing", _("Bing")));
-            providers.add(new WallpaperOcsChoice("openverse", _("Openverse")));
+            providers.add(new WallpaperOcsChoice(STOCK_PROVIDER_ID, _("Stock Photos")));
             try {
                 uint8[] contents;
                 yield File.new_for_path("/usr/share/ncz-wallpapers/ocs-category-index.json").load_contents_async(null, out contents, null);
@@ -305,25 +312,48 @@ namespace Singularity.Shell {
                 var obj = WallpaperOcs.document(data, false);
                 var registered = obj.get_member("registered");
                 bool saved = registered != null && registered.get_value_type() == typeof(bool) && registered.get_boolean();
-                credentials.set_state(saved ? _("Credentials saved. Verify your email using the Openverse link.")
+                openverse_credentials.set_state(saved ? _("Credentials saved. Verify your email using the Openverse link.")
                                             : _("Anonymous access is available without registration."), !saved);
             } catch (Error e) {
-                credentials.set_state(e.message, true);
+                openverse_credentials.set_state(e.message, true);
+            }
+            try {
+                string data = yield command({UNSPLASH_HELPER, "status"}, null, 15);
+                var obj = WallpaperOcs.document(data, false);
+                var configured = obj.get_member("configured");
+                bool saved = configured != null && configured.get_value_type() == typeof(bool) && configured.get_boolean();
+                unsplash_credentials.set_state(saved ? _("Unsplash Access Key saved.")
+                                                      : _("Add your Access Key to include Unsplash results."), !saved);
+            } catch (Error e) {
+                unsplash_credentials.set_state(_("Unsplash helper unavailable: %s").printf(e.message), true);
             }
         }
 
         private async void register_openverse(string email) {
-            credentials.set_state(_("Registering with Openverse…"), false);
+            openverse_credentials.set_state(_("Registering with Openverse…"), false);
             try {
                 string data = yield command({OPENVERSE_HELPER, "register"}, null, 90, email);
                 var obj = WallpaperOcs.document(data, false);
-                credentials.set_state(WallpaperOcs.text(obj, "message"), false);
+                openverse_credentials.set_state(WallpaperOcs.text(obj, "message"), false);
             } catch (Error e) {
-                credentials.set_state(e.message, true);
+                openverse_credentials.set_state(e.message, true);
             }
         }
 
-        private async void browse_openverse() {
+        private async void configure_unsplash(string key) {
+            unsplash_credentials.set_state(_("Saving Unsplash Access Key…"), false);
+            try {
+                string data = yield command({UNSPLASH_HELPER, "configure"}, null, 30, key);
+                var obj = WallpaperOcs.document(data, false);
+                unsplash_credentials.set_state(WallpaperOcs.text(obj, "message"), false);
+                photo_page = 1;
+                browse_all.begin();
+            } catch (Error e) {
+                unsplash_credentials.set_state(e.message, true);
+            }
+        }
+
+        private async void browse_stock() {
             int gen = ++generation;
             request.cancel();
             request = new Cancellable();
@@ -334,10 +364,16 @@ namespace Singularity.Shell {
             item_category.clear();
             known_tag_ids.clear();
             rebuild_tag_row();
-            status.label = _("Searching Openverse…");
+            status.label = _("Searching Stock Photos…");
             update_controls();
             bool refresh_now = force_refresh;
             force_refresh = false;
+            bool openverse_ok = false;
+            bool unsplash_ok = false;
+            bool stale = false;
+            string openverse_error = "";
+            string unsplash_error = "";
+            photo_page_count = 1;
             try {
                 string[] argv = {OPENVERSE_HELPER, "search", online_search.text, "--page", photo_page.to_string()};
                 if (refresh_now) argv += "--refresh";
@@ -352,19 +388,46 @@ namespace Singularity.Shell {
                     bool tag;
                     add_card(item, "", out tag);
                 }
-                rebuild_tag_row();
-                loading = false;
-                filter_cards();
-                var stale = obj.get_member("stale");
-                bool offline = stale != null && stale.get_value_type() == typeof(bool) && stale.get_boolean();
-                status.label = offline ? _("Showing cached Openverse results; refresh failed.")
-                    : _("Openverse · page %d of %d · %d images").printf(photo_page, photo_page_count, cards.size);
-                for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
+                var stale_node = obj.get_member("stale");
+                stale = stale_node != null && stale_node.get_value_type() == typeof(bool) && stale_node.get_boolean();
+                openverse_ok = true;
             } catch (Error e) {
-                if (gen != generation) return;
-                loading = false;
-                status.label = _("Openverse search failed: %s").printf(e.message);
+                openverse_error = e.message;
             }
+            try {
+                string[] argv = {UNSPLASH_HELPER, "search", online_search.text, "--page", photo_page.to_string()};
+                if (refresh_now) argv += "--refresh";
+                string data = yield command(argv, cancel, 90);
+                if (gen != generation) return;
+                var obj = WallpaperOcs.document(data);
+                var pages = obj.get_member("page_count");
+                if (pages == null || pages.get_value_type() != typeof(int64))
+                    throw new IOError.FAILED(_("Invalid Unsplash page count"));
+                photo_page_count = int.max(photo_page_count, (int) pages.get_int());
+                foreach (var item in WallpaperOpenverse.items(data)) {
+                    bool tag;
+                    add_card(item, "", out tag);
+                }
+                var stale_node = obj.get_member("stale");
+                stale = stale || (stale_node != null && stale_node.get_value_type() == typeof(bool) && stale_node.get_boolean());
+                unsplash_ok = true;
+            } catch (Error e) {
+                unsplash_error = e.message;
+            }
+            if (gen != generation) return;
+            rebuild_tag_row();
+            loading = false;
+            filter_cards();
+            if (!openverse_ok && !unsplash_ok)
+                status.label = _("Stock Photos search failed: %s; %s").printf(openverse_error, unsplash_error);
+            else if (stale)
+                status.label = _("Showing cached Stock Photos results; refresh failed.");
+            else
+                status.label = (openverse_ok && unsplash_ok ? _("Stock Photos · Openverse + Unsplash · page %d of %d · %d images")
+                    : openverse_ok ? _("Stock Photos · Openverse · page %d of %d · %d images")
+                    : _("Stock Photos · Unsplash · page %d of %d · %d images")).printf(photo_page, photo_page_count, cards.size);
+            if (openverse_ok || unsplash_ok)
+                for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
             update_controls();
         }
 
@@ -376,8 +439,8 @@ namespace Singularity.Shell {
         private void select_provider(string provider_id) {
             if (provider_id == "") return;
             force_refresh = false;
-            bool photos = provider_id == "openverse";
-            credentials.visible = online_search_group.visible = photos;
+            bool photos = provider_id == STOCK_PROVIDER_ID;
+            openverse_credentials.visible = unsplash_credentials.visible = online_search_group.visible = photos;
             category_row.visible = !photos;
             active_category_id = "";
             active_tag_ids.clear();
@@ -491,8 +554,8 @@ namespace Singularity.Shell {
         // the crawl off cleanly when the user starts a
         // fresh crawl.
         private async void browse_all() {
-            if (selected_id(provider_row, provider_ids) == "openverse") {
-                yield browse_openverse();
+            if (selected_id(provider_row, provider_ids) == STOCK_PROVIDER_ID) {
+                yield browse_stock();
                 return;
             }
             int gen = ++generation;
@@ -814,7 +877,7 @@ namespace Singularity.Shell {
         private void add_card(WallpaperOcsItem item, string source_category, out bool new_tag_added) {
             new_tag_added = false;
             if (has_card(item)) return;
-            if (item.provider != "openverse") {
+            if (item.provider != "openverse" && item.provider != "unsplash") {
                 item.name = WallpaperSidecar.plain_text(item.name);
                 item.author = WallpaperSidecar.plain_text(item.author);
                 item.license = WallpaperSidecar.plain_text(item.license);
@@ -836,18 +899,22 @@ namespace Singularity.Shell {
             if (item.provider == BING_PROVIDER_ID)
                 attribution = "%s · %s".printf(_("Bing"), item.market != "" ? item.market : item.provider);
             else
-                attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"), item.provider == "openverse" ? _("Openverse") : _("OCS"));
+                attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"),
+                    item.provider == "openverse" ? _("Openverse") : item.provider == "unsplash" ? _("Unsplash") : _("OCS"));
             string license_text = item.license != "" ? item.license : _("No license stated");
             card.card.set_badge(attribution + "  ·  " + license_text);
-            if (item.provider == "openverse") {
+            if (item.provider == "openverse" || item.provider == "unsplash") {
                 var metadata = WallpaperAttribution() { title = "", author = item.attribution != "" ? item.attribution : item.author,
-                    source = "Openverse · " + item.license, page_url = item.page_url, license_url = item.license_url, valid = true };
+                    source = (item.provider == "unsplash" ? "Unsplash · " : "Openverse · ") + item.license,
+                    page_url = item.page_url, license_url = item.license_url, valid = true };
                 var credit = new Label(WallpaperSidecar.display_text(metadata));
                 credit.use_markup = false;
                 credit.wrap = true;
                 credit.selectable = true;
                 credit.max_width_chars = 28;
                 card.card.append(credit);
+                if (item.provider == "unsplash" && (item.creator_url.has_prefix("https://") || item.creator_url.has_prefix("http://")))
+                    card.card.append(new LinkButton.with_label(item.creator_url, _("Photographer on Unsplash")));
                 if (item.page_url.has_prefix("https://") || item.page_url.has_prefix("http://"))
                     card.card.append(new LinkButton.with_label(item.page_url, _("Original image / attribution")));
                 if (item.license_url.has_prefix("https://") || item.license_url.has_prefix("http://"))
@@ -1006,6 +1073,8 @@ namespace Singularity.Shell {
             try {
                 string[] argv = card.item.provider == "openverse"
                     ? new string[] {OPENVERSE_HELPER, "import", card.item.id}
+                    : card.item.provider == "unsplash"
+                    ? new string[] {UNSPLASH_HELPER, "import", card.item.id}
                     : new string[] {HELPER, "import", card.item.provider, card.item.id};
                 string data = yield command(argv, null, 600);
                 imports.complete(card.item.key, data, collection_roots);

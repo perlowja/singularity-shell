@@ -90,6 +90,11 @@ private void test_dedupes_by_id_first_root_wins() {
     assert(result[0].name == "System");
 }
 
+private void test_unsplash_is_theme_pack() {
+    var collection = new WallpaperCollectionInfo("unsplash", "Unsplash", "", "/tmp/unsplash", "static");
+    assert(collection.theme_pack);
+}
+
 public int main(string[] args) {
     Test.init(ref args);
     Test.add_func("/wallpaper-collections/parses-id-name-artist-dir", test_parses_id_name_artist_dir);
@@ -97,5 +102,6 @@ public int main(string[] args) {
     Test.add_func("/wallpaper-collections/skips-dir-less-collection", test_skips_dir_less_collection);
     Test.add_func("/wallpaper-collections/ignores-non-collection-files-and-missing-dirs", test_ignores_non_collection_files_and_missing_dirs);
     Test.add_func("/wallpaper-collections/dedupes-by-id-first-root-wins", test_dedupes_by_id_first_root_wins);
+    Test.add_func("/wallpaper-collections/unsplash-theme-pack", test_unsplash_is_theme_pack);
     return Test.run();
 }

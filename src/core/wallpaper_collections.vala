@@ -24,7 +24,7 @@ namespace Singularity {
             this.dir = dir;
             this.type = type;
             theme_pack = id == "pling" || id == "kde-look" || id == "gnome-look" ||
-                id == "bing" || id == "ocs" || id == "openverse" || id == "imported-ocs" || id.has_prefix("ocs-");
+                id == "bing" || id == "ocs" || id == "openverse" || id == "unsplash" || id == "imported-ocs" || id.has_prefix("ocs-");
         }
     }
 

@@ -138,6 +138,16 @@ public class WallpaperSidecar : GLib.Object {
                 result.valid = true;
                 return result;
             }
+            if (provider == "unsplash") {
+                result.title = text(obj, "name");
+                result.author = text(obj, "attribution");
+                if (result.author == "") result.author = text(obj, "author");
+                result.source = "Unsplash · " + text(obj, "license");
+                result.page_url = text(obj, "page_url");
+                result.license_url = text(obj, "license_url");
+                result.valid = true;
+                return result;
+            }
             if (provider != "bing") return result;
             result.source = "Bing";
             // Bing shape: caption -> title, copyright -> author.
