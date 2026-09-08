@@ -16,6 +16,15 @@ namespace Singularity.Shell {
         // per-item action here is PIN (which protects it from retention
         // pruning), not import.
         private const string BING_HELPER = "/usr/local/bin/ncz-wallpaper-bing";
+        private const string OPENVERSE_HELPER = "/usr/local/bin/ncz-wallpaper-openverse";
+        private ProviderCredentialGroup credentials;
+        private Adw.PreferencesGroup online_search_group;
+        private Adw.EntryRow online_search;
+        private Button previous_page;
+        private Button next_page;
+        private int photo_page = 1;
+        private int photo_page_count = 1;
+        private bool force_refresh = false;
         // The synthetic provider id used by the provider dropdown, the worker
         // branching, and the card layout. Same value as WallpaperBing.PROVIDER_ID
         // in core/ -- duplicated here so the browser can branch on it
@@ -96,6 +105,29 @@ namespace Singularity.Shell {
             provider_group.add(provider_row);
             add_group(provider_group);
 
+            credentials = new ProviderCredentialGroup(_("Openverse account"), _("Your email address"), false,
+                _("Optional per-user registration. Openverse sends a verification email; until verified, anonymous-tier limits apply. Credentials stay on this computer."));
+            credentials.submitted.connect((value) => register_openverse.begin(value));
+            add_group(credentials);
+            online_search_group = new Adw.PreferencesGroup();
+            online_search = new Adw.EntryRow();
+            online_search.title = _("Search Openverse");
+            online_search.text = "nature";
+            online_search.show_apply_button = true;
+            online_search.apply.connect(() => { photo_page = 1; browse_all.begin(); });
+            online_search_group.add(online_search);
+            var pagination = new Adw.ActionRow();
+            pagination.title = _("Search results");
+            previous_page = new Button.with_label(_("Previous"));
+            next_page = new Button.with_label(_("Next"));
+            previous_page.valign = next_page.valign = Align.CENTER;
+            previous_page.clicked.connect(() => { photo_page--; browse_all.begin(); });
+            next_page.clicked.connect(() => { photo_page++; browse_all.begin(); });
+            pagination.add_suffix(previous_page);
+            pagination.add_suffix(next_page);
+            online_search_group.add(pagination);
+            add_group(online_search_group);
+
             var search_group = new Adw.PreferencesGroup();
             search_row = new Adw.EntryRow();
             search_row.title = _("Filter loaded wallpapers");
@@ -104,8 +136,8 @@ namespace Singularity.Shell {
             refresh.tooltip_text = _("Refresh / Retry");
             refresh.valign = Align.CENTER;
             refresh.clicked.connect(() => {
-                if (category_index == "") initialize.begin();
-                else browse_all.begin();
+                force_refresh = true;
+                browse_all.begin();
             });
             search_row.add_suffix(refresh);
             search_group.add(search_row);
@@ -191,6 +223,9 @@ namespace Singularity.Shell {
             // the category dropdown disables while loading. The tag dropdown
             // stays enabled while loading because it has no tags yet.
             category_row.sensitive = !loading;
+            previous_page.sensitive = !loading && !imports.busy && photo_page > 1;
+            next_page.sensitive = !loading && !imports.busy && photo_page < photo_page_count;
+            online_search.sensitive = !imports.busy && !loading;
             if (loading || imports.busy) spinner.start(); else spinner.stop();
         }
 
@@ -204,8 +239,9 @@ namespace Singularity.Shell {
             process.force_exit();
         }
 
-        private async string command(string[] argv, Cancellable? cancel, uint timeout) throws Error {
-            var launcher = new SubprocessLauncher(SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
+        private async string command(string[] argv, Cancellable? cancel, uint timeout, string? input = null) throws Error {
+            var launcher = new SubprocessLauncher(SubprocessFlags.STDIN_PIPE | SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
+            if (force_refresh) launcher.setenv("NCZ_WALLPAPER_REFRESH", "1", true);
             launcher.set_child_setup(() => { Posix.setsid(); });
             var process = launcher.spawnv(argv);
             bool timed_out = false;
@@ -223,7 +259,7 @@ namespace Singularity.Shell {
             string errors;
             try {
                 // Drain and reap even after cancellation, then discard the result.
-                yield process.communicate_utf8_async(null, null, out output, out errors);
+                yield process.communicate_utf8_async(input, null, out output, out errors);
             } catch (Error e) {
                 stop_helper(process);
                 yield process.wait_async(null);
@@ -243,66 +279,95 @@ namespace Singularity.Shell {
         }
 
         private async void initialize() {
+            // Free photo sources must remain usable even without an OCS index.
+            providers.clear();
+            providers.add(new WallpaperOcsChoice("ocs", _("OCS")));
+            providers.add(new WallpaperOcsChoice("bing", _("Bing")));
+            providers.add(new WallpaperOcsChoice("openverse", _("Openverse")));
+            try {
+                uint8[] contents;
+                yield File.new_for_path("/usr/share/ncz-wallpapers/ocs-category-index.json").load_contents_async(null, out contents, null);
+                category_index = (string) contents;
+                WallpaperOcs.categories(category_index, "ocs");
+            } catch (Error e) {
+                category_index = "";
+            }
+            var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            foreach (var choice in providers)
+                options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
+            updating = true;
+            provider_ids = set_choices(provider_row, options, "ocs");
+            updating = false;
+            select_provider("ocs");
+        }
+
+        private async void credential_status() {
+            try {
+                string data = yield command({OPENVERSE_HELPER, "status"}, null, 15);
+                var obj = WallpaperOcs.document(data, false);
+                var registered = obj.get_member("registered");
+                bool saved = registered != null && registered.get_value_type() == typeof(bool) && registered.get_boolean();
+                credentials.set_state(saved ? _("Credentials saved. Verify your email using the Openverse link.")
+                                            : _("Anonymous access is available without registration."), !saved);
+            } catch (Error e) {
+                credentials.set_state(e.message, true);
+            }
+        }
+
+        private async void register_openverse(string email) {
+            credentials.set_state(_("Registering with Openverse…"), false);
+            try {
+                string data = yield command({OPENVERSE_HELPER, "register"}, null, 90, email);
+                var obj = WallpaperOcs.document(data, false);
+                credentials.set_state(WallpaperOcs.text(obj, "message"), false);
+            } catch (Error e) {
+                credentials.set_state(e.message, true);
+            }
+        }
+
+        private async void browse_openverse() {
             int gen = ++generation;
             request.cancel();
             request = new Cancellable();
             var cancel = request;
             loading = true;
-            status.label = _("Loading wallpaper providers…");
+            cards.clear();
+            grid.remove_all();
+            item_category.clear();
+            known_tag_ids.clear();
+            rebuild_tag_row();
+            status.label = _("Searching Openverse…");
             update_controls();
+            bool refresh_now = force_refresh;
+            force_refresh = false;
             try {
-                string data = yield command({HELPER, "providers"}, cancel, 30);
-                var choices = WallpaperOcs.providers(data);
-                uint8[] contents;
-                yield File.new_for_path("/usr/share/ncz-wallpapers/ocs-category-index.json").load_contents_async(cancel, out contents, null);
-                string index = (string) contents;
+                string[] argv = {OPENVERSE_HELPER, "search", online_search.text, "--page", photo_page.to_string()};
+                if (refresh_now) argv += "--refresh";
+                string data = yield command(argv, cancel, 90);
                 if (gen != generation) return;
-                if (choices.size == 0) throw new IOError.FAILED(_("No wallpaper providers available."));
-                // Validate before retaining the index so Retry can reload bad data.
-                foreach (var choice in choices) WallpaperOcs.categories(index, choice.id);
-                providers = choices;
-                category_index = index;
-                // Append the synthetic Bing pseudo-provider at the END of the
-                // real OCS list -- not in WallpaperOcs.providers(), which
-                // stays strictly about parsing the OCS helper's JSON. The
-                // browser is the only place Bing is glued into the UI; the
-                // core parser keeps a hard contract about what "a provider"
-                // means over OCS.
-                providers.add(new WallpaperOcsChoice(BING_PROVIDER_ID, _("Bing")));
-                // Real id/label pairs via set_options(): the id ("bing") is
-                // what every downstream check (BING_PROVIDER_ID comparisons
-                // in select_provider()/worker()) compares against, and the
-                // label ("Bing") is only what's displayed. This USED to be
-                // set_items(string[]), whose current-value domain IS the
-                // display string -- harmless for the four real OCS
-                // providers, where id and label happen to be the same
-                // token, but for Bing (id "bing", label "Bing") selecting
-                // it in the UI produced current_value == "Bing", which
-                // never matched BING_PROVIDER_ID ("bing") anywhere
-                // downstream: select_provider() silently fell through to
-                // the OCS branch, queried a nonexistent "Bing" OCS
-                // provider, and produced zero results ("no images to
-                // display") even though the real ncz-wallpaper-bing CLI
-                // returns real data. Found by running that CLI directly
-                // and tracing why cards.size stayed 0 despite it.
-                var provider_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-                string initial = providers.size > 0 ? providers[0].id : "";
-                foreach (var choice in providers) {
-                    string label = choice.id == BING_PROVIDER_ID ? _("Bing") : choice.id;
-                    provider_options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = label });
-                    if (choice.id == "pling") initial = choice.id;
+                var obj = WallpaperOcs.document(data);
+                var pages = obj.get_member("page_count");
+                if (pages == null || pages.get_value_type() != typeof(int64))
+                    throw new IOError.FAILED(_("Invalid Openverse page count"));
+                photo_page_count = (int) pages.get_int();
+                foreach (var item in WallpaperOpenverse.items(data)) {
+                    bool tag;
+                    add_card(item, "", out tag);
                 }
-                updating = true;
-                provider_ids = set_choices(provider_row, provider_options, initial);
-                updating = false;
+                rebuild_tag_row();
                 loading = false;
-                select_provider(initial);
+                filter_cards();
+                var stale = obj.get_member("stale");
+                bool offline = stale != null && stale.get_value_type() == typeof(bool) && stale.get_boolean();
+                status.label = offline ? _("Showing cached Openverse results; refresh failed.")
+                    : _("Openverse · page %d of %d · %d images").printf(photo_page, photo_page_count, cards.size);
+                for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
             } catch (Error e) {
                 if (gen != generation) return;
                 loading = false;
-                status.label = _("Could not load wallpaper providers: %s").printf(e.message);
-                update_controls();
+                status.label = _("Openverse search failed: %s").printf(e.message);
             }
+            update_controls();
         }
 
         // Provider selected -> rebuild the category dropdown, then kick off
@@ -312,6 +377,19 @@ namespace Singularity.Shell {
         // underlying command and parser branch.
         private void select_provider(string provider_id) {
             if (provider_id == "") return;
+            force_refresh = false;
+            bool photos = provider_id == "openverse";
+            credentials.visible = online_search_group.visible = photos;
+            category_row.visible = !photos;
+            active_category_id = "";
+            active_tag_ids.clear();
+            if (photos) {
+                photo_page = 1;
+                categories.clear();
+                credential_status.begin();
+                browse_all.begin();
+                return;
+            }
             if (provider_id == BING_PROVIDER_ID) {
                 // Bing: drop the OCS category-index gate entirely (the file
                 // is irrelevant for Bing) and let select_provider_bing pull
@@ -320,7 +398,16 @@ namespace Singularity.Shell {
                 select_provider_bing.begin();
                 return;
             }
-            if (category_index == "") return;
+            if (category_index == "") {
+                generation++;
+                request.cancel();
+                cards.clear();
+                grid.remove_all();
+                loading = false;
+                status.label = _("OCS category index is missing. Install the wallpaper helpers, then reopen this page.");
+                update_controls();
+                return;
+            }
             string selected_provider = provider_id;
             try {
                 categories = WallpaperOcs.categories(category_index, selected_provider);
@@ -406,6 +493,10 @@ namespace Singularity.Shell {
         // the crawl off cleanly when the user starts a
         // fresh crawl.
         private async void browse_all() {
+            if (selected_id(provider_row, provider_ids) == "openverse") {
+                yield browse_openverse();
+                return;
+            }
             int gen = ++generation;
             request.cancel();
             request = new Cancellable();
@@ -474,7 +565,10 @@ namespace Singularity.Shell {
             }
             if (gen != generation) return;
             loading = false;
+            force_refresh = false;
             filter_cards();
+            if (state.errors.size > 0)
+                status.label = _("%d wallpapers loaded · %s").printf(cards.size, string.joinv(" · ", state.errors.to_array()));
             update_controls();
             // Three bounded streaming requests, never one worker per tile.
             for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
@@ -486,6 +580,7 @@ namespace Singularity.Shell {
         // Multiple workers may touch it concurrently; the two mutexes in
         // CrawlState serialise the queue pull and the counters.
         private class CrawlState : Object {
+            public ArrayList<string> errors = new ArrayList<string>();
             public int generation;
             public string provider;
             public ArrayList<string> todo = new ArrayList<string>();
@@ -559,8 +654,16 @@ namespace Singularity.Shell {
                         data = yield command({HELPER, "browse", state.provider, category, "--pages", "1"}, state.cancel, CRAWL_CATEGORY_TIMEOUT);
                         if (state.generation != generation || state.cancel.is_cancelled()) return;
                         items = WallpaperOcs.items(data, state.provider, category);
+                        var response = WallpaperOcs.document(data);
+                        var failed = response.get_member("failed_networks");
+                        if (failed != null && failed.get_node_type() == Json.NodeType.ARRAY && failed.get_array().get_length() > 0)
+                            error = _("Some OCS networks could not be reached.");
+                        var stale = response.get_member("stale");
+                        if (stale != null && stale.get_value_type() == typeof(bool) && stale.get_boolean())
+                            error = _("Using cached OCS results after refresh failure.");
                     }
                     foreach (var item in items) {
+                        if (has_card(item)) continue;
                         // Re-check the cap under the lock so two workers
                         // can never both push past it on the last item.
                         state.count_lock.lock();
@@ -586,6 +689,7 @@ namespace Singularity.Shell {
                 state.count_lock.lock();
                 int d;
                 int snap;
+                if (error != null && !state.errors.contains(error)) state.errors.add(error);
                 try { d = ++state.done_count; snap = state.item_count; } finally { state.count_lock.unlock(); }
                 // Status + tag chip updates live on the main thread. The
                 // captured `d`/`snap`/`category`/`error`/`any_new_tag` are
@@ -701,11 +805,22 @@ namespace Singularity.Shell {
         // button() so the visual chrome stays consistent with the local
         // picker's trash button. Attribution + licence live as a small
         // badge on the card via WallpaperCard.set_badge().
+        private bool has_card(WallpaperOcsItem item) {
+            foreach (var existing in cards) {
+                if (existing.item.key == item.key ||
+                    (WallpaperOcs.provider_id(existing.item.provider) && WallpaperOcs.provider_id(item.provider) && existing.item.id == item.id)) return true;
+            }
+            return false;
+        }
+
         private void add_card(WallpaperOcsItem item, string source_category, out bool new_tag_added) {
             new_tag_added = false;
-            item.name = WallpaperSidecar.plain_text(item.name);
-            item.author = WallpaperSidecar.plain_text(item.author);
-            item.license = WallpaperSidecar.plain_text(item.license);
+            if (has_card(item)) return;
+            if (item.provider != "openverse") {
+                item.name = WallpaperSidecar.plain_text(item.name);
+                item.author = WallpaperSidecar.plain_text(item.author);
+                item.license = WallpaperSidecar.plain_text(item.license);
+            }
             item_category.set(item.key, source_category);
             foreach (var t in item.tags) if (known_tag_ids.add(t)) new_tag_added = true;
             var card = new OcsCard();
@@ -723,9 +838,23 @@ namespace Singularity.Shell {
             if (item.provider == BING_PROVIDER_ID)
                 attribution = "%s · %s".printf(_("Bing"), item.market != "" ? item.market : item.provider);
             else
-                attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"), item.provider);
+                attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"), item.provider == "openverse" ? _("Openverse") : _("OCS"));
             string license_text = item.license != "" ? item.license : _("No license stated");
             card.card.set_badge(attribution + "  ·  " + license_text);
+            if (item.provider == "openverse") {
+                var metadata = WallpaperAttribution() { title = "", author = item.attribution != "" ? item.attribution : item.author,
+                    source = "Openverse · " + item.license, page_url = item.page_url, license_url = item.license_url, valid = true };
+                var credit = new Label(WallpaperSidecar.display_text(metadata));
+                credit.use_markup = false;
+                credit.wrap = true;
+                credit.selectable = true;
+                credit.max_width_chars = 28;
+                card.card.append(credit);
+                if (item.page_url.has_prefix("https://") || item.page_url.has_prefix("http://"))
+                    card.card.append(new LinkButton.with_label(item.page_url, _("Original image / attribution")));
+                if (item.license_url.has_prefix("https://") || item.license_url.has_prefix("http://"))
+                    card.card.append(new LinkButton.with_label(item.license_url, item.license));
+            }
             // Card click: WallpaperCard emits clicked() on the GestureClick
             // wired in build_card(); for OCS/Bing this is purely a visual
             // affordance -- the meaningful user action is Import / Pin --
@@ -925,7 +1054,10 @@ namespace Singularity.Shell {
             status.label = _("Downloading and preparing wallpaper pack…");
             update_controls();
             try {
-                string data = yield command({HELPER, "import", card.item.provider, card.item.id}, null, 600);
+                string[] argv = card.item.provider == "openverse"
+                    ? new string[] {OPENVERSE_HELPER, "import", card.item.id}
+                    : new string[] {HELPER, "import", card.item.provider, card.item.id};
+                string data = yield command(argv, null, 600);
                 imports.complete(card.item.key, data, collection_roots);
                 card.button.label = _("Added");
                 status.label = _("Theme pack updated. Choose it in Wallpaper Source.");

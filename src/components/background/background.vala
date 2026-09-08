@@ -189,8 +189,8 @@ namespace Singularity {
         // use light text. Same `light-bg` CSS class the panel uses,
         // extended in the stylesheet for .background-window.light-bg.
         private void update_attribution(WallpaperManager manager) {
-            string title = WallpaperSidecar.plain_text(manager.attribution_title ?? "");
-            string author = WallpaperSidecar.plain_text(manager.attribution_author ?? "");
+            string title = manager.attribution_title ?? "";
+            string author = manager.attribution_author ?? "";
             if (title == "" && author == "") {
                 attribution_label.visible = false;
                 attribution_label.label = "";

@@ -18,6 +18,9 @@ namespace Singularity {
 public struct WallpaperAttribution {
     public string title;
     public string author;
+    public string source;
+    public string page_url;
+    public string license_url;
     public bool valid;
 }
 
@@ -38,6 +41,19 @@ public struct WallpaperAttribution {
 // can construct fixture directories and exercise every branch without
 // booting a GTK application.
 public class WallpaperSidecar : GLib.Object {
+    // Already-normalized fields are plain Label text, never markup.
+    public static string display_text(WallpaperAttribution metadata) {
+        if (!metadata.valid) return "";
+        string result = metadata.title;
+        if (metadata.author != "") result += (result != "" ? "\n" : "") + metadata.author;
+        if (metadata.source != "") result += (result != "" ? "\n" : "") + metadata.source;
+        return result;
+    }
+
+    private static string text(Json.Object obj, string field) {
+        var node = obj.get_member(field);
+        return node != null && node.get_value_type() == typeof(string) ? node.get_string() : "";
+    }
     // Provider metadata is HTML content, never Pango markup. Strip tags
     // before decoding entities so encoded literal angle brackets survive.
     public static string plain_text(string text) {
@@ -53,7 +69,7 @@ public class WallpaperSidecar : GLib.Object {
         }
     }
     public static WallpaperAttribution read(string path) {
-        var result = WallpaperAttribution() { title = "", author = "", valid = false };
+        var result = WallpaperAttribution() { title = "", author = "", source = "", page_url = "", license_url = "", valid = false };
         if (path == null || path == "") return result;
         // Sidecar sits next to the image: e.g.
         //   /var/cache/.../pling-123-01-foo.jpg  ->  pling-123-01-foo.json
@@ -84,6 +100,7 @@ public class WallpaperSidecar : GLib.Object {
         if (onode != null && onode.get_value_type() == typeof(string))
             origin = onode.get_string();
         if (origin == "ocs") {
+            result.source = "OCS";
             // OCS shape: the image record carries the title; artist is top-level.
             var inode = obj.get_member("image");
             if (inode != null && inode.get_node_type() == Json.NodeType.OBJECT) {
@@ -109,7 +126,20 @@ public class WallpaperSidecar : GLib.Object {
             var pnode = obj.get_member("provider");
             if (pnode != null && pnode.get_value_type() == typeof(string))
                 provider = pnode.get_string();
+            if (provider == "openverse") {
+                result.title = text(obj, "name");
+                // The OpenAPI schema explicitly defines attribution as plain
+                // text. Do not strip literal angle brackets from that field.
+                result.author = text(obj, "attribution");
+                if (result.author == "") result.author = text(obj, "author");
+                result.source = "Openverse · " + text(obj, "license") + " " + text(obj, "license_version");
+                result.page_url = text(obj, "page_url");
+                result.license_url = text(obj, "license_url");
+                result.valid = true;
+                return result;
+            }
             if (provider != "bing") return result;
+            result.source = "Bing";
             // Bing shape: caption -> title, copyright -> author.
             var cnode = obj.get_member("caption");
             if (cnode != null && cnode.get_value_type() == typeof(string)) {

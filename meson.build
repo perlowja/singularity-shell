@@ -315,6 +315,7 @@ singularity_core_sources = files(
     'src/components/sidebar/pages/network_page.vala',
     'src/components/sidebar/pages/desktop_page.vala',
     'src/components/sidebar/pages/wallpaper_ocs_browser.vala',
+    'src/components/sidebar/pages/provider_credential_group.vala',
     'src/components/sidebar/pages/sound_page.vala',
     'src/components/sidebar/pages/keyboard_page.vala',
     'src/components/sidebar/pages/accessibility_page.vala',

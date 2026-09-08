@@ -153,6 +153,15 @@ private void test_no_extension_clears_attribution() {
 public int main(string[] args) {
     Test.init(ref args);
     setup_fixtures();
+    Test.add_func("/wallpaper-sidecar/openverse-chooser", () => {
+        write_sidecar("{\"provider\":\"openverse\",\"name\":\"A <Mountain>\",\"attribution\":\"Credit & <literal>\",\"license\":\"by-sa\",\"license_version\":\"2.5\",\"page_url\":\"https://example.org/image\"}");
+        var metadata = WallpaperSidecar.read(img_path);
+        assert(metadata.valid);
+        assert(metadata.author == "Credit & <literal>");
+        assert(WallpaperSidecar.display_text(metadata) == "A <Mountain>\nCredit & <literal>\nOpenverse · by-sa 2.5");
+        assert(metadata.page_url == "https://example.org/image");
+        assert(WallpaperSidecar.display_text(WallpaperSidecar.read("")) == "");
+    });
     Test.add_func("/wallpaper-sidecar/missing-sidecar", test_missing_sidecar_clears_attribution);
     Test.add_func("/wallpaper-sidecar/ocs-full-metadata", test_ocs_sidecar_full_metadata);
     Test.add_func("/wallpaper-sidecar/ocs-title-only", test_ocs_sidecar_partial_title_only);

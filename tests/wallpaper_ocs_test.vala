@@ -405,6 +405,52 @@ private void test_bing_items_rejects_bad_pinned_field() {
 
 public int main(string[] args) {
     Test.init(ref args);
+    Test.add_func("/ocs/unified-categories", () => {
+        try { assert(WallpaperOcs.categories(INDEX, "ocs").size == 2); }
+        catch (Error e) { error("%s", e.message); }
+    });
+    Test.add_func("/ocs/unified-items", () => {
+        try {
+            var rows = WallpaperOcs.items(browse("[" + ITEM + "," + ITEM.replace("pling", "kde-look").replace("123", "456") + "]", "ocs"), "ocs", "300");
+            assert(rows.size == 2);
+            assert(rows[1].provider == "kde-look");
+        } catch (Error e) { error("%s", e.message); }
+    });
+    Test.add_func("/openverse/normalized-items", () => {
+        string item = "{\"provider\":\"openverse\",\"id\":\"c6a260ef-8a37-43df-939e-f3d662403fcc\",\"name\":null,\"author\":null,\"license\":\"by-sa\",\"license_version\":\"2.5\",\"preview\":\"https://api.openverse.org/thumb\",\"attribution\":\"A & <B>\",\"tags\":[\"4K\"]}";
+        try {
+            var rows = WallpaperOpenverse.items("{\"schema\":1,\"items\":[" + item + "," + item + "]}");
+            assert(rows.size == 1);
+            assert(rows[0].license == "by-sa 2.5");
+            assert(rows[0].attribution == "A & <B>");
+            assert(rows[0].name == "");
+        } catch (Error e) { error("%s", e.message); }
+        foreach (string bad in new string[] {"{}", "[]", "{\"schema\":1,\"items\":[" + item.replace("openverse", "pling") + "]}", "{\"schema\":1,\"items\":[" + item.replace("c6a260ef-8a37-43df-939e-f3d662403fcc", "../escape") + "]}"}) {
+            bool rejected = false;
+            try { WallpaperOpenverse.items(bad); } catch (Error e) { rejected = true; }
+            assert(rejected);
+        }
+    });
+    Test.add_func("/openverse/import-and-discover", () => {
+        string root = "";
+        try {
+            root = DirUtils.make_tmp("openverse-test-XXXXXX");
+            string registry = Path.build_filename(root, "openverse.collection");
+            FileUtils.set_contents(registry, "[Collection]\nId=openverse\nName=Openverse\nType=static\nDir=" + root + "\n");
+            string identity = "c6a260ef-8a37-43df-939e-f3d662403fcc";
+            FileUtils.set_contents(Path.build_filename(root, "photo.png"), "fixture");
+            FileUtils.set_contents(Path.build_filename(root, "photo.json"), "{\"provider\":\"openverse\",\"id\":\"" + identity + "\"}");
+            var state = new WallpaperOcsImports();
+            assert(state.begin("openverse:" + identity));
+            state.complete("openverse:" + identity, make_payload(root, registry, "photo.png", "photo.json").replace("imported-ocs", "openverse"), {root});
+            var fresh = new WallpaperOcsImports();
+            var collections = WallpaperCollections.parse({root});
+            assert(collections[0].theme_pack);
+            fresh.discover(collections);
+            assert(fresh.is_added("openverse:" + identity));
+        } catch (Error e) { error("%s", e.message); }
+        remove_tree(root);
+    });
     Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-accepts-deployed-legacy-shape", test_import_complete_accepts_deployed_legacy_shape); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path); Test.add_func("/ocs/bing-markets-parses-tsv", test_bing_markets_parses_tsv); Test.add_func("/ocs/bing-markets-tolerates-blank-lines-and-whitespace", test_bing_markets_tolerates_blank_lines_and_whitespace); Test.add_func("/ocs/bing-markets-empty", test_bing_markets_empty); Test.add_func("/ocs/bing-items-parses-list-array", test_bing_items_parses_list_array); Test.add_func("/ocs/bing-items-empty-array", test_bing_items_empty_array); Test.add_func("/ocs/bing-items-rejects-non-array-root", test_bing_items_rejects_non_array_root); Test.add_func("/ocs/bing-items-rejects-bad-pinned-field", test_bing_items_rejects_bad_pinned_field);
     return Test.run();
 }

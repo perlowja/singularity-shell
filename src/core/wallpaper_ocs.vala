@@ -15,6 +15,9 @@ namespace Singularity {
         public string author = "";
         public string license = "";
         public string preview = "";
+        public string attribution = "";
+        public string page_url = "";
+        public string license_url = "";
         // Tags emitted per item by the OCS browse response (JSON array of
         // plain strings, possibly empty). Parsed leniently: absent field or
         // explicit empty array both become an empty list, matching how the
@@ -127,8 +130,11 @@ namespace Singularity {
             foreach (var node in entries.get_elements()) {
                 var entry = object_node(node);
                 string reference = text(entry, "ref");
-                if (!reference.has_prefix(provider + ":")) continue;
-                string id = reference.substring(provider.length + 1);
+                string network = reference.split(":")[0];
+                if (!reference.has_prefix(network + ":"))
+                    throw new WallpaperOcsError.INVALID("Invalid OCS category reference");
+                if (provider == "ocs" ? (!provider_id(network) || network == "opendesktop") : network != provider) continue;
+                string id = reference.substring(network.length + 1);
                 if (!numeric_id(id)) throw new WallpaperOcsError.INVALID("Invalid OCS category identity");
                 var usable = entry.get_member("usable");
                 if (usable == null || usable.get_value_type() != typeof(bool))
@@ -152,7 +158,7 @@ namespace Singularity {
                 var item = new WallpaperOcsItem();
                 item.provider = text(entry, "provider");
                 item.id = text(entry, "id");
-                if (item.provider != provider || !provider_id(provider) || !numeric_id(item.id))
+                if ((provider != "ocs" && item.provider != provider) || !provider_id(item.provider) || !numeric_id(item.id))
                     throw new WallpaperOcsError.INVALID("Invalid OCS item identity");
                 item.name = text(entry, "name");
                 item.author = text(entry, "author", false);
@@ -260,6 +266,33 @@ namespace Singularity {
             return result;
         }
     }
+    // Openverse is a photo search API, not an OCS network. Its helper emits
+    // a normalized envelope while retaining per-image licensing and links.
+    public class WallpaperOpenverse : Object {
+        public static ArrayList<WallpaperOcsItem> items(string data) throws Error {
+            var obj = WallpaperOcs.document(data);
+            var result = new ArrayList<WallpaperOcsItem>();
+            var seen = new HashSet<string>();
+            foreach (var node in WallpaperOcs.array(obj, "items").get_elements()) {
+                var entry = WallpaperOcs.object_node(node);
+                var item = new WallpaperOcsItem();
+                item.provider = WallpaperOcs.text(entry, "provider");
+                item.id = WallpaperOcs.text(entry, "id");
+                if (item.provider != "openverse" || !Uuid.string_is_valid(item.id))
+                    throw new WallpaperOcsError.INVALID("Invalid Openverse identity");
+                item.name = WallpaperOcs.text(entry, "name", false);
+                item.author = WallpaperOcs.text(entry, "author", false);
+                item.preview = WallpaperOcs.text(entry, "preview");
+                item.license = WallpaperOcs.text(entry, "license") + " " + WallpaperOcs.text(entry, "license_version", false);
+                item.attribution = WallpaperOcs.text(entry, "attribution", false);
+                item.page_url = WallpaperOcs.text(entry, "page_url", false);
+                item.license_url = WallpaperOcs.text(entry, "license_url", false);
+                item.tags = WallpaperOcs.tag_array(entry, "tags");
+                if (seen.add(item.key)) result.add(item);
+            }
+            return result;
+        }
+    }
     // The backend owns disk writes. This model tracks an active import and
     // reconciles completed imports against its real registry/provenance files.
     //
@@ -298,11 +331,18 @@ namespace Singularity {
                 string sidecar_path = Path.build_filename(dir, name);
                 if (!FileUtils.test(sidecar_path, FileTest.IS_REGULAR)) continue;
                 string image_basename = name.substring(0, name.length - ".json".length);
-                if (!FileUtils.test(Path.build_filename(dir, image_basename + ".jpg"), FileTest.IS_REGULAR))
+                if (!FileUtils.test(Path.build_filename(dir, image_basename + ".jpg"), FileTest.IS_REGULAR) &&
+                    !FileUtils.test(Path.build_filename(dir, image_basename + ".png"), FileTest.IS_REGULAR) &&
+                    !FileUtils.test(Path.build_filename(dir, image_basename + ".webp"), FileTest.IS_REGULAR))
                     continue;
                 try {
                     FileUtils.get_contents(sidecar_path, out data);
                     var doc = WallpaperOcs.document(data, false);
+                    if (WallpaperOcs.text(doc, "provider", false) == "openverse") {
+                        string identity = WallpaperOcs.text(doc, "id");
+                        if (Uuid.string_is_valid(identity)) result.add("openverse:" + identity);
+                        continue;
+                    }
                     if (WallpaperOcs.text(doc, "origin") != "ocs") continue;
                     string provider = WallpaperOcs.text(doc, "provider");
                     string id = WallpaperOcs.text(WallpaperOcs.object_node(doc.get_member("source")), "ocs_id");
@@ -368,7 +408,7 @@ namespace Singularity {
             if (!registered)
                 throw new WallpaperOcsError.INVALID("Imported pack is missing from the collection registry");
             string provider_id = key.split(":")[0];
-            if (id != IMPORTED_OCS_ID && id != provider_id) {
+            if (id != IMPORTED_OCS_ID && id != "ocs" && id != provider_id) {
                 string candidate = legacy_pack_key(dir);
                 if (candidate != key)
                     throw new WallpaperOcsError.INVALID("Legacy imported pack provenance does not match the active import key");
@@ -392,12 +432,13 @@ namespace Singularity {
                 // path is built against the shared collection's `dir`.
                 string name = WallpaperOcs.text(image, "file");
                 string sidecar = WallpaperOcs.text(image, "sidecar");
-                if (name != Path.get_basename(name) || !name.has_suffix(".jpg") ||
+                if (name != Path.get_basename(name) ||
+                    !(name.has_suffix(".jpg") || name.has_suffix(".png") || name.has_suffix(".webp")) ||
                     !FileUtils.test(Path.build_filename(dir, name), FileTest.IS_REGULAR))
                     throw new WallpaperOcsError.INVALID("Imported image is missing");
                 if (sidecar != Path.get_basename(sidecar) || !sidecar.has_suffix(".json"))
                     throw new WallpaperOcsError.INVALID("Imported image sidecar path is malformed");
-                if (sidecar != name.substring(0, name.length - ".jpg".length) + ".json")
+                if (sidecar != name.substring(0, name.last_index_of(".")) + ".json")
                     throw new WallpaperOcsError.INVALID("Imported image sidecar does not pair with image");
                 string sidecar_path = Path.build_filename(dir, sidecar);
                 if (!FileUtils.test(sidecar_path, FileTest.IS_REGULAR))
@@ -406,7 +447,8 @@ namespace Singularity {
                 FileUtils.get_contents(sidecar_path, out sidecar_data);
                 var sidecar_doc = WallpaperOcs.document(sidecar_data, false);
                 string provider = WallpaperOcs.text(sidecar_doc, "provider");
-                string ocs_id = WallpaperOcs.text(WallpaperOcs.object_node(sidecar_doc.get_member("source")), "ocs_id");
+                string ocs_id = provider == "openverse" ? WallpaperOcs.text(sidecar_doc, "id") :
+                    WallpaperOcs.text(WallpaperOcs.object_node(sidecar_doc.get_member("source")), "ocs_id");
                 string candidate = provider + ":" + ocs_id;
                 if (candidate == key) found_key = true;
             }

@@ -74,6 +74,19 @@ namespace Singularity {
                 if (schema.has_key("background-attribution-author"))
                     new_author = settings.get_string("background-attribution-author");
             }
+            // Prefer the current image's normalized sidecar. In particular,
+            // Openverse's legally valid plain-text credit must not be parsed
+            // as HTML again by the overlay.
+            string metadata_uri = settings.get_string("background-picture-uri");
+            string? metadata_path = metadata_uri != "" ? File.new_for_uri(metadata_uri).get_path() : null;
+            var metadata = WallpaperSidecar.read(metadata_path ?? "");
+            if (metadata.valid) {
+                new_title = metadata.title;
+                new_author = metadata.author;
+            } else {
+                new_title = WallpaperSidecar.plain_text(new_title);
+                new_author = WallpaperSidecar.plain_text(new_author);
+            }
             bool attribution_changed =
                 new_title != attribution_title ||
                 new_author != attribution_author;

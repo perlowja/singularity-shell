@@ -1815,6 +1815,10 @@ namespace Singularity {
         }
 
         private void update_preview_async() {
+            string current_uri = settings.get_string("background-picture-uri");
+            string? current_path = current_uri != "" ? File.new_for_uri(current_uri).get_path() : null;
+            if (preview_widget != null)
+                preview_widget.set_metadata(WallpaperSidecar.read(current_path ?? ""));
             var manager = WallpaperManager.get_default();
             if (manager.medium_texture != null && preview_widget != null) {
                 preview_widget.set_image(manager.medium_texture);
@@ -2330,6 +2334,9 @@ namespace Singularity {
     internal class WallpaperPreviewWidget : Box {
         public signal void select_clicked();
         private Picture preview_picture;
+        private Label metadata;
+        private LinkButton source_link;
+        private LinkButton license_link;
 
         public WallpaperPreviewWidget() {
             Object(orientation: Orientation.VERTICAL, spacing: 0);
@@ -2343,6 +2350,20 @@ namespace Singularity {
             preview_picture.can_shrink = true;
             image_area.append(preview_picture);
             append(image_area);
+            metadata = new Label("");
+            metadata.use_markup = false;
+            metadata.wrap = true;
+            metadata.selectable = true;
+            metadata.max_width_chars = 40;
+            metadata.margin_start = metadata.margin_end = 12;
+            metadata.margin_top = metadata.margin_bottom = 8;
+            metadata.visible = false;
+            append(metadata);
+            source_link = new LinkButton.with_label("", _("Original image / attribution"));
+            license_link = new LinkButton.with_label("", _("Image license"));
+            source_link.visible = license_link.visible = false;
+            append(source_link);
+            append(license_link);
             var sep = new Separator(Orientation.HORIZONTAL);
             append(sep);
             var btn = new Button.with_label(_("Select Picture..."));
@@ -2356,6 +2377,15 @@ namespace Singularity {
 
         public void set_image(Gdk.Paintable paintable) {
             preview_picture.set_paintable(paintable);
+        }
+
+        public void set_metadata(WallpaperAttribution attribution) {
+            metadata.label = WallpaperSidecar.display_text(attribution);
+            metadata.visible = metadata.label != "";
+            source_link.uri = attribution.page_url;
+            license_link.uri = attribution.license_url;
+            source_link.visible = attribution.page_url.has_prefix("https://") || attribution.page_url.has_prefix("http://");
+            license_link.visible = attribution.license_url.has_prefix("https://") || attribution.license_url.has_prefix("http://");
         }
     }
     // Visual parity with the main Desktop wallpaper picker. Both the local
