@@ -78,6 +78,7 @@ namespace Singularity.Shell {
             public WallpaperOcsItem item;
             public WallpaperCard card;
             public Button button;
+            public bool matches = true;
         }
 
         public WallpaperOcsBrowserPage(SettingsView view, string[] roots) {
@@ -148,6 +149,10 @@ namespace Singularity.Shell {
             grid.max_children_per_line = 2;
             grid.min_children_per_line = 2;
             grid.selection_mode = SelectionMode.NONE;
+            // Let FlowBox remove non-matches from layout. Merely hiding the
+            // card widget leaves its FlowBoxChild allocated and produces the
+            // large empty slots seen with narrow filters such as "4K".
+            grid.set_filter_func(filter_grid_child);
             grid.column_spacing = 14;
             grid.row_spacing = 14;
             grid.margin_top = grid.margin_bottom = 10;
@@ -645,15 +650,21 @@ namespace Singularity.Shell {
             string query = (search_row != null ? search_row.text : "").strip().casefold();
             int count = 0;
             foreach (var card in cards) {
-                bool matches = card_matches(card.item, query, active_category_id, active_tag_ids);
-                card.card.visible = matches;
-                if (matches) count++;
+                card.matches = card_matches(card.item, query, active_category_id, active_tag_ids);
+                if (card.matches) count++;
             }
+            grid.invalidate_filter();
             if (!loading && !imports.busy) {
                 if (cards.size == 0) status.label = _("No importable wallpapers for this provider.");
                 else if (count == 0) status.label = _("No matches among loaded wallpapers. Clear the filter or refresh.");
                 else status.label = _("%d wallpapers shown · %d loaded").printf(count, cards.size);
             }
+        }
+
+        private bool filter_grid_child(FlowBoxChild child) {
+            int index = child.get_index();
+            return index >= 0 && index < cards.size &&
+                   cards[index].card == child.child && cards[index].matches;
         }
 
         // AND across all three filter axes: text contains-match against

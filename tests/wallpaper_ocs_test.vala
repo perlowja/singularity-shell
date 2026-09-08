@@ -1,7 +1,7 @@
 using GLib;
 using Singularity;
 
-private const string PROVIDERS = "{\"schema\":1,\"providers\":{\"pling\":{\"base\":\"https://api.pling.com/ocs/v1/\"},\"kde-look\":{\"base\":\"https://api.kde-look.org/ocs/v1/\"}}}";
+private const string PROVIDERS = "{\"schema\":1,\"providers\":{\"pling\":{\"base\":\"https://api.pling.com/ocs/v1/\"},\"opendesktop\":{\"base\":\"https://api.opendesktop.org/ocs/v1/\"},\"kde-look\":{\"base\":\"https://api.kde-look.org/ocs/v1/\"}}}";
 private const string INDEX = "{\"schema\":1,\"entries\":[{\"ref\":\"pling:300\",\"name\":\"Wallpapers\",\"display_name\":\"Desktop\",\"usable\":true},{\"ref\":\"pling:1\",\"name\":\"Phone\",\"usable\":false},{\"ref\":\"kde-look:2\",\"name\":\"Other\",\"usable\":true},{\"ref\":\"pling:300\",\"name\":\"Duplicate\",\"usable\":true}]}";
 private string browse(string items, string provider = "pling", string category = "300") {
     return "{\"schema\":1,\"provider\":\"%s\",\"category\":\"%s\",\"items\":%s}".printf(provider, category, items);
@@ -200,12 +200,38 @@ private void test_discover_tolerates_old_shape_directory() {
         FileUtils.set_contents(Path.build_filename(root, "ocs-pling-555-oldstyle.collection"),
             "[Collection]\nId=ocs-pling-555-oldstyle\nName=Old\nDir=" + old_pack + "\n");
         FileUtils.set_contents(Path.build_filename(old_pack, "pack.json"),
-            "{\"origin\":\"ocs\",\"provider\":\"pling\",\"source\":{\"ocs_id\":\"555\"}}");
+            "{\"origin\":\"ocs\",\"provider\":\"pling\",\"source\":{\"ocs_id\":\"555\"},\"images\":[{\"file\":\"01.jpg\"}]}");
         FileUtils.set_contents(Path.build_filename(old_pack, "01.jpg"), "oldshape");
 
         var state = new WallpaperOcsImports();
         state.discover(WallpaperCollections.parse({root}));
-        assert(!state.is_added("pling:555"));
+        assert(state.is_added("pling:555"));
+    } catch (Error e) { error("%s", e.message); }
+    remove_tree(root);
+}
+
+private void test_import_complete_accepts_deployed_legacy_shape() {
+    string root = "";
+    try {
+        root = DirUtils.make_tmp("ocs-test-XXXXXX");
+        string pack_id = "ocs-pling-555-oldstyle";
+        string pack_dir = Path.build_filename(root, pack_id);
+        DirUtils.create(pack_dir, 0700);
+        string collection_path = Path.build_filename(root, pack_id + ".collection");
+        FileUtils.set_contents(collection_path,
+            "[Collection]\nId=" + pack_id + "\nName=Old\nDir=" + pack_dir + "\n");
+        FileUtils.set_contents(Path.build_filename(pack_dir, "pack.json"),
+            "{\"origin\":\"ocs\",\"provider\":\"pling\",\"source\":{\"ocs_id\":\"555\"},\"images\":[{\"file\":\"01.jpg\"}]}");
+        FileUtils.set_contents(Path.build_filename(pack_dir, "01.jpg"), "oldshape");
+        string payload = "{\"pack_id\":\"" + pack_id + "\",\"destination\":\"" + pack_dir +
+                         "\",\"collection\":\"" + collection_path +
+                         "\",\"images\":[{\"file\":\"01.jpg\",\"title\":\"Test\"}]}";
+
+        var state = new WallpaperOcsImports();
+        assert(state.begin("pling:555"));
+        state.complete("pling:555", payload, {root});
+        assert(!state.busy);
+        assert(state.is_added("pling:555"));
     } catch (Error e) { error("%s", e.message); }
     remove_tree(root);
 }
@@ -369,6 +395,6 @@ private void test_bing_items_rejects_bad_pinned_field() {
 
 public int main(string[] args) {
     Test.init(ref args);
-    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path); Test.add_func("/ocs/bing-markets-parses-tsv", test_bing_markets_parses_tsv); Test.add_func("/ocs/bing-markets-tolerates-blank-lines-and-whitespace", test_bing_markets_tolerates_blank_lines_and_whitespace); Test.add_func("/ocs/bing-markets-empty", test_bing_markets_empty); Test.add_func("/ocs/bing-items-parses-list-array", test_bing_items_parses_list_array); Test.add_func("/ocs/bing-items-empty-array", test_bing_items_empty_array); Test.add_func("/ocs/bing-items-rejects-non-array-root", test_bing_items_rejects_non_array_root); Test.add_func("/ocs/bing-items-rejects-bad-pinned-field", test_bing_items_rejects_bad_pinned_field);
+    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-accepts-deployed-legacy-shape", test_import_complete_accepts_deployed_legacy_shape); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path); Test.add_func("/ocs/bing-markets-parses-tsv", test_bing_markets_parses_tsv); Test.add_func("/ocs/bing-markets-tolerates-blank-lines-and-whitespace", test_bing_markets_tolerates_blank_lines_and_whitespace); Test.add_func("/ocs/bing-markets-empty", test_bing_markets_empty); Test.add_func("/ocs/bing-items-parses-list-array", test_bing_items_parses_list_array); Test.add_func("/ocs/bing-items-empty-array", test_bing_items_empty_array); Test.add_func("/ocs/bing-items-rejects-non-array-root", test_bing_items_rejects_non_array_root); Test.add_func("/ocs/bing-items-rejects-bad-pinned-field", test_bing_items_rejects_bad_pinned_field);
     return Test.run();
 }
