@@ -290,6 +290,7 @@ private const string BING_MARKETS_TSV =
 // and pinned:false so the bool parser is exercised on both branches.
 private const string BING_LIST_JSON =
     "[{\"provider\":\"bing\",\"date\":\"20260818\",\"market\":\"en-US\"," +
+    "\"image_id\":\"OHR.Palmanova_EN-US0340289339\"," +
     "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260818.jpg\"," +
     "\"caption\":\"Palmanova\",\"copyright\":\"Marco Zoccheddu/Getty Images\"," +
     "\"thumbnail_path\":\"/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg\"," +
@@ -349,8 +350,10 @@ private void test_bing_items_parses_list_array() {
         assert(rows[0].license == "");
         assert(rows[0].preview == "");
         assert(rows[0].tags.length == 0);
-        assert(rows[0].id == "en-US:20260818");
-        assert(rows[0].key == "bing:en-US:20260818");
+        assert(rows[0].id == "en-US:OHR.Palmanova_EN-US0340289339");
+        assert(rows[0].key == "bing:en-US:OHR.Palmanova_EN-US0340289339");
+        assert(rows[0].archive_date == "20260818");
+        assert(rows[0].bing_image_id == "OHR.Palmanova_EN-US0340289339");
         assert(rows[0].thumbnail_path == "/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg");
         // Unpinned item: pinned=false, different date.
         assert(rows[1].pinned == false);

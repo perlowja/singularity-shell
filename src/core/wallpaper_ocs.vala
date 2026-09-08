@@ -33,10 +33,11 @@ namespace Singularity {
         public string thumbnail_path = "";
         public bool pinned = false;
         public string market = "";
+        public string archive_date = "";
+        public string bing_image_id = "";
         // Canonical identity. For OCS this is "provider:numeric_id"; for Bing
-        // the helper's pin/unpin commands take "market date" independently, so
-        // we use "provider:market:date" and let callers compose the helper
-        // argv from (market, date) on the item directly. Keeping `key` stable
+        // it is "provider:market:Bing-image-id", falling back to archive date
+        // for metadata written by older helpers. Keeping `key` stable
         // across both item kinds means add_card / filter_cards / the imports
         // map do not need a parallel data path.
         public string key { owned get { return provider + ":" + id; } }
@@ -215,11 +216,9 @@ namespace Singularity {
         //   provider, date, market, path, caption, copyright,
         //   thumbnail_path, pinned
         // Parse the array into the shared WallpaperOcsItem shape. `id` on the
-        // item is set to "<market>:<date>" so the existing key=
+        // item is set to "<market>:<Bing image id>" so the existing key=
         // "provider:id" formula produces a unique, stable identity per Bing
-        // archived image; helpers downstream that need the helper argv split
-        // can read item.market + item.id (substring after the colon) instead
-        // of re-parsing. Tags: Bing has no per-image tags; the field stays
+        // archived image. Tags: Bing has no per-image tags; the field stays
         // empty so filter_cards does not need to special-case anything.
         public static ArrayList<WallpaperOcsItem> items(string data) throws Error {
             var parser = new Json.Parser();
@@ -242,12 +241,12 @@ namespace Singularity {
                 if (WallpaperOcs.text(entry, "provider") != PROVIDER_ID)
                     throw new WallpaperOcsError.INVALID("Bing list entry has unexpected provider");
                 item.market = WallpaperOcs.text(entry, "market");
+                item.archive_date = WallpaperOcs.text(entry, "date");
+                item.bing_image_id = WallpaperOcs.text(entry, "image_id", false);
                 item.name = WallpaperOcs.text(entry, "caption", false);
-                // Composite id keeps item.key unique across markets. The
-                // browser composes helper argv from (market, date) below
-                // rather than re-splitting item.id; this id is purely the
-                // identity for add_card / the imports map.
-                item.id = item.market + ":" + WallpaperOcs.text(entry, "date");
+                // Composite id keeps item.key unique across markets; this id
+                // is purely the identity for add_card / the imports map.
+                item.id = item.market + ":" + (item.bing_image_id != "" ? item.bing_image_id : item.archive_date);
                 item.author = WallpaperOcs.text(entry, "copyright", false);
                 item.license = ""; // Bing does not emit a license field; honest default.
                 item.preview = ""; // No remote preview URL for Bing -- the

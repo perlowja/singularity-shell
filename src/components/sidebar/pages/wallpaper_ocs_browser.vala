@@ -11,10 +11,8 @@ namespace Singularity.Shell {
         // shapes are different (markets -> TSV, list -> bare array, no
         // schema/items wrapper). Calling it is the same SubprocessLauncher
         // shape as HELPER; only the argv and the parsers in WallpaperBing
-        // differ. There is NO copy/import path for Bing -- it is already a
-        // persistent Wallpaper Source the moment it is archived, so the
-        // per-item action here is PIN (which protects it from retention
-        // pruning), not import.
+        // differ. The helper's daily timer permanently accumulates unseen
+        // images in bing.collection; browsing only reads that local archive.
         private const string BING_HELPER = "/usr/local/bin/ncz-wallpaper-bing";
         private const string OPENVERSE_HELPER = "/usr/local/bin/ncz-wallpaper-openverse";
         private ProviderCredentialGroup credentials;
@@ -640,7 +638,7 @@ namespace Singularity.Shell {
                         // No --pages / pagination concept for Bing: one
                         // `list <market>` call returns everything archived
                         // for that market, already bounded by the existing
-                        // retention window. CRAWL_CATEGORY_TIMEOUT still
+                        // accumulated local archive. CRAWL_CATEGORY_TIMEOUT still
                         // applies so a single slow market cannot stall a
                         // worker beyond the user's patience.
                         data = yield command({BING_HELPER, "list", category}, state.cancel, CRAWL_CATEGORY_TIMEOUT);
@@ -857,24 +855,18 @@ namespace Singularity.Shell {
             }
             // Card click: WallpaperCard emits clicked() on the GestureClick
             // wired in build_card(); for OCS/Bing this is purely a visual
-            // affordance -- the meaningful user action is Import / Pin --
-            // so we leave it unconnected. The checkmark stays decorative.
-            // Action button (Import / Pin / Added / Pinned).
+            // affordance; importing is the meaningful action for searchable
+            // providers. Bing entries are already local. The checkmark stays
+            // decorative.
+            // Action button (Import / Added). Bing entries were added by the
+            // scheduled accumulator already, so there is no per-card action.
             if (item.provider == BING_PROVIDER_ID) {
-                // Pin/Pinned: the image is already part of a persistent
-                // Wallpaper Source the moment it was archived; toggling
-                // this just protects it from the retention-pruning timer.
-                // No WallpaperOcsImports involvement, no copy, no new
-                // pack: explicit operator decision not to misattribute
-                // a Bing photo into the "Imported from OCS" collection.
-                card.button = new Button.with_label(item.pinned ? _("Pinned") : _("Pin"));
+                card.button = new Button.with_label(_("Added"));
+                card.button.sensitive = false;
             } else {
                 card.button = new Button.with_label(imports.is_added(item.key) ? _("Added") : _("Import"));
+                card.button.clicked.connect(() => { import_card.begin(card); });
             }
-            card.button.clicked.connect(() => {
-                if (item.provider == BING_PROVIDER_ID) pin_card.begin(card);
-                else                                  import_card.begin(card);
-            });
             card.card.append_action_button(card.button);
             grid.append(card.card);
             cards.add(card);
@@ -1004,48 +996,6 @@ namespace Singularity.Shell {
                 }
                 return GLib.Source.REMOVE;
             });
-        }
-
-        // Toggle pin/unpin for a Bing card. The helper takes
-        // "<market> <yyyymmdd>" with the date as a separate positional,
-        // so we split item.id (which the parser composes as
-        // "<market>:<date>") on the first colon and argv that to the
-        // helper. No file copy, no new pack, no WallpaperOcsImports --
-        // this is the entire Bing per-item action: write or remove a
-        // .pinned marker file so the retention timer skips this image.
-        //
-        // Status text lives on the global status label (card.message used
-        // to be a per-card line; with WallpaperCard the card surface no
-        // longer has room for an inline message label, and the global
-        // status line is what the user watches for long-running ops).
-        private async void pin_card(OcsCard card) {
-            int colon = card.item.id.index_of(":");
-            if (colon <= 0 || colon >= card.item.id.length - 1) {
-                status.label = _("Invalid Bing item identity");
-                return;
-            }
-            string market = card.item.id.substring(0, colon);
-            string date = card.item.id.substring(colon + 1);
-            string[] verb = card.item.pinned ? new string[] {"unpin"} : new string[] {"pin"};
-            card.button.label = card.item.pinned ? _("Unpinning…") : _("Pinning…");
-            status.label = card.item.pinned ? _("Unpinning Bing image…") : _("Pinning Bing image…");
-            update_controls();
-            try {
-                // Pass a fresh Cancellable (null) so a pending browse-all
-                // cancellation cannot also kill the user's explicit pin
-                // click. Pin/unpin is a deliberate single-step op; a
-                // 15-second budget is generous and protects against a
-                // wedged helper.
-                yield command({BING_HELPER, verb[0], market, date}, null, 15);
-                card.item.pinned = !card.item.pinned;
-                card.button.label = card.item.pinned ? _("Pinned") : _("Pin");
-                status.label = card.item.pinned
-                    ? _("Bing image pinned.")
-                    : _("Bing image unpinned.");
-            } catch (Error e) {
-                status.label = _("Pin toggle failed: %s").printf(e.message);
-            }
-            update_controls();
         }
 
         private async void import_card(OcsCard card) {
