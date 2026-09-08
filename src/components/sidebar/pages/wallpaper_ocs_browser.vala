@@ -703,6 +703,9 @@ namespace Singularity.Shell {
         // badge on the card via WallpaperCard.set_badge().
         private void add_card(WallpaperOcsItem item, string source_category, out bool new_tag_added) {
             new_tag_added = false;
+            item.name = WallpaperSidecar.plain_text(item.name);
+            item.author = WallpaperSidecar.plain_text(item.author);
+            item.license = WallpaperSidecar.plain_text(item.license);
             item_category.set(item.key, source_category);
             foreach (var t in item.tags) if (known_tag_ids.add(t)) new_tag_added = true;
             var card = new OcsCard();
