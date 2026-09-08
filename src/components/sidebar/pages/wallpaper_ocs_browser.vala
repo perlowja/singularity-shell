@@ -928,7 +928,7 @@ namespace Singularity.Shell {
                 string data = yield command({HELPER, "import", card.item.provider, card.item.id}, null, 600);
                 imports.complete(card.item.key, data, collection_roots);
                 card.button.label = _("Added");
-                status.label = _("Pack added. Choose it in Wallpaper Source.");
+                status.label = _("Theme pack updated. Choose it in Wallpaper Source.");
                 imported();
             } catch (Error e) {
                 imports.fail(card.item.key);

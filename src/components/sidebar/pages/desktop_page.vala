@@ -1919,6 +1919,7 @@ namespace Singularity {
             foreach (var collection in wallpaper_collections) {
                 string label = (collection.artist != "" && collection.artist != collection.name)
                     ? "%s — %s".printf(collection.name, collection.artist) : collection.name;
+                label = "%s — %s".printf(label, collection.theme_pack ? _("Theme pack") : _("Artist pack"));
                 options.add(new Singularity.Core.AppSettingOption() { id = collection.id, label = label });
             }
             string selected = rotation_state.get_selected_collection("ncz");
