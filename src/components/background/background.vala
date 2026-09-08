@@ -189,8 +189,8 @@ namespace Singularity {
         // use light text. Same `light-bg` CSS class the panel uses,
         // extended in the stylesheet for .background-window.light-bg.
         private void update_attribution(WallpaperManager manager) {
-            string title = manager.attribution_title ?? "";
-            string author = manager.attribution_author ?? "";
+            string title = WallpaperSidecar.plain_text(manager.attribution_title ?? "");
+            string author = WallpaperSidecar.plain_text(manager.attribution_author ?? "");
             if (title == "" && author == "") {
                 attribution_label.visible = false;
                 attribution_label.label = "";
@@ -206,14 +206,14 @@ namespace Singularity {
             string safe_author = Markup.escape_text(author, -1);
             string markup;
             if (title != "" && author != "") {
-                markup = "<b>%s</b>  <span class=\"dim-label\">\xc2\xb7  %s</span>".printf(safe_title, safe_author);
+                markup = "<b>%s</b>  ·  %s".printf(safe_title, safe_author);
             } else if (title != "") {
                 markup = "<b>%s</b>".printf(safe_title);
             } else {
-                markup = "<span class=\"dim-label\">%s</span>".printf(safe_author);
+                markup = safe_author;
             }
-            attribution_label.label = markup;
-            attribution_label.use_markup = true;
+            // CSS class is not a supported Pango span attribute.
+            attribution_label.set_markup(markup);
             attribution_label.visible = true;
 
             // Sample the corner. The pixbuf aspect matches the screen

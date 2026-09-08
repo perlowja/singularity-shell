@@ -164,6 +164,11 @@ public int main(string[] args) {
     Test.add_func("/wallpaper-sidecar/non-object-top-level", test_non_object_top_level_clears_attribution);
     Test.add_func("/wallpaper-sidecar/empty-path", test_empty_path_clears_attribution);
     Test.add_func("/wallpaper-sidecar/no-extension", test_no_extension_clears_attribution);
+    Test.add_func("/wallpaper/html-attribution", () => {
+        assert(WallpaperSidecar.plain_text("<a href=\"https://example.org\">© A &amp; B</a>") == "© A & B");
+        assert(WallpaperSidecar.plain_text("Space &lt;Stars&gt;") == "Space <Stars>");
+        assert(WallpaperSidecar.plain_text("Plain © credit") == "Plain © credit");
+    });
     int ret = Test.run();
     remove_tree(fixture_root);
     return ret;

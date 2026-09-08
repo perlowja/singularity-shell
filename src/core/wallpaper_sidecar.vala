@@ -38,6 +38,20 @@ public struct WallpaperAttribution {
 // can construct fixture directories and exercise every branch without
 // booting a GTK application.
 public class WallpaperSidecar : GLib.Object {
+    // Provider metadata is HTML content, never Pango markup. Strip tags
+    // before decoding entities so encoded literal angle brackets survive.
+    public static string plain_text(string text) {
+        try {
+            var tags = new Regex("<!--[\\s\\S]*?-->|</?[A-Za-z][^>]*>");
+            string plain = tags.replace_literal(text, -1, 0, "");
+            return plain.replace("&nbsp;", " ").replace("&copy;", "©")
+                .replace("&quot;", "\"").replace("&#39;", "'")
+                .replace("&apos;", "'").replace("&lt;", "<")
+                .replace("&gt;", ">").replace("&amp;", "&").strip();
+        } catch (RegexError e) {
+            return text;
+        }
+    }
     public static WallpaperAttribution read(string path) {
         var result = WallpaperAttribution() { title = "", author = "", valid = false };
         if (path == null || path == "") return result;
@@ -109,6 +123,8 @@ public class WallpaperSidecar : GLib.Object {
             }
             result.valid = true;
         }
+        result.title = plain_text(result.title);
+        result.author = plain_text(result.author);
         return result;
     }
 }
