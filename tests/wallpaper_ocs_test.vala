@@ -119,6 +119,16 @@ private void test_import_complete() {
         assert(state.is_added("pling:123"));
         assert(!state.begin("pling:123"));
 
+        // New helpers use one theme pack per provider, with the same
+        // per-image sidecar contract as the former shared collection.
+        FileUtils.set_contents(collection_path,
+            "[Collection]\nId=pling\nName=Pling\nType=static\nDir=" + pack_dir + "\n");
+        var theme = new WallpaperOcsImports();
+        assert(theme.begin("pling:123"));
+        theme.complete("pling:123", result.replace("\"pack_id\":\"imported-ocs\"", "\"pack_id\":\"pling\""), {root});
+        assert(theme.is_added("pling:123"));
+        assert(!theme.busy);
+
         // A fresh imports model loaded from disk sees the import via discover().
         var reopened = new WallpaperOcsImports();
         reopened.discover(WallpaperCollections.parse({root}));

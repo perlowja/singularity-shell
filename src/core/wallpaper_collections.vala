@@ -15,6 +15,7 @@ namespace Singularity {
         public string artist;
         public string dir;
         public string type;
+        public bool theme_pack;
 
         public WallpaperCollectionInfo(string id, string name, string artist, string dir, string type) {
             this.id = id;
@@ -22,6 +23,8 @@ namespace Singularity {
             this.artist = artist;
             this.dir = dir;
             this.type = type;
+            theme_pack = id == "pling" || id == "kde-look" || id == "gnome-look" ||
+                id == "bing" || id == "imported-ocs" || id.has_prefix("ocs-");
         }
     }
 

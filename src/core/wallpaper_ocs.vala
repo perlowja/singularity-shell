@@ -367,7 +367,8 @@ namespace Singularity {
             }
             if (!registered)
                 throw new WallpaperOcsError.INVALID("Imported pack is missing from the collection registry");
-            if (id != IMPORTED_OCS_ID) {
+            string provider_id = key.split(":")[0];
+            if (id != IMPORTED_OCS_ID && id != provider_id) {
                 string candidate = legacy_pack_key(dir);
                 if (candidate != key)
                     throw new WallpaperOcsError.INVALID("Legacy imported pack provenance does not match the active import key");
