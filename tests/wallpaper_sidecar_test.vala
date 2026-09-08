@@ -162,6 +162,12 @@ public int main(string[] args) {
         assert(metadata.page_url == "https://example.org/image");
         assert(WallpaperSidecar.display_text(WallpaperSidecar.read("")) == "");
     });
+    Test.add_func("/wallpaper-sidecar/unsplash-chooser", () => {
+        write_sidecar("{\"provider\":\"unsplash\",\"name\":\"Mountain\",\"author\":\"Ada\",\"attribution\":\"Photo by Ada on Unsplash\",\"license\":\"Unsplash License\",\"page_url\":\"https://unsplash.com/photos/a\",\"license_url\":\"https://unsplash.com/license\"}");
+        var metadata = WallpaperSidecar.read(img_path);
+        assert(metadata.valid);
+        assert(WallpaperSidecar.display_text(metadata) == "Mountain\nPhoto by Ada on Unsplash\nUnsplash · Unsplash License");
+    });
     Test.add_func("/wallpaper-sidecar/missing-sidecar", test_missing_sidecar_clears_attribution);
     Test.add_func("/wallpaper-sidecar/ocs-full-metadata", test_ocs_sidecar_full_metadata);
     Test.add_func("/wallpaper-sidecar/ocs-title-only", test_ocs_sidecar_partial_title_only);

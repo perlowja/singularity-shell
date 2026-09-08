@@ -434,6 +434,19 @@ public int main(string[] args) {
             assert(rejected);
         }
     });
+    Test.add_func("/stock/unsplash-normalized-items", () => {
+        string item = "{\"provider\":\"unsplash\",\"id\":\"abc_123-X\",\"name\":\"Mountain\",\"author\":\"Ada\",\"license\":\"Unsplash License\",\"license_version\":\"\",\"preview\":\"https://images.unsplash.com/a\",\"attribution\":\"Photo by Ada on Unsplash\",\"page_url\":\"https://unsplash.com/photos/a\",\"license_url\":\"https://unsplash.com/license\",\"tags\":[\"4K\"]}";
+        try {
+            var rows = WallpaperOpenverse.items("{\"schema\":1,\"items\":[" + item + "]}");
+            assert(rows.size == 1);
+            assert(rows[0].key == "unsplash:abc_123-X");
+            assert(rows[0].attribution == "Photo by Ada on Unsplash");
+        } catch (Error e) { assert_not_reached(); }
+        try {
+            WallpaperOpenverse.items("{\"schema\":1,\"items\":[" + item.replace("abc_123-X", "../escape") + "]}");
+            assert_not_reached();
+        } catch (Error e) { }
+    });
     Test.add_func("/openverse/import-and-discover", () => {
         string root = "";
         try {

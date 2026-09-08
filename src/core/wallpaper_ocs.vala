@@ -17,6 +17,7 @@ namespace Singularity {
         public string preview = "";
         public string attribution = "";
         public string page_url = "";
+        public string creator_url = "";
         public string license_url = "";
         // Tags emitted per item by the OCS browse response (JSON array of
         // plain strings, possibly empty). Parsed leniently: absent field or
@@ -277,14 +278,18 @@ namespace Singularity {
                 var item = new WallpaperOcsItem();
                 item.provider = WallpaperOcs.text(entry, "provider");
                 item.id = WallpaperOcs.text(entry, "id");
-                if (item.provider != "openverse" || !Uuid.string_is_valid(item.id))
-                    throw new WallpaperOcsError.INVALID("Invalid Openverse identity");
+                if ((item.provider != "openverse" && item.provider != "unsplash") ||
+                    (item.provider == "openverse" && !Uuid.string_is_valid(item.id)) ||
+                    (item.provider == "unsplash" && (item.id == "" || item.id.length > 64 ||
+                     new Regex("[^A-Za-z0-9_-]").match(item.id))))
+                    throw new WallpaperOcsError.INVALID("Invalid stock photo identity");
                 item.name = WallpaperOcs.text(entry, "name", false);
                 item.author = WallpaperOcs.text(entry, "author", false);
                 item.preview = WallpaperOcs.text(entry, "preview");
                 item.license = WallpaperOcs.text(entry, "license") + " " + WallpaperOcs.text(entry, "license_version", false);
                 item.attribution = WallpaperOcs.text(entry, "attribution", false);
                 item.page_url = WallpaperOcs.text(entry, "page_url", false);
+                item.creator_url = WallpaperOcs.text(entry, "creator_url", false);
                 item.license_url = WallpaperOcs.text(entry, "license_url", false);
                 item.tags = WallpaperOcs.tag_array(entry, "tags");
                 if (seen.add(item.key)) result.add(item);
@@ -340,6 +345,12 @@ namespace Singularity {
                     if (WallpaperOcs.text(doc, "provider", false) == "openverse") {
                         string identity = WallpaperOcs.text(doc, "id");
                         if (Uuid.string_is_valid(identity)) result.add("openverse:" + identity);
+                        continue;
+                    }
+                    if (WallpaperOcs.text(doc, "provider", false) == "unsplash") {
+                        string identity = WallpaperOcs.text(doc, "id");
+                        if (identity != "" && identity.length <= 64 && !new Regex("[^A-Za-z0-9_-]").match(identity))
+                            result.add("unsplash:" + identity);
                         continue;
                     }
                     if (WallpaperOcs.text(doc, "origin") != "ocs") continue;
@@ -446,7 +457,7 @@ namespace Singularity {
                 FileUtils.get_contents(sidecar_path, out sidecar_data);
                 var sidecar_doc = WallpaperOcs.document(sidecar_data, false);
                 string provider = WallpaperOcs.text(sidecar_doc, "provider");
-                string ocs_id = provider == "openverse" ? WallpaperOcs.text(sidecar_doc, "id") :
+                string ocs_id = (provider == "openverse" || provider == "unsplash") ? WallpaperOcs.text(sidecar_doc, "id") :
                     WallpaperOcs.text(WallpaperOcs.object_node(sidecar_doc.get_member("source")), "ocs_id");
                 string candidate = provider + ":" + ocs_id;
                 if (candidate == key) found_key = true;
