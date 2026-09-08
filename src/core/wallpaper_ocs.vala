@@ -109,6 +109,12 @@ namespace Singularity {
             foreach (string id in obj.get_members()) {
                 if (!provider_id(id)) throw new WallpaperOcsError.INVALID("Unknown OCS provider: " + id);
                 text(object_node(obj.get_member(id)), "base");
+                // opendesktop.org is the former name of pling.com. Both API
+                // hosts currently expose the same catalog, so showing both
+                // only duplicates every result. Keep accepting the legacy id
+                // for existing provenance, but expose the current Pling
+                // service once in the provider picker.
+                if (id == "opendesktop") continue;
                 result.add(new WallpaperOcsChoice(id, id));
             }
             result.sort((a, b) => strcmp(a.id, b.id));
@@ -308,10 +314,37 @@ namespace Singularity {
             }
             return result;
         }
+        // Older installed helpers create one directory per import and put the
+        // provenance in pack.json instead of per-image sidecars. Accept that
+        // deployed format while installations transition to the shared pack.
+        private static string legacy_pack_key(string dir) {
+            string path = Path.build_filename(dir, "pack.json");
+            if (!FileUtils.test(path, FileTest.IS_REGULAR)) return "";
+            try {
+                string data;
+                FileUtils.get_contents(path, out data);
+                var doc = WallpaperOcs.document(data, false);
+                if (WallpaperOcs.text(doc, "origin") != "ocs") return "";
+                string provider = WallpaperOcs.text(doc, "provider");
+                string id = WallpaperOcs.text(WallpaperOcs.object_node(doc.get_member("source")), "ocs_id");
+                if (!WallpaperOcs.provider_id(provider) || !WallpaperOcs.numeric_id(id)) return "";
+                foreach (var node in WallpaperOcs.array(doc, "images").get_elements()) {
+                    string name = WallpaperOcs.text(WallpaperOcs.object_node(node), "file");
+                    if (name == Path.get_basename(name) && name.has_suffix(".jpg") &&
+                        FileUtils.test(Path.build_filename(dir, name), FileTest.IS_REGULAR))
+                        return provider + ":" + id;
+                }
+            } catch (Error e) {
+                /* malformed legacy metadata is not an import */
+            }
+            return "";
+        }
         public void discover(ArrayList<WallpaperCollectionInfo> collections) {
             added.clear();
             foreach (var collection in collections) {
                 foreach (string key in sidecar_keys(collection.dir)) added.add(key);
+                string legacy = legacy_pack_key(collection.dir);
+                if (legacy != "") added.add(legacy);
             }
         }
         // The single shared "Imported from OCS" collection: registered once on
@@ -325,8 +358,6 @@ namespace Singularity {
             string id = WallpaperOcs.text(obj, "pack_id");
             string dir = WallpaperOcs.text(obj, "destination");
             string collection_path = WallpaperOcs.text(obj, "collection");
-            if (id != IMPORTED_OCS_ID)
-                throw new WallpaperOcsError.INVALID("Import does not target the shared imported-ocs collection");
             if (!Path.is_absolute(dir) || !FileUtils.test(dir, FileTest.IS_DIR) ||
                 !FileUtils.test(collection_path, FileTest.IS_REGULAR))
                 throw new WallpaperOcsError.INVALID("Import did not produce registered collection files");
@@ -336,6 +367,14 @@ namespace Singularity {
             }
             if (!registered)
                 throw new WallpaperOcsError.INVALID("Imported pack is missing from the collection registry");
+            if (id != IMPORTED_OCS_ID) {
+                string candidate = legacy_pack_key(dir);
+                if (candidate != key)
+                    throw new WallpaperOcsError.INVALID("Legacy imported pack provenance does not match the active import key");
+                added.add(key);
+                active = "";
+                return;
+            }
             // Per-image files: every image in the response must point to a real
             // sidecar file with a real .jpg next to it, AND the sidecar's
             // provider:ocs_id must match the import's key. This preserves the
