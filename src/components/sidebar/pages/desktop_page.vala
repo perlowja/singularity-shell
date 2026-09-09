@@ -136,8 +136,8 @@ namespace Singularity {
                 // final, correct state.
                 settings.delay();
                 settings.reset("background-picture-uri");
-                settings.set_string("background-attribution-title", "");
-                settings.set_string("background-attribution-author", "");
+                SettingsSafety.set_string(settings, "background-attribution-title", "");
+                SettingsSafety.set_string(settings, "background-attribution-author", "");
                 settings.apply();
                 update_preview();
             });
@@ -1782,9 +1782,9 @@ namespace Singularity {
             // visibly flickering/incorrect attribution overlay before it
             // settled on the right text a couple of dconf round-trips later.
             settings.delay();
-            settings.set_string("background-picture-uri", uri);
-            settings.set_string("background-attribution-title", title);
-            settings.set_string("background-attribution-author", author);
+            SettingsSafety.set_string(settings, "background-picture-uri", uri);
+            SettingsSafety.set_string(settings, "background-attribution-title", title);
+            SettingsSafety.set_string(settings, "background-attribution-author", author);
             settings.apply();
             add_to_recent(uri);
             update_preview();
@@ -1800,7 +1800,7 @@ namespace Singularity {
                     new_list += r;
                 }
             }
-            settings.set_strv("recent-wallpapers", new_list);
+            SettingsSafety.set_strv(settings, "recent-wallpapers", new_list);
         }
 
         private void remove_from_recent(string uri) {
@@ -1811,7 +1811,7 @@ namespace Singularity {
                     new_list += r;
                 }
             }
-            settings.set_strv("recent-wallpapers", new_list);
+            SettingsSafety.set_strv(settings, "recent-wallpapers", new_list);
         }
 
         private void update_preview_async() {
