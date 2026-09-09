@@ -1932,10 +1932,69 @@ namespace Singularity {
             if (!found && options.size > 0) selected = options[0].id;
             var row = new SelectionRow.with_options(_("Wallpaper Source"), options, selected);
             row.subtitle = _("Which installed collection the gallery below shows");
-            row.selected.connect((id) => { rotation_state.set_selected_collection(id); populate_grid(); });
+            row.selected.connect((id) => {
+                rotation_state.set_selected_collection(id);
+                refresh_wallpaper_sources();
+                populate_grid();
+            });
             var old = wallpaper_source_container.get_first_child();
             if (old != null) wallpaper_source_container.remove(old);
-            wallpaper_source_container.append(row);
+            var source_box = new Gtk.Box(Orientation.HORIZONTAL, 6);
+            row.hexpand = true;
+            source_box.append(row);
+            var selected_collection = find_collection(selected);
+            if (selected_collection != null && selected_collection.deletable) {
+                var delete_button = new Button.from_icon_name("user-trash-symbolic");
+                delete_button.add_css_class("flat");
+                delete_button.add_css_class("destructive-action");
+                delete_button.tooltip_text = _("Delete wallpaper pack");
+                delete_button.clicked.connect(() => confirm_delete_pack(selected_collection));
+                source_box.append(delete_button);
+            }
+            wallpaper_source_container.append(source_box);
+        }
+
+        private WallpaperCollectionInfo? find_collection(string id) {
+            foreach (var collection in wallpaper_collections)
+                if (collection.id == id) return collection;
+            return null;
+        }
+
+        private void confirm_delete_pack(WallpaperCollectionInfo collection) {
+            var dialog = new Adw.MessageDialog(get_root() as Gtk.Window,
+                _("Delete “%s”?").printf(collection.name),
+                _("This permanently deletes every photo in this wallpaper pack."));
+            dialog.add_response("cancel", _("Cancel"));
+            dialog.add_response("delete", _("Delete Pack"));
+            dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE);
+            dialog.set_default_response("cancel");
+            dialog.set_close_response("cancel");
+            dialog.response.connect((response) => {
+                if (response == "delete") delete_pack(collection);
+            });
+            dialog.present();
+        }
+
+        private void reset_deleted_background(bool was_active) {
+            if (!was_active) return;
+            settings.delay();
+            settings.reset("background-picture-uri");
+            SettingsSafety.set_string(settings, "background-attribution-title", "");
+            SettingsSafety.set_string(settings, "background-attribution-author", "");
+            settings.apply();
+        }
+
+        private void delete_pack(WallpaperCollectionInfo collection) {
+            bool was_active = WallpaperCollections.needs_background_fallback(
+                collection, settings.get_string("background-picture-uri"));
+            try {
+                WallpaperCollections.delete_pack(collection);
+                reset_deleted_background(was_active);
+                refresh_wallpaper_sources();
+                populate_grid();
+            } catch (Error e) {
+                warning("Could not delete wallpaper pack %s: %s", collection.id, e.message);
+            }
         }
 
         private void populate_grid() {
@@ -2005,13 +2064,44 @@ namespace Singularity {
         }
 
         private void add_wallpaper_card(string uri, bool is_recent) {
-            var card = new WallpaperCard(uri, is_recent);
+            var collection = find_collection(rotation_state.get_selected_collection("ncz"));
+            bool can_delete = collection != null && collection.deletable;
+            var card = new WallpaperCard(uri, is_recent, can_delete);
             card.set_selected(uri == settings.get_string("background-picture-uri"));
             card.clicked.connect(() => set_wallpaper(uri));
-            if (is_recent) {
+            if (can_delete) {
+                card.delete_clicked.connect(() => confirm_delete_image(collection, uri));
+            } else if (is_recent) {
                 card.delete_clicked.connect(() => remove_from_recent(uri));
             }
             wallpaper_grid.append(card);
+        }
+
+        private void confirm_delete_image(WallpaperCollectionInfo collection, string uri) {
+            string name = File.new_for_uri(uri).get_basename() ?? _("this photo");
+            var dialog = new Adw.MessageDialog(get_root() as Gtk.Window,
+                _("Delete “%s”?").printf(name), _("This photo will be permanently deleted."));
+            dialog.add_response("cancel", _("Cancel"));
+            dialog.add_response("delete", _("Delete Photo"));
+            dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE);
+            dialog.set_default_response("cancel");
+            dialog.set_close_response("cancel");
+            dialog.response.connect((response) => {
+                if (response != "delete") return;
+                bool was_active = WallpaperCollections.needs_background_fallback(
+                    collection, settings.get_string("background-picture-uri")) &&
+                    uri == settings.get_string("background-picture-uri");
+                try {
+                    bool pack_deleted = WallpaperCollections.delete_image(collection, uri);
+                    remove_from_recent(uri);
+                    reset_deleted_background(was_active);
+                    if (pack_deleted) refresh_wallpaper_sources();
+                    populate_grid();
+                } catch (Error e) {
+                    warning("Could not delete wallpaper %s: %s", uri, e.message);
+                }
+            });
+            dialog.present();
         }
 
         // Color picker helpers
@@ -2425,7 +2515,7 @@ namespace Singularity {
         private static Cond thumb_cond = Cond();
         private static int active_thumb_loads = 0;
 
-        public WallpaperCard(string uri, bool is_recent) {
+        public WallpaperCard(string uri, bool is_recent, bool can_delete = false) {
             Object(orientation: Orientation.VERTICAL, spacing: 0);
             this.uri = uri;
             var file = File.new_for_uri(uri);
@@ -2439,7 +2529,7 @@ namespace Singularity {
             // for_remote() / placeholder_only() never carry a delete
             // affordance.
             Button? del_btn = null;
-            if (is_recent) {
+            if (is_recent || can_delete) {
                 del_btn = new Button.from_icon_name("user-trash-symbolic");
                 // flat+osd keeps the recents action legible over the image.
                 del_btn.add_css_class("flat");
