@@ -335,14 +335,14 @@ private void test_bing_markets_empty() {
 
 private void test_bing_items_parses_list_array() {
     // The two-entry fixture above: one pinned, one not. Both items must
-    // populate the shared WallpaperOcsItem shape, with Bing-only fields
+    // populate the shared WallpaperItem shape, with Bing-only fields
     // filled in (market, thumbnail_path, pinned). item.key must be unique
     // and provider-namespaced.
     try {
         var rows = WallpaperBing.items(BING_LIST_JSON);
         assert(rows.size == 2);
         // Pinned item first.
-        assert(rows[0].provider == "bing");
+        assert(rows[0].provider_id == "bing");
         assert(rows[0].market == "en-US");
         assert(rows[0].pinned == true);
         assert(rows[0].name == "Palmanova");
@@ -408,6 +408,20 @@ private void test_bing_items_rejects_bad_pinned_field() {
 
 public int main(string[] args) {
     Test.init(ref args);
+    Test.add_func("/providers/release-registry", () => {
+        var registry = new WallpaperProviderRegistry();
+        var active = registry.get_active();
+        var available = registry.get_available();
+        assert(active.size == 2);
+        assert(active[0].id == "ocs");
+        assert(active[1].id == "bing");
+        assert(!active[0].requires_credentials && !active[1].requires_credentials);
+        assert(available.size == 4);
+        assert(available[2].id == "openverse" && available[2].supports_search);
+        assert(available[3].id == "unsplash" && available[3].supports_search);
+        assert(registry.lookup("openverse") == null);
+        assert(registry.lookup("unsplash") == null);
+    });
     Test.add_func("/ocs/unified-categories", () => {
         try { assert(WallpaperOcs.categories(INDEX, "ocs").size == 2); }
         catch (Error e) { error("%s", e.message); }
@@ -416,17 +430,19 @@ public int main(string[] args) {
         try {
             var rows = WallpaperOcs.items(browse("[" + ITEM + "," + ITEM.replace("pling", "kde-look").replace("123", "456") + "]", "ocs"), "ocs", "300");
             assert(rows.size == 2);
-            assert(rows[1].provider == "kde-look");
+            assert(rows[1].provider_id == "kde-look");
         } catch (Error e) { error("%s", e.message); }
     });
     Test.add_func("/openverse/normalized-items", () => {
-        string item = "{\"provider\":\"openverse\",\"id\":\"c6a260ef-8a37-43df-939e-f3d662403fcc\",\"name\":null,\"author\":null,\"license\":\"by-sa\",\"license_version\":\"2.5\",\"preview\":\"https://api.openverse.org/thumb\",\"attribution\":\"A & <B>\",\"tags\":[\"4K\"]}";
+        string item = "{\"provider\":\"openverse\",\"id\":\"c6a260ef-8a37-43df-939e-f3d662403fcc\",\"name\":null,\"author\":null,\"license\":\"by-sa\",\"license_version\":\"2.5\",\"preview\":\"https://api.openverse.org/thumb\",\"url\":\"https://example.test/full.jpg\",\"width\":4096,\"height\":2160,\"attribution\":\"A & <B>\",\"tags\":[\"4K\"]}";
         try {
             var rows = WallpaperOpenverse.items("{\"schema\":1,\"items\":[" + item + "," + item + "]}");
             assert(rows.size == 1);
             assert(rows[0].license == "by-sa 2.5");
             assert(rows[0].attribution == "A & <B>");
             assert(rows[0].name == "");
+            assert(rows[0].full_res_url == "https://example.test/full.jpg");
+            assert(rows[0].width == 4096 && rows[0].height == 2160);
         } catch (Error e) { error("%s", e.message); }
         foreach (string bad in new string[] {"{}", "[]", "{\"schema\":1,\"items\":[" + item.replace("openverse", "pling") + "]}", "{\"schema\":1,\"items\":[" + item.replace("c6a260ef-8a37-43df-939e-f3d662403fcc", "../escape") + "]}"}) {
             bool rejected = false;

@@ -288,6 +288,8 @@ singularity_core_sources = files(
     'src/core/wallpaper_rotation_state.vala',
     'src/core/wallpaper_sidecar.vala',
     'src/core/wallpaper_ocs.vala',
+    'src/core/wallpaper_provider.vala',
+    'src/core/settings_safety.vala',
     'src/core/wayland_gamma_backend.vala',
     'src/core/shortcut_manager.vala',
     'src/core/ush_portal.vala',
@@ -470,7 +472,7 @@ wallpaper_gallery_test = executable('wallpaper-gallery-test',
 test('wallpaper-gallery', wallpaper_gallery_test)
 
 wallpaper_ocs_test = executable('wallpaper-ocs-test',
-  sources: ['src/core/wallpaper_ocs.vala', 'src/core/wallpaper_collections.vala', 'tests/wallpaper_ocs_test.vala'],
+  sources: ['src/core/wallpaper_ocs.vala', 'src/core/wallpaper_provider.vala', 'src/core/wallpaper_collections.vala', 'tests/wallpaper_ocs_test.vala'],
   dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep, json_dep],
 )
 test('wallpaper-ocs', wallpaper_ocs_test)
@@ -480,3 +482,9 @@ wallpaper_sidecar_test = executable('wallpaper-sidecar-test',
   dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep, json_dep],
 )
 test('wallpaper-sidecar', wallpaper_sidecar_test)
+
+settings_safety_test = executable('settings-safety-test',
+  sources: ['src/core/settings_safety.vala', 'tests/settings_safety_test.vala'],
+  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0')],
+)
+test('settings-safety', settings_safety_test)

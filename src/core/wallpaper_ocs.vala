@@ -8,17 +8,20 @@ namespace Singularity {
         public string name;
         public WallpaperOcsChoice(string id, string name) { this.id = id; this.name = name; }
     }
-    public class WallpaperOcsItem : Object {
-        public string provider = "";
+    public class WallpaperItem : Object {
+        public string provider_id = "";
         public string id = "";
         public string name = "";
         public string author = "";
         public string license = "";
         public string preview = "";
+        public string full_res_url = "";
         public string attribution = "";
         public string page_url = "";
         public string creator_url = "";
         public string license_url = "";
+        public int width = 0;
+        public int height = 0;
         // Tags emitted per item by the OCS browse response (JSON array of
         // plain strings, possibly empty). Parsed leniently: absent field or
         // explicit empty array both become an empty list, matching how the
@@ -41,7 +44,7 @@ namespace Singularity {
         // for metadata written by older helpers. Keeping `key` stable
         // across both item kinds means add_card / filter_cards / the imports
         // map do not need a parallel data path.
-        public string key { owned get { return provider + ":" + id; } }
+        public string key { owned get { return provider_id + ":" + id; } }
     }
     // JSON from the helper is untrusted. Check types before Json-GLib getters,
     // which otherwise emit criticals (fatal in the GLib.Test harness).
@@ -100,6 +103,13 @@ namespace Singularity {
             }
             return result.to_array();
         }
+        internal static int optional_int(Json.Object obj, string field) throws Error {
+            var node = obj.get_member(field);
+            if (node == null || node.is_null()) return 0;
+            if (node.get_value_type() != typeof(int64) || node.get_int() < 0 || node.get_int() > int.MAX)
+                throw new WallpaperOcsError.INVALID("Invalid OCS field: " + field);
+            return (int) node.get_int();
+        }
         internal static bool numeric_id(string id) {
             if (id.length == 0) return false;
             foreach (char c in id.to_utf8()) if (c < '0' || c > '9') return false;
@@ -149,23 +159,27 @@ namespace Singularity {
             result.sort((a, b) => a.name.collate(b.name));
             return result;
         }
-        public static ArrayList<WallpaperOcsItem> items(string data, string provider, string category) throws Error {
+        public static ArrayList<WallpaperItem> items(string data, string provider, string category) throws Error {
             var obj = document(data);
             if (text(obj, "provider") != provider || text(obj, "category") != category)
                 throw new WallpaperOcsError.INVALID("OCS response does not match the requested category");
-            var result = new ArrayList<WallpaperOcsItem>();
+            var result = new ArrayList<WallpaperItem>();
             var seen = new HashSet<string>();
             foreach (var node in array(obj, "items").get_elements()) {
                 var entry = object_node(node);
-                var item = new WallpaperOcsItem();
-                item.provider = text(entry, "provider");
+                var item = new WallpaperItem();
+                item.provider_id = text(entry, "provider");
                 item.id = text(entry, "id");
-                if ((provider != "ocs" && item.provider != provider) || !provider_id(item.provider) || !numeric_id(item.id))
+                if ((provider != "ocs" && item.provider_id != provider) || !provider_id(item.provider_id) || !numeric_id(item.id))
                     throw new WallpaperOcsError.INVALID("Invalid OCS item identity");
                 item.name = text(entry, "name");
                 item.author = text(entry, "author", false);
                 item.license = text(entry, "license", false);
                 item.preview = text(entry, "preview", false);
+                item.page_url = text(entry, "detailpage", false);
+                var download = entry.get_member("download");
+                if (download != null && !download.is_null())
+                    item.full_res_url = text(object_node(download), "url", false);
                 item.tags = tag_array(entry, "tags");
                 if (seen.add(item.key)) result.add(item);
             }
@@ -178,9 +192,9 @@ namespace Singularity {
     // response shapes are kept here, out of WallpaperOcs.providers(), so the
     // OCS parser remains strictly about OCS data. WallpaperBing shares
     // WallpaperOcsChoice so the category chip row can render markets the same
-    // way it renders OCS categories, and shares WallpaperOcsItem so the rest
+    // way it renders OCS categories, and shares WallpaperItem so the rest
     // of the browser (add_card, filter_cards, thumbnails) keeps a single
-    // code path. The Bing-only fields on WallpaperOcsItem (thumbnail_path,
+    // code path. The Bing-only fields on WallpaperItem (thumbnail_path,
     // pinned, market) default to empty/false for OCS items and are populated
     // by items() below.
     public class WallpaperBing : Object {
@@ -216,26 +230,26 @@ namespace Singularity {
         // schema/items wrapper, unlike the OCS helper). Each element carries:
         //   provider, date, market, path, caption, copyright,
         //   thumbnail_path, pinned
-        // Parse the array into the shared WallpaperOcsItem shape. `id` on the
+        // Parse the array into the shared WallpaperItem shape. `id` on the
         // item is set to "<market>:<Bing image id>" so the existing key=
         // "provider:id" formula produces a unique, stable identity per Bing
         // archived image. Tags: Bing has no per-image tags; the field stays
         // empty so filter_cards does not need to special-case anything.
-        public static ArrayList<WallpaperOcsItem> items(string data) throws Error {
+        public static ArrayList<WallpaperItem> items(string data) throws Error {
             var parser = new Json.Parser();
             parser.load_from_data(data);
             var root = parser.get_root();
             if (root == null || root.get_node_type() != Json.NodeType.ARRAY)
                 throw new WallpaperOcsError.INVALID("Expected a Bing list array");
             var arr = root.get_array();
-            var result = new ArrayList<WallpaperOcsItem>();
+            var result = new ArrayList<WallpaperItem>();
             var seen = new HashSet<string>();
             foreach (var node in arr.get_elements()) {
                 if (node == null || node.get_node_type() != Json.NodeType.OBJECT)
                     throw new WallpaperOcsError.INVALID("Invalid Bing list entry");
                 var entry = node.get_object();
-                var item = new WallpaperOcsItem();
-                item.provider = PROVIDER_ID;
+                var item = new WallpaperItem();
+                item.provider_id = PROVIDER_ID;
                 // Provider field is required and must equal "bing"; this
                 // catches a helper that ever emits mixed provider types in
                 // the same list.
@@ -269,29 +283,33 @@ namespace Singularity {
     // Openverse is a photo search API, not an OCS network. Its helper emits
     // a normalized envelope while retaining per-image licensing and links.
     public class WallpaperOpenverse : Object {
-        public static ArrayList<WallpaperOcsItem> items(string data) throws Error {
+        public static ArrayList<WallpaperItem> items(string data, string expected_provider = "") throws Error {
             var obj = WallpaperOcs.document(data);
-            var result = new ArrayList<WallpaperOcsItem>();
+            var result = new ArrayList<WallpaperItem>();
             var seen = new HashSet<string>();
             foreach (var node in WallpaperOcs.array(obj, "items").get_elements()) {
                 var entry = WallpaperOcs.object_node(node);
-                var item = new WallpaperOcsItem();
-                item.provider = WallpaperOcs.text(entry, "provider");
+                var item = new WallpaperItem();
+                item.provider_id = WallpaperOcs.text(entry, "provider");
                 item.id = WallpaperOcs.text(entry, "id");
-                if ((item.provider != "openverse" && item.provider != "unsplash") ||
-                    (item.provider == "openverse" && !Uuid.string_is_valid(item.id)) ||
-                    (item.provider == "unsplash" && (item.id == "" || item.id.length > 64 ||
+                if ((item.provider_id != "openverse" && item.provider_id != "unsplash") ||
+                    (expected_provider != "" && item.provider_id != expected_provider) ||
+                    (item.provider_id == "openverse" && !Uuid.string_is_valid(item.id)) ||
+                    (item.provider_id == "unsplash" && (item.id == "" || item.id.length > 64 ||
                      new Regex("[^A-Za-z0-9_-]").match(item.id))))
                     throw new WallpaperOcsError.INVALID("Invalid stock photo identity");
                 item.name = WallpaperOcs.text(entry, "name", false);
                 item.author = WallpaperOcs.text(entry, "author", false);
                 item.preview = WallpaperOcs.text(entry, "preview");
+                item.full_res_url = WallpaperOcs.text(entry, "url", false);
                 item.license = WallpaperOcs.text(entry, "license") + " " + WallpaperOcs.text(entry, "license_version", false);
                 item.attribution = WallpaperOcs.text(entry, "attribution", false);
                 item.page_url = WallpaperOcs.text(entry, "page_url", false);
                 item.creator_url = WallpaperOcs.text(entry, "creator_url", false);
                 item.license_url = WallpaperOcs.text(entry, "license_url", false);
                 item.tags = WallpaperOcs.tag_array(entry, "tags");
+                item.width = WallpaperOcs.optional_int(entry, "width");
+                item.height = WallpaperOcs.optional_int(entry, "height");
                 if (seen.add(item.key)) result.add(item);
             }
             return result;
