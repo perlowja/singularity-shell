@@ -80,7 +80,7 @@ namespace Singularity {
 
     public class OcsWallpaperProvider : WallpaperHelperProvider, WallpaperProvider {
         public string id { get { return "ocs"; } }
-        public string display_name { owned get { return "OCS"; } }
+        public string display_name { owned get { return "OCS Network"; } }
         public bool requires_credentials { get { return false; } }
         public bool supports_search { get { return false; } }
         public OcsWallpaperProvider() { base("/usr/local/bin/ncz-wallpaper-ocs"); }

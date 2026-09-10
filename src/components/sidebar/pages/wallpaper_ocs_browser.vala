@@ -822,7 +822,7 @@ namespace Singularity.Shell {
                 attribution = "%s · %s".printf(_("Bing"), item.market != "" ? item.market : item.provider_id);
             else
                 attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"),
-                    item.provider_id == "openverse" ? _("Openverse") : item.provider_id == "unsplash" ? _("Unsplash") : _("OCS"));
+                    item.provider_id == "openverse" ? _("Openverse") : item.provider_id == "unsplash" ? _("Unsplash") : _("OCS Network"));
             string license_text = item.license != "" ? item.license : _("No license stated");
             card.card.set_badge(attribution + "  ·  " + license_text);
             if (item.provider_id == "openverse" || item.provider_id == "unsplash") {

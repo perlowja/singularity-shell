@@ -100,7 +100,7 @@ public class WallpaperSidecar : GLib.Object {
         if (onode != null && onode.get_value_type() == typeof(string))
             origin = onode.get_string();
         if (origin == "ocs") {
-            result.source = "OCS";
+            result.source = "OCS Network";
             // OCS shape: the image record carries the title; artist is top-level.
             var inode = obj.get_member("image");
             if (inode != null && inode.get_node_type() == Json.NodeType.OBJECT) {
