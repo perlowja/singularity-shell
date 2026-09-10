@@ -91,12 +91,33 @@ namespace Singularity.Shell {
             public bool matches = true;
         }
 
+        // SettingsView caches pages and reuses this instance across every
+        // visit (settings_view.vala: "Reuse cached pages - they self-update
+        // via GSettings listeners"). imports.discover() only scans sidecars
+        // that exist on disk AT THE TIME IT RUNS, so a one-time call in the
+        // constructor goes stale the moment a collection is deleted+
+        // re-imported from elsewhere (e.g. the Desktop settings page) while
+        // this page sits cached: the in-memory "added" set still claims the
+        // re-imported keys are present, so their cards render greyed out
+        // ("Added", disabled) even though the files backing that claim are
+        // long gone. Re-run discover() (and force a re-browse so the grid's
+        // cards are rebuilt with fresh is_added() state baked into both
+        // their label and sensitivity) every time this page becomes visible
+        // again, not just once at construction.
+        private bool mapped_once = false;
+
         public WallpaperOcsBrowserPage(SettingsView view, string[] roots) {
             base(_("Online Wallpapers"));
             collection_roots = roots;
             imports.discover(WallpaperCollections.parse(roots));
             session.timeout = 25;
             session.user_agent = "Singularity-Wallpaper-Browser/1";
+            this.map.connect(() => {
+                if (!mapped_once) { mapped_once = true; return; }
+                imports.discover(WallpaperCollections.parse(collection_roots));
+                force_refresh = true;
+                browse_all.begin();
+            });
             back_clicked.connect(() => view.navigate_to("desktop"));
 
             provider_group = new Adw.PreferencesGroup();
