@@ -38,10 +38,45 @@ namespace Singularity {
             return _instance;
         }
 
+        // Clicking through several pack thumbnails quickly (confirmed live,
+        // O6N, 2026-09-10: three "Wallpaper loaded" reloads inside ~2s)
+        // fires one full decode-at-display-resolution + GPU texture upload
+        // per click, each on its own background thread. reload()'s
+        // _load_serial/_mutex guard only discards a STALE thread's finished
+        // RESULT -- it does nothing to stop several of those decode+upload
+        // operations from actually running concurrently before being
+        // discarded. On this hardware that is a real hazard, not a
+        // theoretical one: the Sky1/Mali GPU driver stack already has
+        // documented fragility under concurrent GPU work (Panthor crashes,
+        // labwc races). The live reproduction of this exact bug ended in
+        // "Gdk-Message: Lost connection to Wayland compositor." with no
+        // coredump -- a clean Wayland protocol-level disconnect, not a
+        // catchable Vala exception, consistent with the compositor itself
+        // rejecting the client under GPU/surface contention.
+        //
+        // Debounce the SIGNAL-driven reload path so a burst of rapid clicks
+        // coalesces into a single decode+upload after the clicking settles,
+        // rather than racing several. 200ms is imperceptible for the
+        // common single-click case (satisfies "it should refresh
+        // immediately") while eliminating the overlap for a rapid burst.
+        // The constructor's initial reload() stays IMMEDIATE and
+        // undebounced -- startup should show the current wallpaper without
+        // an artificial delay, and there is no burst to coalesce yet.
+        private uint reload_debounce_source = 0;
+
+        private void schedule_reload() {
+            if (reload_debounce_source != 0) Source.remove(reload_debounce_source);
+            reload_debounce_source = Timeout.add(200, () => {
+                reload_debounce_source = 0;
+                reload();
+                return false;
+            });
+        }
+
         private WallpaperManager() {
             settings = new GLib.Settings("dev.sinty.desktop");
             settings.changed["background-picture-uri"].connect(() => {
-                reload();
+                schedule_reload();
             });
             // Attribution keys are subscribed independently so they can
             // move without the URI changing (the future apply-OCS-item
@@ -53,9 +88,9 @@ namespace Singularity {
             SettingsSchema? schema = settings.settings_schema;
             if (schema != null) {
                 if (schema.has_key("background-attribution-title"))
-                    settings.changed["background-attribution-title"].connect(() => reload());
+                    settings.changed["background-attribution-title"].connect(() => schedule_reload());
                 if (schema.has_key("background-attribution-author"))
-                    settings.changed["background-attribution-author"].connect(() => reload());
+                    settings.changed["background-attribution-author"].connect(() => schedule_reload());
             }
             reload();
         }
