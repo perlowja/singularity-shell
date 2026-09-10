@@ -1922,7 +1922,7 @@ namespace Singularity {
             var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             foreach (var collection in wallpaper_collections) {
                 string label = (collection.artist != "" && collection.artist != collection.name)
-                    ? "%s — %s".printf(collection.name, collection.artist) : collection.name;
+                    ? _("%s — by %s").printf(collection.name, collection.artist) : collection.name;
                 label = "%s — %s".printf(label, collection.theme_pack ? _("Theme pack") : _("Artist pack"));
                 options.add(new Singularity.Core.AppSettingOption() { id = collection.id, label = label });
             }
