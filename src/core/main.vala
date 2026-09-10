@@ -27,6 +27,10 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
     }
 
     protected override void startup() {
+        // This executable directly constructs native Adw widgets in its OCS
+        // browser and credential rows, so initialize libadwaita here rather
+        // than imposing it on libsingularity core and all of its consumers.
+        Adw.init();
         base.startup();
         new GLib.Settings("dev.sinty.desktop").set_boolean("bar-layout-edit-mode", false);
     }
@@ -1176,6 +1180,8 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             warning("Gtk.Settings.get_default() returned null");
         }
         Singularity.Style.StyleManager.get_default().apply_color_scheme(shell_dark);
+        Adw.StyleManager.get_default().color_scheme = shell_dark
+            ? Adw.ColorScheme.FORCE_DARK : Adw.ColorScheme.FORCE_LIGHT;
         // Re-apply accent after scheme change so derived accent colors are
         // re-generated against the correct dark/light palette.
         update_accent_color();
