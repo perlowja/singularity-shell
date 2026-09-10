@@ -1976,6 +1976,29 @@ namespace Singularity {
             return null;
         }
 
+        // The grid built by populate_grid() is NOT limited to the active
+        // rotation source's own directory -- WallpaperGallery.scan() is
+        // given every known collection's dir (collection_dirs) alongside
+        // scan_dir, so a card's uri can belong to a collection OTHER than
+        // whichever one is currently selected as the rotation source (e.g.
+        // a "recent" wallpaper carried over from a previously-active pack).
+        // add_wallpaper_card() used to resolve the delete target via
+        // find_collection(rotation_state.get_selected_collection("ncz")),
+        // which is always the ACTIVE source, not necessarily the collection
+        // that actually contains this specific uri. For any card whose
+        // image lives in a different collection, that mismatch made
+        // WallpaperCollections.delete_image()'s contains_uri() check fail,
+        // throwing IOError.PERMISSION_DENIED -- caught by confirm_delete_
+        // image()'s catch block, which only logs a warning(), so the click
+        // silently did nothing from the user's perspective. Resolve the
+        // REAL owning collection by uri instead of assuming it's whatever
+        // is currently selected.
+        private WallpaperCollectionInfo? find_owning_collection(string uri) {
+            foreach (var collection in wallpaper_collections)
+                if (collection.contains_uri(uri)) return collection;
+            return null;
+        }
+
         private void confirm_delete_pack(WallpaperCollectionInfo collection) {
             var dialog = new Adw.MessageDialog(get_root() as Gtk.Window,
                 _("Delete “%s”?").printf(collection.name),
@@ -2080,7 +2103,7 @@ namespace Singularity {
         }
 
         private void add_wallpaper_card(string uri, bool is_recent) {
-            var collection = find_collection(rotation_state.get_selected_collection("ncz"));
+            var collection = find_owning_collection(uri);
             bool can_delete = collection != null && collection.deletable;
             var card = new WallpaperCard(uri, is_recent, can_delete);
             card.set_selected(uri == settings.get_string("background-picture-uri"));
