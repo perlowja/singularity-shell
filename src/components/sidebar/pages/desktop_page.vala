@@ -1936,6 +1936,7 @@ namespace Singularity {
                 rotation_state.set_selected_collection(id);
                 refresh_wallpaper_sources();
                 populate_grid();
+                apply_selected_wallpaper.begin();
             });
             var old = wallpaper_source_container.get_first_child();
             if (old != null) wallpaper_source_container.remove(old);
@@ -1952,6 +1953,21 @@ namespace Singularity {
                 source_box.append(delete_button);
             }
             wallpaper_source_container.append(source_box);
+        }
+
+        private async void apply_selected_wallpaper() {
+            try {
+                var process = new Subprocess.newv(
+                    { "/usr/local/bin/ncz-wallpaper-rotate" },
+                    SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_PIPE);
+                string? stderr_buf = null;
+                yield process.communicate_utf8_async(null, null, null, out stderr_buf);
+                if (!process.get_successful())
+                    warning("Could not apply selected wallpaper source: %s",
+                        stderr_buf != null ? stderr_buf.strip() : "wallpaper rotator failed");
+            } catch (Error e) {
+                warning("Could not apply selected wallpaper source: %s", e.message);
+            }
         }
 
         private WallpaperCollectionInfo? find_collection(string id) {
