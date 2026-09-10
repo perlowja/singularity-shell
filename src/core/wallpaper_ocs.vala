@@ -151,10 +151,16 @@ namespace Singularity {
                 var usable = entry.get_member("usable");
                 if (usable == null || usable.get_value_type() != typeof(bool))
                     throw new WallpaperOcsError.INVALID("Invalid OCS category usability");
-                if (!usable.get_boolean() || !seen.add(id)) continue;
+                // The UI exposes all OCS networks as one synthetic "ocs"
+                // provider.  Preserve the real network in that provider's
+                // choice id so its browse call can address the helper's
+                // actual provider grammar.  The helper deliberately does not
+                // accept "ocs" as a provider name.
+                string choice_id = provider == "ocs" ? reference : id;
+                if (!usable.get_boolean() || !seen.add(choice_id)) continue;
                 string name = text(entry, "display_name", false);
                 if (name == "") name = text(entry, "name");
-                result.add(new WallpaperOcsChoice(id, name));
+                result.add(new WallpaperOcsChoice(choice_id, name));
             }
             result.sort((a, b) => a.name.collate(b.name));
             return result;

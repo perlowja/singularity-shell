@@ -423,7 +423,12 @@ public int main(string[] args) {
         assert(registry.lookup("unsplash") == null);
     });
     Test.add_func("/ocs/unified-categories", () => {
-        try { assert(WallpaperOcs.categories(INDEX, "ocs").size == 2); }
+        try {
+            var aggregate = WallpaperOcs.categories(INDEX, "ocs");
+            assert(aggregate.size == 2);
+            assert(aggregate[0].id.contains(":"));
+            assert(aggregate[1].id.contains(":"));
+        }
         catch (Error e) { error("%s", e.message); }
     });
     Test.add_func("/ocs/unified-items", () => {

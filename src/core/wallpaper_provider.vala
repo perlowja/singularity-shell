@@ -89,9 +89,15 @@ namespace Singularity {
         }
         public async WallpaperProviderResult browse(string category, string query, int page,
                 bool refresh, Cancellable? cancel) throws Error {
-            string data = yield command({helper, "browse", id, category, "--pages", "1"}, cancel, 60, refresh);
+            string[] identity = category.split(":");
+            if (identity.length != 2 || !WallpaperOcs.provider_id(identity[0]) ||
+                !WallpaperOcs.numeric_id(identity[1]))
+                throw new WallpaperOcsError.INVALID("Invalid aggregate OCS category identity");
+            string network = identity[0];
+            string network_category = identity[1];
+            string data = yield command({helper, "browse", network, network_category, "--pages", "1"}, cancel, 60, refresh);
             var result = new WallpaperProviderResult();
-            result.items = WallpaperOcs.items(data, id, category);
+            result.items = WallpaperOcs.items(data, network, network_category);
             var response = WallpaperOcs.document(data);
             var failed = response.get_member("failed_networks");
             if (failed != null && failed.get_node_type() == Json.NodeType.ARRAY && failed.get_array().get_length() > 0)
