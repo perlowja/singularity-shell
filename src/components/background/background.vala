@@ -12,6 +12,14 @@ namespace Singularity {
         private Stack wp_stack;
         private bool _wp_showing_a = true;
         private uint _wp_clear_id = 0;
+        // Live-toggle for the attribution overlay. Background.vala reads
+        // show-wallpaper-attribution and routes through the existing
+        // empty-title-and-empty-author early-return path when false, so
+        // toggling it live (via the desktop settings page) hides or
+        // re-shows the overlay without waiting for the next wallpaper
+        // change. The schema id matches the rest of the shell
+        // (desktop_page.vala initialises the same way).
+        private GLib.Settings settings;
 
         // Attribution overlay. wp_stack is the wallpaper cross-fade;
         // the attribution Label sits on top of it in a Gtk.Overlay so
@@ -108,6 +116,15 @@ namespace Singularity {
             set_child(wp_overlay);
 
             var manager = WallpaperManager.get_default();
+            // GSettings backing for the attribution toggle. Same schema id
+            // string as desktop_page.vala (dev.sinty.desktop). The
+            // changed[] handler re-runs update_attribution() so flipping
+            // the toggle in Settings immediately hides or re-shows the
+            // overlay for the wallpaper that's currently displayed.
+            settings = new GLib.Settings("dev.sinty.desktop");
+            settings.changed["show-wallpaper-attribution"].connect(() => {
+                update_attribution(WallpaperManager.get_default());
+            });
             // First load: set both pictures to avoid flash, no animation needed
             if (manager.display_texture != null) {
                 picture_a.set_paintable(manager.display_texture);
@@ -191,6 +208,16 @@ namespace Singularity {
         private void update_attribution(WallpaperManager manager) {
             string title = manager.attribution_title ?? "";
             string author = manager.attribution_author ?? "";
+            // The user-toggleable show-wallpaper-attribution gsettings key
+            // shares the same early-return path as the no-title-and-no-author
+            // case below: when the overlay is hidden for any reason we
+            // clear the contrast class too, so re-enabling the toggle (or
+            // loading a wallpaper that carries attribution) re-samples
+            // cleanly on the next wallpaper_changed.
+            if (!settings.get_boolean("show-wallpaper-attribution")) {
+                title = "";
+                author = "";
+            }
             if (title == "" && author == "") {
                 attribution_label.visible = false;
                 attribution_label.label = "";
