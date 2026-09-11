@@ -154,7 +154,25 @@ namespace Singularity {
                 filters.append(images);
                 dialog.filters = filters;
                 dialog.default_filter = images;
-                dialog.open.begin(get_root() as Gtk.Window, null, (obj, result) => {
+                // Passing a parent window here makes GTK export this
+                // window's surface via the xdg-foreign-v2 protocol
+                // (zxdg_exporter_v2.export_toplevel) so the out-of-process
+                // portal file chooser can set itself transient-for it.
+                // Live-reproduced and root-caused on O6N (NCZ-OS, labwc
+                // compositor) via WAYLAND_DEBUG=1: labwc advertises
+                // zxdg_exporter_v2 but disconnects the client instead of
+                // replying with zxdg_exported_v2.handle to that exact
+                // request -- a fatal, unrecoverable Wayland protocol error
+                // (GTK's own internal handling calls exit(); confirmed via
+                // gdb backtrace, no application code anywhere in the
+                // crashing frames). Passing null skips the xdg-foreign
+                // export entirely: the chooser opens as an ordinary
+                // top-level instead of transient-for the main window,
+                // which is a real, supported GtkFileDialog usage pattern
+                // (not a hack), at the minor cost of losing that window
+                // stacking/transiency relationship on compositors where
+                // xdg-foreign actually works correctly.
+                dialog.open.begin(null, null, (obj, result) => {
                     try {
                         var file = dialog.open.end(result);
                         set_wallpaper(file.get_uri());
