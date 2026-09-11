@@ -33,6 +33,58 @@ namespace Singularity {
         private string cached_wallpaper_accent = "#3584e4";
         private static bool wallpaper_css_loaded = false;
 
+        // Bing wallpaper markets selector. The UI side of
+        // cix-installer's 45-wallpaper-rotator.sh's ncz-wallpaper-bing
+        // contract -- the rotator script reads its market list from
+        // ~/.config/ncz-wallpaper/bing-markets and accepts the literal
+        // "all" (case-insensitive) as shorthand for every market below.
+        // Index 0 = "All Markets" (immediate write of "all"); index 1 =
+        // "Choose Markets..." opens a multi-select picker dialog. The
+        // same dialog object is reused across opens and its checkboxes
+        // are pre-checked from the file each time it's shown.
+        private const int BING_MARKETS_INDEX_ALL = 0;
+        private const int BING_MARKETS_INDEX_PICK = 1;
+        // 13 markets, grouped by region for the picker dialog. Order
+        // matches the comment block in
+        // cix-installer/post-install/45-wallpaper-rotator.sh's
+        // ncz-wallpaper-bing (Americas, Europe, Asia-Pacific).
+        // [0] = market code, [1] = display label, [2] = region header.
+        private const string BING_MARKETS_TABLE = "en-US\tUnited States\tAmericas"
+            + "|en-CA\tCanada English\tAmericas"
+            + "|fr-CA\tCanada French\tAmericas"
+            + "|pt-BR\tBrazil\tAmericas"
+            + "|en-GB\tUnited Kingdom\tEurope"
+            + "|fr-FR\tFrance\tEurope"
+            + "|de-DE\tGermany\tEurope"
+            + "|es-ES\tSpain\tEurope"
+            + "|it-IT\tItaly\tEurope"
+            + "|en-IN\tIndia\tAsia-Pacific"
+            + "|ja-JP\tJapan\tAsia-Pacific"
+            + "|zh-CN\tChina\tAsia-Pacific"
+            + "|ko-KR\tSouth Korea\tAsia-Pacific";
+        private Gee.ArrayList<BingMarketEntry> bing_markets_rows = new Gee.ArrayList<BingMarketEntry>();
+        private Gee.ArrayList<string> bing_markets_regions = new Gee.ArrayList<string>();
+        private Adw.ComboRow? bing_markets_row = null;
+        private Gtk.StringList? bing_markets_model = null;
+        private Adw.AlertDialog? bing_markets_dialog = null;
+        private Gee.ArrayList<Gtk.CheckButton> bing_markets_checkboxes = new Gee.ArrayList<Gtk.CheckButton>();
+        private bool bing_markets_updating = false;
+
+        // Lower-case an ASCII string. Vala's GLib string has no public
+        // lowercase() (only casefold(), which is Unicode-aware and
+        // therefore locale-sensitive -- the bing-market codes are all
+        // ISO 639-1 + ISO 3166-1 letters, so a literal ASCII fold is
+        // both correct and cheaper).
+        private static string ascii_lower(string s) {
+            string out = "";
+            for (int i = 0; i < s.length; i++) {
+                char c = s[i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+                out += c.to_string();
+            }
+            return out;
+        }
+
         // Appends a rounded-rectangle sub-path to the Cairo context.
         private static void round_rect(Cairo.Context ctx, double x, double y, double w, double h, double r) {
             double PI = Math.PI;
@@ -243,6 +295,40 @@ namespace Singularity {
             attribution_row.switch_btn.notify["active"].connect(() => {
                 settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
             });
+
+            // Bing markets selector. The two-entry ComboRow matches
+            // ncz-wallpaper-bing's existing "all" sentinel in
+            // ~/.config/ncz-wallpaper/bing-markets (45-wallpaper-rotator.sh
+            // reads that file verbatim). "All Markets" writes "all"
+            // immediately; "Choose Markets..." opens a multi-select
+            // dialog with one checkbox per market grouped by region,
+            // pre-checked from the current file state. We don't gate
+            // the row on the active wallpaper provider -- the rest of
+            // this page (rotate_row, interval_row, attribution_row) is
+            // also unconditional, and there's no clean existing
+            // provider-detection hook to reuse.
+            init_bing_markets_table();
+            bing_markets_model = new Gtk.StringList(null);
+            bing_markets_model.append(_("All Markets"));
+            bing_markets_model.append(_("Choose Markets…"));
+            bing_markets_row = new Adw.ComboRow();
+            bing_markets_row.title = _("Bing Markets");
+            bing_markets_row.use_markup = false;
+            bing_markets_row.model = bing_markets_model;
+            // Initial selection reflects the file: "all" or absent =
+            // All Markets, anything else = Choose Markets... so the
+            // dialog opens against the actually-configured subset.
+            bing_markets_row.selected = bing_markets_file_is_all() ? BING_MARKETS_INDEX_ALL : BING_MARKETS_INDEX_PICK;
+            bing_markets_row.notify["selected"].connect(() => {
+                if (bing_markets_updating || bing_markets_row == null) return;
+                int idx = (int) bing_markets_row.selected;
+                if (idx == BING_MARKETS_INDEX_ALL) {
+                    write_bing_markets_all();
+                } else if (idx == BING_MARKETS_INDEX_PICK) {
+                    open_bing_markets_dialog();
+                }
+            });
+            grid_group.add_row(bing_markets_row);
 
             var interval_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             interval_options.add(new Singularity.Core.AppSettingOption() { id = "600", label = _("Every 10 minutes") });
@@ -2490,6 +2576,223 @@ namespace Singularity {
             } catch (Error e) {
                 warning("eyedropper failed: %s", e.message);
             }
+        }
+
+        // -------------------------------------------------------------------------
+        // Bing markets selector. UI side of cix-installer's
+        // 45-wallpaper-rotator.sh's ncz-wallpaper-bing contract.
+        // -------------------------------------------------------------------------
+
+        // Parse BING_MARKETS_TABLE into bing_markets_rows ({code, label,
+        // region}) and bing_markets_regions (unique region order).
+        // Called once from the constructor before the ComboRow model is
+        // built.
+        private void init_bing_markets_table() {
+            foreach (string entry in BING_MARKETS_TABLE.split("|")) {
+                string[] cols = entry.split("\t");
+                if (cols.length != 3) continue;
+                var row = new BingMarketEntry() { code = cols[0], label = cols[1], region = cols[2] };
+                bing_markets_rows.add(row);
+                bool seen = false;
+                foreach (string existing in bing_markets_regions) if (existing == cols[2]) { seen = true; break; }
+                if (!seen) bing_markets_regions.add(cols[2]);
+            }
+        }
+
+        // Full path to the bing-markets file the cix-installer rotator
+        // already reads. Lives under XDG_CONFIG_HOME so it tracks the
+        // user even when $HOME is relocated for test sessions.
+        private string bing_markets_file_path() {
+            return GLib.Path.build_filename(
+                GLib.Environment.get_user_config_dir(),
+                "ncz-wallpaper",
+                "bing-markets");
+        }
+
+        // Read the bing-markets file and report whether its content
+        // (trimmed, lowercased) is the "all" sentinel. Absent file also
+        // returns true so the ComboRow starts on "All Markets" on a
+        // fresh install where the daemon's 13-market default is what
+        // runs anyway -- UI intent matches effective behaviour.
+        private bool bing_markets_file_is_all() {
+            string path = bing_markets_file_path();
+            if (!FileUtils.test(path, FileTest.EXISTS)) return true;
+            string text;
+            try {
+                FileUtils.get_contents(path, out text);
+            } catch (Error e) {
+                return true;
+            }
+            return ascii_lower(text.strip()) == "all";
+        }
+
+        // Read the bing-markets file and return the configured codes as
+        // an array. "all" (any case) or absent -> empty list (i.e. the
+        // sentinel meaning "every market"). Otherwise split on any of
+        // whitespace/comma and keep tokens matching the 2-letter-2-
+        // letter market pattern, preserving file order.
+        private string[] bing_markets_read_codes() {
+            string path = bing_markets_file_path();
+            if (!FileUtils.test(path, FileTest.EXISTS)) return {};
+            string text;
+            try {
+                FileUtils.get_contents(path, out text);
+            } catch (Error e) {
+                return {};
+            }
+            if (ascii_lower(text.strip()) == "all") return {};
+            string[] codes = {};
+            string[] seen = {};
+            foreach (string tok in text.strip().split_set(" \t\n,")) {
+                if (tok.length == 0) continue;
+                if (tok.length != 5 || tok[2] != '-') continue;
+                bool dup = false;
+                foreach (string existing in seen) if (existing == tok) { dup = true; break; }
+                if (dup) continue;
+                seen += tok;
+                codes += tok;
+            }
+            return codes;
+        }
+
+        // Atomic write of a single-line contents string to the
+        // bing-markets file. Same write-then-rename pattern as
+        // WallpaperRotationState so the daemon (which polls the file)
+        // never reads a half-flushed value. Creates the directory if
+        // absent. Silent on failure -- the daemon's default kicks in if
+        // the file is missing, so a failed write degrades gracefully.
+        private void write_bing_markets_contents(string contents) {
+            string path = bing_markets_file_path();
+            string dir = GLib.Path.get_dirname(path);
+            try {
+                GLib.DirUtils.create_with_parents(dir, 0700);
+                string tmp = path + ".tmp";
+                FileUtils.set_contents(tmp, contents);
+                if (FileUtils.rename(tmp, path) != 0) {
+                    warning("bing markets: could not rename %s into place", path);
+                }
+            } catch (Error e) {
+                warning("bing markets: could not write %s: %s", path, e.message);
+            }
+        }
+
+        private void write_bing_markets_all() {
+            write_bing_markets_contents("all\n");
+        }
+
+        // Write the checked markets as a single space-separated line
+        // (newline-terminated, matching the format the daemon already
+        // expects). Empty list -> fall back to "all" rather than an
+        // empty file, because ncz-wallpaper-bing treats an empty value
+        // as the default 13-market set anyway, and an empty file would
+        // be picked up by the daemon's split() as a literal empty list
+        // with no behaviour change -- but writing "all" makes the user's
+        // "I left this blank, give me everything" intent explicit on
+        // disk.
+        private void write_bing_markets_codes(string[] codes) {
+            if (codes.length == 0) {
+                write_bing_markets_all();
+                return;
+            }
+            write_bing_markets_contents(string.joinv(" ", codes) + "\n");
+        }
+
+        // Build (once) and present the multi-select dialog. The same
+        // dialog object is reused across opens; checkboxes are
+        // re-synced against the current file state each time, so a
+        // user who picks "All Markets", then "Choose Markets..." gets
+        // every market pre-checked, and a user who picks an explicit
+        // subset then reopens sees exactly that subset.
+        private void open_bing_markets_dialog() {
+            if (bing_markets_dialog == null) {
+                bing_markets_dialog = new Adw.AlertDialog(
+                    _("Choose Bing Markets"),
+                    _("Pick the regional markets Bing should pull images from. Defaults to all 13 if none are checked."));
+                bing_markets_dialog.add_response("cancel", _("Cancel"));
+                bing_markets_dialog.add_response("apply", _("Apply"));
+                bing_markets_dialog.set_response_appearance("apply", Adw.ResponseAppearance.SUGGESTED);
+                bing_markets_dialog.set_default_response("apply");
+                bing_markets_dialog.set_close_response("cancel");
+
+                // Build the picker body: one section per region with a
+                // header label and one Gtk.CheckButton per market.
+                // The regions array preserves the table order so the
+                // dialog matches the comment block in
+                // 45-wallpaper-rotator.sh.
+                var outer_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 12);
+                outer_box.margin_top = 8;
+                outer_box.margin_bottom = 8;
+                outer_box.margin_start = 4;
+                outer_box.margin_end = 4;
+                foreach (string region in bing_markets_regions) {
+                    var region_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 4);
+                    var header = new Gtk.Label(region);
+                    header.halign = Gtk.Align.START;
+                    header.xalign = 0.0f;
+                    header.add_css_class("heading");
+                    region_box.append(header);
+                    foreach (var row in bing_markets_rows) {
+                        if (row.region != region) continue;
+                        var check = new Gtk.CheckButton.with_label(row.label);
+                        check.set_data("bing-market-code", row.code);
+                        region_box.append(check);
+                        bing_markets_checkboxes.add(check);
+                    }
+                    outer_box.append(region_box);
+                }
+                var scroll = new Gtk.ScrolledWindow();
+                scroll.hscrollbar_policy = Gtk.PolicyType.NEVER;
+                scroll.vscrollbar_policy = Gtk.PolicyType.AUTOMATIC;
+                scroll.min_content_height = 240;
+                scroll.max_content_height = 480;
+                scroll.propagate_natural_height = true;
+                scroll.child = outer_box;
+                bing_markets_dialog.extra_child = scroll;
+
+                bing_markets_dialog.response.connect(on_bing_markets_dialog_response);
+            }
+
+            // Re-sync checkbox state from the file every open. Read
+            // the configured codes; an "all" sentinel means every
+            // checkbox on.
+            string[] configured = bing_markets_read_codes();
+            bool all_on = (configured.length == 0);
+            foreach (var check in bing_markets_checkboxes) {
+                if (all_on) {
+                    check.active = true;
+                } else {
+                    string? code = check.get_data<string>("bing-market-code");
+                    check.active = (code != null && code in configured);
+                }
+            }
+            bing_markets_dialog.present(get_root());
+        }
+
+        // Dialog "Apply" writes the checked markets to
+        // ~/.config/ncz-wallpaper/bing-markets. "Cancel" leaves the
+        // file alone -- the ComboRow state already reflects the
+        // user's last intent ("Choose Markets..."), but no list was
+        // changed on disk.
+        private void on_bing_markets_dialog_response(string response) {
+            if (response != "apply") return;
+            string[] checked_codes = {};
+            foreach (var check in bing_markets_checkboxes) {
+                if (!check.active) continue;
+                string? code = check.get_data<string>("bing-market-code");
+                if (code != null && code != "") checked_codes += code;
+            }
+            write_bing_markets_codes(checked_codes);
+        }
+
+        // Bing market row: 2-letter market code, UI display label, and
+        // region bucket ("Americas" / "Europe" / "Asia-Pacific") used
+        // to group checkboxes in the picker dialog. Plain GLib.Object
+        // rather than a struct so it can be stored in a Gee.ArrayList
+        // (Vala disallows array types as generic type arguments).
+        private class BingMarketEntry : GLib.Object {
+            public string code { get; set; }
+            public string label { get; set; }
+            public string region { get; set; }
         }
     }
     internal class WallpaperPreviewWidget : Box {
