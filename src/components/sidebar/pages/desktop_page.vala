@@ -230,6 +230,20 @@ namespace Singularity {
                 rotation_state.get_rotate_enabled());
             grid_group.add_row(rotate_row);
 
+            // Wallpaper attribution overlay toggle. Background.vala listens
+            // for settings.changed["show-wallpaper-attribution"] and hides
+            // the overlay live; the gsettings key also gates the live
+            // wallpaper-changed re-bind so flipping it from off to on redraws
+            // the overlay for the current wallpaper without waiting for the
+            // next rotation cycle.
+            var attribution_row = new SwitchRow(_("Show Wallpaper Info"),
+                _("Display title and photographer credit on the desktop background"),
+                settings.get_boolean("show-wallpaper-attribution"));
+            grid_group.add_row(attribution_row);
+            attribution_row.switch_btn.notify["active"].connect(() => {
+                settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
+            });
+
             var interval_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             interval_options.add(new Singularity.Core.AppSettingOption() { id = "600", label = _("Every 10 minutes") });
             interval_options.add(new Singularity.Core.AppSettingOption() { id = "1800", label = _("Every 30 minutes") });
