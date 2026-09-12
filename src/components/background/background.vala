@@ -31,6 +31,11 @@ namespace Singularity {
         // write site).
         private Gtk.Overlay? wp_overlay;
         private Label attribution_label;
+        // Loads the attribution-label CSS once per process. Static +
+        // null-guarded the same way panel.vala's compact_rows_provider is,
+        // since Background windows are created per-monitor and the rules
+        // are process-global, not per-instance.
+        private static Gtk.CssProvider? attribution_css_provider = null;
         // Corner-sample parameters. Sampled as a fractional rect inside
         // the cached medium pixbuf so the sample tracks whatever size
         // the manager uses for its display texture (currently 320x180,
@@ -74,6 +79,7 @@ namespace Singularity {
             add_css_class("singularity");
             add_css_class("singularity-shell");
             add_css_class("background-window");
+            ensure_attribution_css();
 
             picture_a = new Picture();
             picture_a.content_fit = ContentFit.COVER;
@@ -93,10 +99,12 @@ namespace Singularity {
             // widget hit-test-transparent; setting can_focus=false
             // prevents the label from grabbing Tab focus out of the
             // desktop. The scrim + padding + font live in the
-            // `attribution-label` CSS class in libsingularity's
-            // style.css. The `light-bg` class on the Background window
-            // (toggled below) is the same one panel.vala uses, so the
-            // contrast rule is consistent across panel + overlay.
+            // `attribution-label` CSS class, loaded by
+            // ensure_attribution_css() above (wallpaper-specific styling
+            // lives here, not in libsingularity, per review on
+            // libsingularity#13). The `light-bg` class on the Background
+            // window (toggled below) is the same one panel.vala uses, so
+            // the contrast rule is consistent across panel + overlay.
             attribution_label = new Label("");
             attribution_label.add_css_class("attribution-label");
             attribution_label.halign = Align.START;
@@ -184,6 +192,64 @@ namespace Singularity {
                 wp_stack.remove_css_class("wallpaper-intro");
                 return GLib.Source.REMOVE;
             });
+        }
+
+        // Wallpaper attribution overlay (Background.vala).
+        //
+        // Sits in the bottom-left corner of the live desktop background
+        // as a single Gtk.Label over the wallpaper cross-fade. The scrim
+        // is a semi-transparent rounded rectangle so the text reads
+        // against both bright and dark wallpapers without an aggressive
+        // box, and the light-bg / non-light-bg pair matches the
+        // convention panel.vala already uses for the top band -- same
+        // colour tokens, same threshold (ATTRIBUTION_LUM_THRESHOLD = 0.72,
+        // defined above).
+        //
+        // The luminance class selects an opposing scrim/text pair
+        // independently of the active application theme, since wallpaper
+        // contrast cannot be inferred from the theme's text colour.
+        //
+        // Moved here from libsingularity's style.css (review on
+        // libsingularity#13: that stylesheet should stay limited to
+        // reusable widget styling, and this rule only exists for the
+        // wallpaper attribution overlay singularity-shell owns) -- rules
+        // and rationale unchanged, just relocated to the actual consumer.
+        private const string ATTRIBUTION_CSS = """
+.background-window .attribution-label {
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 400;
+}
+.background-window.light-bg .attribution-label {
+    /* Bright wallpaper: dark scrim with light foreground. */
+    background-color: alpha(black, 0.65);
+    color: white;
+    text-shadow: 0 1px 2px alpha(black, 0.45);
+}
+.background-window:not(.light-bg) .attribution-label {
+    /* Dark wallpaper: light scrim with dark foreground. */
+    background-color: alpha(white, 0.72);
+    color: black;
+    text-shadow: 0 1px 2px alpha(white, 0.35);
+}
+""";
+
+        // Registers ATTRIBUTION_CSS once per process, the same way
+        // panel.vala's compact_rows_provider is registered: a static
+        // nullable CssProvider, guarded by a null-check, loaded on first
+        // Background construction.
+        private static void ensure_attribution_css() {
+            if (attribution_css_provider != null) return;
+            var display = Gdk.Display.get_default();
+            if (display == null) return;
+            attribution_css_provider = new Gtk.CssProvider();
+            attribution_css_provider.load_from_string(ATTRIBUTION_CSS);
+            Gtk.StyleContext.add_provider_for_display(
+                display,
+                attribution_css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            );
         }
 
         // Bind the attribution overlay to the WallpaperManager. Called
