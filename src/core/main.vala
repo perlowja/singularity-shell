@@ -314,6 +314,15 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             // connection is established at login, not on the first search.
             Singularity.SearchManager.get_default();
             Singularity.NowPlayingCache.get_default();
+            // Wallpaper rotation: the shell is the runtime consumer of the
+            // rotation-state files the Desktop settings page writes, so the
+            // "Rotate Wallpapers" switch and interval act on something.
+            // Suppressed in safe mode with the other optional startup
+            // features -- a timer that changes persisted session state is
+            // not what a machine recovering from a crash loop needs.
+            if (Singularity.SafeMode.get_default().allows(
+                    Singularity.SafeFeature.AUTOSTART))
+                Singularity.WallpaperManager.get_default().start_rotation();
             // Once the startup allocation storm (GL shader compile, icon and
             // theme loading) has settled, hand the freed pages back to the OS.
             GLib.Timeout.add_seconds(10, () => {
