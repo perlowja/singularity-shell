@@ -211,12 +211,28 @@ private void test_rotate_async_announces_on_the_main_loop() {
 
 // ---- reschedule(): the switch and the interval actually govern the timer ----
 
+// Rotation must not start on its own. Before a runtime consumer existed the
+// "absent means enabled" default was inert; now it would mean every install
+// that never touched the switch starts replacing a hand-picked wallpaper.
+private void test_untouched_install_does_not_rotate() {
+    string config = make_dir("config-untouched");
+    var rotator = new WallpaperRotator(config, { make_dir("registry-untouched") });
+    rotator.start();
+    assert(rotator.armed_interval_seconds == 0);
+    rotator.stop();
+}
+
 private void test_timer_follows_the_rotation_state() {
     string config = make_dir("config-timer");
     var state = new WallpaperRotationState(config);
     var rotator = new WallpaperRotator(config, { make_dir("registry-timer") });
 
-    // Default state (no files written yet): enabled, 600s.
+    // Nothing written yet: off, so no timer at all.
+    rotator.reschedule();
+    assert(rotator.armed_interval_seconds == 0);
+
+    // Turning it on is what starts it, at the default period.
+    state.set_rotate_enabled(true);
     rotator.reschedule();
     assert(rotator.armed_interval_seconds == 600);
 
@@ -254,6 +270,7 @@ public int main(string[] args) {
     Test.add_func("/wallpaper-rotator/rotate-now-silent-when-empty", test_rotate_now_announces_nothing_when_there_is_nothing);
     Test.add_func("/wallpaper-rotator/choose-next-for-excludes", test_choose_next_for_excludes_the_supplied_wallpaper);
     Test.add_func("/wallpaper-rotator/rotate-async-announces", test_rotate_async_announces_on_the_main_loop);
+    Test.add_func("/wallpaper-rotator/untouched-install-does-not-rotate", test_untouched_install_does_not_rotate);
     Test.add_func("/wallpaper-rotator/timer-follows-state", test_timer_follows_the_rotation_state);
     return Test.run();
 }

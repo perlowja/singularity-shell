@@ -76,9 +76,16 @@ namespace Singularity {
             write("collection", id);
         }
 
+        // Absent means OFF, not on. While nothing read these files the
+        // default was inert either way; now that WallpaperRotator acts on
+        // them, defaulting an absent file to enabled would mean every
+        // existing install starts replacing the wallpaper its user chose,
+        // every ten minutes, from a collection they never picked, without
+        // anyone having touched the switch. Rotation is opt-in: the file
+        // exists once the user has turned it on.
         public bool get_rotate_enabled() {
             string? value = read_trimmed("rotate-enabled");
-            if (value == null) return true;
+            if (value == null) return false;
             string lowered = value.down();
             return lowered != "0" && lowered != "false" && lowered != "off";
         }

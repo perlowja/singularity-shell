@@ -25,9 +25,11 @@ private void test_selected_collection_strips_whitespace() {
     assert(state.get_selected_collection("default") == "bing");
 }
 
-private void test_rotate_enabled_defaults_true() {
+private void test_rotate_enabled_defaults_false() {
+    // Opt-in: with no state file written, nothing should be rotating the
+    // wallpaper a user chose by hand.
     var state = new WallpaperRotationState(make_tmp_dir());
-    assert(state.get_rotate_enabled() == true);
+    assert(state.get_rotate_enabled() == false);
 }
 
 private void test_rotate_enabled_roundtrips_false() {
@@ -69,7 +71,7 @@ public int main(string[] args) {
     Test.add_func("/wallpaper-rotation-state/selected-collection-defaults-when-unset", test_selected_collection_defaults_when_unset);
     Test.add_func("/wallpaper-rotation-state/selected-collection-roundtrips", test_selected_collection_roundtrips);
     Test.add_func("/wallpaper-rotation-state/selected-collection-strips-whitespace", test_selected_collection_strips_whitespace);
-    Test.add_func("/wallpaper-rotation-state/rotate-enabled-defaults-true", test_rotate_enabled_defaults_true);
+    Test.add_func("/wallpaper-rotation-state/rotate-enabled-defaults-false", test_rotate_enabled_defaults_false);
     Test.add_func("/wallpaper-rotation-state/rotate-enabled-roundtrips-false", test_rotate_enabled_roundtrips_false);
     Test.add_func("/wallpaper-rotation-state/rotate-interval-defaults-to-600", test_rotate_interval_defaults_to_600);
     Test.add_func("/wallpaper-rotation-state/rotate-interval-roundtrips", test_rotate_interval_roundtrips);
