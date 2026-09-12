@@ -15,6 +15,7 @@ namespace Singularity {
         private string? _cached_path = null;
         private int _load_serial = 0;
         private Mutex _mutex = Mutex ();
+        private WallpaperRotator? rotator = null;
 
         public signal void wallpaper_changed();
 
@@ -31,6 +32,28 @@ namespace Singularity {
                 reload();
             });
             reload();
+        }
+
+        // Turns the Desktop page's rotation controls into actual behaviour:
+        // the rotator decides what to show and when, and this is the single
+        // place that decision is applied. It goes through the same
+        // background-picture-uri key the gallery writes, so a rotation takes
+        // the ordinary path -- reload() below, the crossfade in Background,
+        // the settings preview and the accent extraction -- rather than a
+        // second, parallel way to put an image on screen.
+        public void start_rotation() {
+            if (rotator != null) return;
+            rotator = WallpaperRotator.get_default();
+            rotator.current_uri = settings.get_string("background-picture-uri");
+            rotator.wallpaper_selected.connect((uri) => {
+                settings.set_string("background-picture-uri", uri);
+            });
+            // A wallpaper picked by hand (or by anything else) is now the
+            // current one, so the next rotation must not "change" to it.
+            settings.changed["background-picture-uri"].connect(() => {
+                rotator.current_uri = settings.get_string("background-picture-uri");
+            });
+            rotator.start();
         }
 
         public void reload() {

@@ -22,6 +22,17 @@ namespace Singularity {
             this.config_dir = config_dir;
         }
 
+        // The one place this location is spelled out. The settings page (which
+        // writes the files) and the rotator (which reads them) are in the same
+        // process but were reached through separate code paths; a second
+        // literal here is a silent disagreement about where the contract
+        // lives, with a UI that appears to save and a rotator that never sees
+        // the change.
+        public static string default_config_dir() {
+            return GLib.Path.build_filename(
+                GLib.Environment.get_user_config_dir(), "singularity", "wallpaper-rotation");
+        }
+
         private string path_for(string filename) {
             return GLib.Path.build_filename(config_dir, filename);
         }

@@ -38,6 +38,21 @@ namespace Singularity {
     // here) so this class stays testable against a temp directory with no
     // real filesystem layout assumptions.
     public class WallpaperCollections : Object {
+        // The registry roots, in the priority order parse() documents above:
+        // system data dirs first, the user's own dir last so a user-installed
+        // collection can override one bundled with the OS. Shared by the
+        // settings page and the rotator -- two copies of this list drift, and
+        // a rotator that cannot see a pack the gallery shows is exactly the
+        // shape that bug takes.
+        public static string[] default_search_roots() {
+            string[] roots = {};
+            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
+                roots += GLib.Path.build_filename(d, "singularity", "wallpaper-collections");
+            roots += GLib.Path.build_filename(
+                GLib.Environment.get_user_data_dir(), "singularity", "wallpaper-collections");
+            return roots;
+        }
+
         public static Gee.ArrayList<WallpaperCollectionInfo> parse(string[] search_roots) {
             var results = new Gee.ArrayList<WallpaperCollectionInfo>();
             var seen_ids = new Gee.HashSet<string>();

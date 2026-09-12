@@ -22,8 +22,10 @@ namespace Singularity {
         private WallpaperPreviewWidget preview_widget;
         private FlowBox wallpaper_grid;
         private Gee.ArrayList<WallpaperCollectionInfo> wallpaper_collections = new Gee.ArrayList<WallpaperCollectionInfo>();
+        // Same directory WallpaperRotator reads: these controls write the
+        // rotation state and the rotator in the shell process acts on it.
         private WallpaperRotationState rotation_state = new WallpaperRotationState(
-            GLib.Path.build_filename(GLib.Environment.get_user_config_dir(), "singularity", "wallpaper-rotation"));
+            WallpaperRotationState.default_config_dir());
         private int wallpaper_grid_generation = 0;
         private int wallpaper_accent_generation = 0;
         private string cached_wallpaper_accent = "#3584e4";
@@ -177,12 +179,8 @@ namespace Singularity {
             // installer can drop a .collection file here to have its wallpapers
             // appear in this picker (see WallpaperCollections' class doc for the
             // file format).
-            var collection_roots = new Gee.ArrayList<string>();
-            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
-                collection_roots.add(GLib.Path.build_filename(d, "singularity", "wallpaper-collections"));
-            collection_roots.add(GLib.Path.build_filename(
-                GLib.Environment.get_user_data_dir(), "singularity", "wallpaper-collections"));
-            wallpaper_collections = WallpaperCollections.parse(collection_roots.to_array());
+            wallpaper_collections = WallpaperCollections.parse(
+                WallpaperCollections.default_search_roots());
 
             var source_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             foreach (var collection in wallpaper_collections) {
