@@ -38,12 +38,12 @@ namespace Singularity {
         // contract -- the rotator script reads its market list from
         // ~/.config/ncz-wallpaper/bing-markets and accepts the literal
         // "all" (case-insensitive) as shorthand for every market below.
-        // Index 0 = "All Markets" (immediate write of "all"); index 1 =
-        // "Choose Markets..." opens a multi-select picker dialog. The
+        // id "all" = "All Markets" (immediate write of "all"); id "pick"
+        // = "Choose Markets..." opens a multi-select picker dialog. The
         // same dialog object is reused across opens and its checkboxes
         // are pre-checked from the file each time it's shown.
-        private const int BING_MARKETS_INDEX_ALL = 0;
-        private const int BING_MARKETS_INDEX_PICK = 1;
+        private const string BING_MARKETS_ID_ALL = "all";
+        private const string BING_MARKETS_ID_PICK = "pick";
         // 13 markets, grouped by region for the picker dialog. Order
         // matches the comment block in
         // cix-installer/post-install/45-wallpaper-rotator.sh's
@@ -64,9 +64,8 @@ namespace Singularity {
             + "|ko-KR\tSouth Korea\tAsia-Pacific";
         private Gee.ArrayList<BingMarketEntry> bing_markets_rows = new Gee.ArrayList<BingMarketEntry>();
         private Gee.ArrayList<string> bing_markets_regions = new Gee.ArrayList<string>();
-        private Adw.ComboRow? bing_markets_row = null;
-        private Gtk.StringList? bing_markets_model = null;
-        private Adw.AlertDialog? bing_markets_dialog = null;
+        private SelectionRow? bing_markets_row = null;
+        private ConfirmDialog? bing_markets_dialog = null;
         private Gee.ArrayList<Gtk.CheckButton> bing_markets_checkboxes = new Gee.ArrayList<Gtk.CheckButton>();
         private bool bing_markets_updating = false;
 
@@ -296,7 +295,7 @@ namespace Singularity {
                 settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
             });
 
-            // Bing markets selector. The two-entry ComboRow matches
+            // Bing markets selector. The two-entry SelectionRow matches
             // ncz-wallpaper-bing's existing "all" sentinel in
             // ~/.config/ncz-wallpaper/bing-markets (45-wallpaper-rotator.sh
             // reads that file verbatim). "All Markets" writes "all"
@@ -308,23 +307,19 @@ namespace Singularity {
             // also unconditional, and there's no clean existing
             // provider-detection hook to reuse.
             init_bing_markets_table();
-            bing_markets_model = new Gtk.StringList(null);
-            bing_markets_model.append(_("All Markets"));
-            bing_markets_model.append(_("Choose Markets…"));
-            bing_markets_row = new Adw.ComboRow();
-            bing_markets_row.title = _("Bing Markets");
-            bing_markets_row.use_markup = false;
-            bing_markets_row.model = bing_markets_model;
+            var bing_markets_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_ALL, label = _("All Markets") });
+            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_PICK, label = _("Choose Markets…") });
             // Initial selection reflects the file: "all" or absent =
             // All Markets, anything else = Choose Markets... so the
             // dialog opens against the actually-configured subset.
-            bing_markets_row.selected = bing_markets_file_is_all() ? BING_MARKETS_INDEX_ALL : BING_MARKETS_INDEX_PICK;
-            bing_markets_row.notify["selected"].connect(() => {
+            bing_markets_row = new SelectionRow.with_options(_("Bing Markets"), bing_markets_options,
+                bing_markets_file_is_all() ? BING_MARKETS_ID_ALL : BING_MARKETS_ID_PICK);
+            bing_markets_row.selected.connect((id) => {
                 if (bing_markets_updating || bing_markets_row == null) return;
-                int idx = (int) bing_markets_row.selected;
-                if (idx == BING_MARKETS_INDEX_ALL) {
+                if (id == BING_MARKETS_ID_ALL) {
                     write_bing_markets_all();
-                } else if (idx == BING_MARKETS_INDEX_PICK) {
+                } else if (id == BING_MARKETS_ID_PICK) {
                     open_bing_markets_dialog();
                 }
             });
@@ -2118,16 +2113,13 @@ namespace Singularity {
         }
 
         private void confirm_delete_pack(WallpaperCollectionInfo collection) {
-            var dialog = new Adw.MessageDialog(get_root() as Gtk.Window,
-                _("Delete “%s”?").printf(collection.name),
-                _("This permanently deletes every photo in this wallpaper pack."));
-            dialog.add_response("cancel", _("Cancel"));
-            dialog.add_response("delete", _("Delete Pack"));
-            dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE);
-            dialog.set_default_response("cancel");
-            dialog.set_close_response("cancel");
-            dialog.response.connect((response) => {
-                if (response == "delete") delete_pack(collection);
+            var app = GLib.Application.get_default() as Gtk.Application;
+            var dialog = new ConfirmDialog(app,
+                _("Delete “%s”?").printf(collection.name), "user-trash-symbolic",
+                _("This permanently deletes every photo in this wallpaper pack."),
+                _("Delete Pack"), ConfirmDialog.ActionStyle.DESTRUCTIVE);
+            dialog.response.connect((r) => {
+                if (r == ConfirmDialog.Response.PRIMARY) delete_pack(collection);
             });
             dialog.present();
         }
@@ -2236,15 +2228,13 @@ namespace Singularity {
 
         private void confirm_delete_image(WallpaperCollectionInfo collection, string uri) {
             string name = File.new_for_uri(uri).get_basename() ?? _("this photo");
-            var dialog = new Adw.MessageDialog(get_root() as Gtk.Window,
-                _("Delete “%s”?").printf(name), _("This photo will be permanently deleted."));
-            dialog.add_response("cancel", _("Cancel"));
-            dialog.add_response("delete", _("Delete Photo"));
-            dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE);
-            dialog.set_default_response("cancel");
-            dialog.set_close_response("cancel");
-            dialog.response.connect((response) => {
-                if (response != "delete") return;
+            var app = GLib.Application.get_default() as Gtk.Application;
+            var dialog = new ConfirmDialog(app,
+                _("Delete “%s”?").printf(name), "user-trash-symbolic",
+                _("This photo will be permanently deleted."),
+                _("Delete Photo"), ConfirmDialog.ActionStyle.DESTRUCTIVE);
+            dialog.response.connect((r) => {
+                if (r != ConfirmDialog.Response.PRIMARY) return;
                 bool was_active = WallpaperCollections.needs_background_fallback(
                     collection, settings.get_string("background-picture-uri")) &&
                     uri == settings.get_string("background-picture-uri");
@@ -2705,14 +2695,11 @@ namespace Singularity {
         // subset then reopens sees exactly that subset.
         private void open_bing_markets_dialog() {
             if (bing_markets_dialog == null) {
-                bing_markets_dialog = new Adw.AlertDialog(
-                    _("Choose Bing Markets"),
-                    _("Pick the regional markets Bing should pull images from. Defaults to all 13 if none are checked."));
-                bing_markets_dialog.add_response("cancel", _("Cancel"));
-                bing_markets_dialog.add_response("apply", _("Apply"));
-                bing_markets_dialog.set_response_appearance("apply", Adw.ResponseAppearance.SUGGESTED);
-                bing_markets_dialog.set_default_response("apply");
-                bing_markets_dialog.set_close_response("cancel");
+                var app = GLib.Application.get_default() as Gtk.Application;
+                bing_markets_dialog = new ConfirmDialog(app,
+                    _("Choose Bing Markets"), null,
+                    _("Pick the regional markets Bing should pull images from. Defaults to all 13 if none are checked."),
+                    _("Apply"), ConfirmDialog.ActionStyle.SUGGESTED);
 
                 // Build the picker body: one section per region with a
                 // header label and one Gtk.CheckButton per market.
@@ -2747,7 +2734,7 @@ namespace Singularity {
                 scroll.max_content_height = 480;
                 scroll.propagate_natural_height = true;
                 scroll.child = outer_box;
-                bing_markets_dialog.extra_child = scroll;
+                bing_markets_dialog.custom_area.append(scroll);
 
                 bing_markets_dialog.response.connect(on_bing_markets_dialog_response);
             }
@@ -2765,16 +2752,16 @@ namespace Singularity {
                     check.active = (code != null && code in configured);
                 }
             }
-            bing_markets_dialog.present(get_root());
+            bing_markets_dialog.present();
         }
 
         // Dialog "Apply" writes the checked markets to
-        // ~/.config/ncz-wallpaper/bing-markets. "Cancel" leaves the
-        // file alone -- the ComboRow state already reflects the
-        // user's last intent ("Choose Markets..."), but no list was
-        // changed on disk.
-        private void on_bing_markets_dialog_response(string response) {
-            if (response != "apply") return;
+        // ~/.config/ncz-wallpaper/bing-markets. "Cancel" (or dismissing
+        // the dialog) leaves the file alone -- the SelectionRow state
+        // already reflects the user's last intent ("Choose Markets..."),
+        // but no list was changed on disk.
+        private void on_bing_markets_dialog_response(ConfirmDialog.Response response) {
+            if (response != ConfirmDialog.Response.PRIMARY) return;
             string[] checked_codes = {};
             foreach (var check in bing_markets_checkboxes) {
                 if (!check.active) continue;

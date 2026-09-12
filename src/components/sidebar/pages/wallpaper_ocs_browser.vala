@@ -19,8 +19,8 @@ namespace Singularity.Shell {
         private WallpaperProviderRegistry provider_registry = new WallpaperProviderRegistry();
         private ProviderCredentialGroup openverse_credentials;
         private ProviderCredentialGroup unsplash_credentials;
-        private Adw.PreferencesGroup online_search_group;
-        private Adw.EntryRow online_search;
+        private PreferencesGroup online_search_group;
+        private EntryRow online_search;
         private Button previous_page;
         private Button next_page;
         private int photo_page = 1;
@@ -57,15 +57,12 @@ namespace Singularity.Shell {
         private string active_category_id = "";
         private HashSet<string> active_tag_ids = new HashSet<string>();
         private HashSet<string> known_tag_ids = new HashSet<string>();
-        private Adw.PreferencesGroup provider_group;
-        private Adw.PreferencesGroup filter_group;
-        private Adw.ComboRow provider_row;
-        private Adw.ComboRow category_row;
-        private Adw.ComboRow tag_row;
-        private string[] provider_ids = {};
-        private string[] category_ids = {};
-        private string[] tag_ids = {};
-        private Adw.EntryRow? search_row;
+        private PreferencesGroup provider_group;
+        private PreferencesGroup filter_group;
+        private SelectionRow provider_row;
+        private SelectionRow category_row;
+        private SelectionRow tag_row;
+        private EntryRow? search_row;
         private Button refresh;
         private Spinner spinner;
         private Label status;
@@ -120,11 +117,10 @@ namespace Singularity.Shell {
             });
             back_clicked.connect(() => view.navigate_to("desktop"));
 
-            provider_group = new Adw.PreferencesGroup();
-            provider_row = new Adw.ComboRow();
-            provider_row.title = _("Online source");
-            provider_row.use_markup = false;
-            provider_group.add(provider_row);
+            provider_group = new PreferencesGroup();
+            provider_row = new SelectionRow.with_options(_("Online source"),
+                new Gee.ArrayList<Singularity.Core.AppSettingOption>());
+            provider_group.add_row(provider_row);
             add_group(provider_group);
 
             openverse_credentials = new ProviderCredentialGroup(_("Openverse account"), _("Your email address"), false,
@@ -135,15 +131,21 @@ namespace Singularity.Shell {
                 _("Optional personal key. Without one, Stock Photos still searches Openverse. The key stays on this computer."));
             unsplash_credentials.submitted.connect((value) => configure_unsplash.begin(value));
             add_group(unsplash_credentials);
-            online_search_group = new Adw.PreferencesGroup();
-            online_search = new Adw.EntryRow();
-            online_search.title = _("Search Stock Photos");
+            online_search_group = new PreferencesGroup();
+            online_search = new EntryRow(_("Search Stock Photos"));
             online_search.text = "nature";
-            online_search.show_apply_button = true;
-            online_search.apply.connect(() => { photo_page = 1; browse_all.begin(); });
-            online_search_group.add(online_search);
-            var pagination = new Adw.ActionRow();
-            pagination.title = _("Search results");
+            // EntryRow has no Adw.EntryRow-style show_apply_button/apply
+            // pair; an explicit suffix button plus Enter-to-search covers
+            // the same interaction.
+            var online_search_apply = new Button.from_icon_name("object-select-symbolic");
+            online_search_apply.tooltip_text = _("Search");
+            online_search_apply.valign = Align.CENTER;
+            online_search_apply.add_css_class("flat");
+            online_search_apply.clicked.connect(() => { photo_page = 1; browse_all.begin(); });
+            online_search.add_suffix(online_search_apply);
+            online_search.entry_activated.connect(() => { photo_page = 1; browse_all.begin(); });
+            online_search_group.add_row(online_search);
+            var pagination = new ActionRow(_("Search results"));
             previous_page = new Button.with_label(_("Previous"));
             next_page = new Button.with_label(_("Next"));
             previous_page.valign = next_page.valign = Align.CENTER;
@@ -151,13 +153,12 @@ namespace Singularity.Shell {
             next_page.clicked.connect(() => { photo_page++; browse_all.begin(); });
             pagination.add_suffix(previous_page);
             pagination.add_suffix(next_page);
-            online_search_group.add(pagination);
+            online_search_group.add_row(pagination);
             add_group(online_search_group);
 
-            var search_group = new Adw.PreferencesGroup();
-            search_row = new Adw.EntryRow();
-            search_row.title = _("Filter loaded wallpapers");
-            search_row.changed.connect(filter_cards);
+            var search_group = new PreferencesGroup();
+            search_row = new EntryRow(_("Filter loaded wallpapers"));
+            search_row.entry_changed.connect(filter_cards);
             refresh = new Button.from_icon_name("view-refresh-symbolic");
             refresh.tooltip_text = _("Refresh / Retry");
             refresh.valign = Align.CENTER;
@@ -166,25 +167,23 @@ namespace Singularity.Shell {
                 browse_all.begin();
             });
             search_row.add_suffix(refresh);
-            search_group.add(search_row);
+            search_group.add_row(search_row);
             add_group(search_group);
 
-            var category_group = new Adw.PreferencesGroup();
-            category_row = new Adw.ComboRow();
-            category_row.title = _("Category");
-            category_row.use_markup = false;
-            category_group.add(category_row);
+            var category_group = new PreferencesGroup();
+            category_row = new SelectionRow.with_options(_("Category"),
+                new Gee.ArrayList<Singularity.Core.AppSettingOption>());
+            category_group.add_row(category_row);
             add_group(category_group);
 
-            filter_group = new Adw.PreferencesGroup();
-            tag_row = new Adw.ComboRow();
-            tag_row.title = _("Tag");
-            tag_row.use_markup = false;
-            filter_group.add(tag_row);
+            filter_group = new PreferencesGroup();
+            tag_row = new SelectionRow.with_options(_("Tag"),
+                new Gee.ArrayList<Singularity.Core.AppSettingOption>());
+            filter_group.add_row(tag_row);
             add_group(filter_group);
 
-            var results_group = new Adw.PreferencesGroup();
-            var progress_row = new Adw.PreferencesRow();
+            var results_group = new PreferencesGroup();
+            var progress_row = new PreferencesRow();
             progress_row.activatable = false;
             var progress = new Box(Orientation.HORIZONTAL, 8);
             progress.margin_start = progress.margin_end = 8;
@@ -198,7 +197,7 @@ namespace Singularity.Shell {
             status.hexpand = true;
             progress.append(status);
             progress_row.set_child(progress);
-            results_group.add(progress_row);
+            results_group.add_row(progress_row);
             grid = new FlowBox();
             grid.add_css_class("wallpaper-gallery");
             grid.valign = Align.START;
@@ -215,27 +214,30 @@ namespace Singularity.Shell {
             grid.row_spacing = 14;
             grid.margin_top = grid.margin_bottom = 10;
             grid.margin_start = grid.margin_end = 10;
-            var grid_row = new Adw.PreferencesRow();
+            var grid_row = new PreferencesRow();
             grid_row.activatable = false;
             grid_row.set_child(grid);
-            results_group.add(grid_row);
+            results_group.add_row(grid_row);
             add_group(results_group);
 
-            provider_row.notify["selected"].connect(() => {
-                if (!updating) select_provider(selected_id(provider_row, provider_ids));
+            provider_row.selected.connect((id) => {
+                if (!updating) select_provider(id);
             });
-            category_row.notify["selected"].connect(() => {
-                if (!updating) on_category_row_selected(selected_id(category_row, category_ids));
+            category_row.selected.connect((id) => {
+                if (!updating) on_category_row_selected(id);
             });
-            tag_row.notify["selected"].connect(() => {
-                if (!updating) on_tag_row_selected(selected_id(tag_row, tag_ids));
+            tag_row.selected.connect((id) => {
+                if (!updating) on_tag_row_selected(id);
             });
             initialize.begin();
         }
 
-        // ComboRow notifications fire for both user-driven changes (where
-        // updating is false) and programmatic rebuilds (where updating is
-        // true). The previous bare DropDown code had the same guard; keep it.
+        // SelectionRow's `selected` signal fires only from a user click on
+        // an expanded option (set_options()/current_value assignment during
+        // a programmatic rebuild never emit it), so this guard is stricter
+        // than it needs to be today -- kept anyway, at zero behavioural
+        // cost, as a belt-and-suspenders match for the previous
+        // ComboRow-based code's guard against reacting to its own rebuilds.
         private bool updating = false;
 
         private void update_controls() {
@@ -320,7 +322,7 @@ namespace Singularity.Shell {
             foreach (var choice in providers)
                 options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
             updating = true;
-            provider_ids = set_choices(provider_row, options, "ocs");
+            set_choices(provider_row, options, "ocs");
             updating = false;
             select_provider("ocs");
         }
@@ -495,7 +497,7 @@ namespace Singularity.Shell {
                 options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
             }
             updating = true;
-            category_ids = set_choices(category_row, options, active_category_id);
+            set_choices(category_row, options, active_category_id);
             updating = false;
         }
 
@@ -518,7 +520,7 @@ namespace Singularity.Shell {
         // the crawl off cleanly when the user starts a
         // fresh crawl.
         private async void browse_all() {
-            var selected_provider = provider_registry.lookup(selected_id(provider_row, provider_ids));
+            var selected_provider = provider_registry.lookup(provider_row.current_value);
             if (selected_provider != null && selected_provider.supports_search) {
                 yield browse_stock(selected_provider);
                 return;
@@ -527,13 +529,13 @@ namespace Singularity.Shell {
             request.cancel();
             request = new Cancellable();
             var cancel = request;
-            if (selected_id(provider_row, provider_ids) == "") {
+            if (provider_row.current_value == "") {
                 loading = false;
                 status.label = _("No usable wallpaper providers.");
                 update_controls();
                 return;
             }
-            string provider = selected_id(provider_row, provider_ids);
+            string provider = provider_row.current_value;
             // Snapshot the category list under the current generation so a
             // provider change mid-crawl cannot mutate the work queue.
             var todo = new ArrayList<string>();
@@ -714,27 +716,15 @@ namespace Singularity.Shell {
             }
         }
 
-        // ComboRow positions map to stable IDs, including the empty "Any tag"
-        // choice. Rebuilding the model preserves the selected ID.
-        private static string selected_id(Adw.ComboRow row, string[] ids) {
-            return row.selected < ids.length ? ids[row.selected] : "";
-        }
-
-        // Called under updating so model/selection notifications cannot start
-        // a crawl against a partially replaced ID map.
-        private static string[] set_choices(Adw.ComboRow row,
+        // Called under updating so a selection notification cannot start a
+        // crawl against a partially replaced option list. SelectionRow
+        // stores id/label pairs directly (current_value is the id), so
+        // unlike the previous Adw.ComboRow code there is no separate
+        // position -> id array to maintain.
+        private static void set_choices(SelectionRow row,
                 Gee.ArrayList<Singularity.Core.AppSettingOption> options, string current) {
-            var labels = new Gtk.StringList(null);
-            string[] ids = {};
-            uint selected = 0;
-            foreach (var option in options) {
-                if (option.id == current) selected = (uint) ids.length;
-                ids += option.id;
-                labels.append(option.label);
-            }
-            row.model = labels;
-            row.selected = ids.length > 0 ? selected : Gtk.INVALID_LIST_POSITION;
-            return ids;
+            row.set_options(options);
+            row.current_value = current;
         }
 
         private void rebuild_tag_row() {
@@ -746,11 +736,9 @@ namespace Singularity.Shell {
             foreach (var id in sorted) {
                 options.add(new Singularity.Core.AppSettingOption() { id = id, label = id });
             }
-            // Resolve the row's current value to the id domain (not the
-            // label) so set_options() can match it after the rebuild.
             string current_id = active_tag_ids.size > 0 ? active_tag_ids.to_array()[0] : "";
             updating = true;
-            tag_ids = set_choices(tag_row, options, current_id);
+            set_choices(tag_row, options, current_id);
             updating = false;
         }
 
