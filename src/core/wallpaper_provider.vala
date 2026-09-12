@@ -79,6 +79,26 @@ namespace Singularity {
     }
 
     public class OcsWallpaperProvider : WallpaperHelperProvider, WallpaperProvider {
+        // OCS answers `pagesize` items per request and its own default is 10,
+        // not the ~50 the aggregate crawl was written against. A single
+        // 10-item page per category is a fraction of what a category holds
+        // (pling 300 reports totalitems=1971), so the crawl was returning
+        // roughly 400 wallpapers where the browser's CRAWL_ITEM_CAP of 1500
+        // was meant to be the binding limit. Ask for the page size the crawl
+        // always assumed: still ONE request per category, so the request
+        // count and the per-category timeout budget are unchanged. The
+        // server rejects anything above 100 with statuscode 400, and the
+        // helper clamps to that.
+        //
+        // REQUIRES a helper that understands --page-size (cix-installer
+        // "fix(wallpaper): let OCS browse ask for a real page size"). An
+        // older /usr/local/bin/ncz-wallpaper-ocs exits with an argparse
+        // "unrecognized arguments" error, which surfaces per category in the
+        // browser's status line -- loudly, not as a silent short result. The
+        // two ship together from one image build (cix-installer
+        // post-install/45-wallpaper-rotator.sh installs the helper), so keep
+        // them in step rather than feature-probing on every category.
+        private const string OCS_PAGE_SIZE = "50";
         public string id { get { return "ocs"; } }
         public string display_name { owned get { return "OCS Network"; } }
         public bool requires_credentials { get { return false; } }
@@ -95,7 +115,8 @@ namespace Singularity {
                 throw new WallpaperOcsError.INVALID("Invalid aggregate OCS category identity");
             string network = identity[0];
             string network_category = identity[1];
-            string data = yield command({helper, "browse", network, network_category, "--pages", "1"}, cancel, 60, refresh);
+            string data = yield command({helper, "browse", network, network_category,
+                "--pages", "1", "--page-size", OCS_PAGE_SIZE}, cancel, 60, refresh);
             var result = new WallpaperProviderResult();
             result.items = WallpaperOcs.items(data, network, network_category);
             var response = WallpaperOcs.document(data);
