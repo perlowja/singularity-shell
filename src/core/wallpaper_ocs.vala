@@ -208,6 +208,24 @@ namespace Singularity {
         // SelectionRow. Hard-coded so the same string shows up in tests, the
         // browser, and any future call site that needs to recognise Bing.
         public const string PROVIDER_ID = "bing";
+        // The pseudo-market id for Bing's de-duplicated combined view.
+        //
+        // Bing serves the SAME photograph to several regional markets on a
+        // given day, so a gallery that merges one listing per market shows
+        // the same picture many times over -- 213 cards for 41 distinct
+        // photographs, measured on an O6N with all 14 markets enabled. The
+        // helper already maintains a content-hashed (sha256, not filename or
+        // date) de-duplicated view for the rotator; `list --consolidated`
+        // exposes it to a browser as one row per unique photograph.
+        //
+        // `ncz-wallpaper-bing markets` advertises this id as an extra first
+        // line ONLY when the user's configured markets are the "all"
+        // sentinel. That is deliberately the helper's judgement, not ours:
+        // the shell's Bing Markets picker treats an absent config file as
+        // "all" while the helper treats it as en-US only, so re-deriving the
+        // mode on this side would disagree with what is actually cached.
+        // Presence of this id in the helper's own answer is the contract.
+        public const string CONSOLIDATED_ID = "consolidated";
         // `ncz-wallpaper-bing markets` prints TSV, NOT JSON: one
         // "<market-code>\t<Human Name>" per line. The category chip row
         // expects an ArrayList<WallpaperOcsChoice> just like the OCS
@@ -231,6 +249,25 @@ namespace Singularity {
             }
             result.sort((a, b) => a.name.collate(b.name));
             return result;
+        }
+        // If markets() found the combined pseudo-market, return a list holding
+        // only it; otherwise null, meaning "browse the markets as given".
+        //
+        // The combined view is a view OVER every market, not one more market
+        // beside them, and the browser crawls one listing per choice and
+        // merges everything into a single grid -- so offering both would put
+        // the de-duplicated set and the raw per-market sets in the same grid
+        // and restore precisely the duplication the combined view exists to
+        // remove. Split out of the provider so the rule is testable without
+        // spawning the helper.
+        public static ArrayList<WallpaperOcsChoice>? combined_view(ArrayList<WallpaperOcsChoice> choices) {
+            foreach (var choice in choices) {
+                if (choice.id != CONSOLIDATED_ID) continue;
+                var only = new ArrayList<WallpaperOcsChoice>();
+                only.add(choice);
+                return only;
+            }
+            return null;
         }
         // `ncz-wallpaper-bing list <market>` returns a JSON ARRAY (no
         // schema/items wrapper, unlike the OCS helper). Each element carries:

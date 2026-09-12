@@ -307,9 +307,6 @@ namespace Singularity.Shell {
         }
 
         private async void initialize() {
-            providers.clear();
-            foreach (var provider in provider_registry.get_active())
-                providers.add(new WallpaperOcsChoice(provider.id, _(provider.display_name)));
             try {
                 uint8[] contents;
                 yield File.new_for_path("/usr/share/ncz-wallpapers/ocs-category-index.json").load_contents_async(null, out contents, null);
@@ -318,13 +315,27 @@ namespace Singularity.Shell {
             } catch (Error e) {
                 category_index = "";
             }
-            var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-            foreach (var choice in providers)
-                options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
-            updating = true;
-            set_choices(provider_row, options, "ocs");
-            updating = false;
+            rebuild_provider_row("ocs");
             select_provider("ocs");
+        }
+
+        // A provider's display name is not always known at construction: Bing
+        // only learns whether it is serving the de-duplicated combined view
+        // once its helper has answered `markets`, and renames itself to
+        // "Bing (Combined, All Markets)" when it is. So the row is rebuilt
+        // from the registry's live names rather than snapshotted once, and
+        // select_provider_choices() calls this again after a load.
+        private void rebuild_provider_row(string current) {
+            providers.clear();
+            var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            foreach (var provider in provider_registry.get_active()) {
+                providers.add(new WallpaperOcsChoice(provider.id, _(provider.display_name)));
+                options.add(new Singularity.Core.AppSettingOption() {
+                    id = provider.id, label = _(provider.display_name) });
+            }
+            updating = true;
+            set_choices(provider_row, options, current);
+            updating = false;
         }
 
         private async void credential_status() {
@@ -471,6 +482,12 @@ namespace Singularity.Shell {
             try {
                 var loaded = yield provider.choices(category_index, cancel);
                 if (gen != generation) return;
+                // The provider may have renamed itself off the back of that
+                // answer (Bing -> "Bing (Combined, All Markets)"), so the
+                // "Online source" row is re-labelled before the grid fills.
+                // Keeping the current selection is what makes this safe to do
+                // mid-flight -- it rebuilds labels, never the selection.
+                rebuild_provider_row(provider.id);
                 categories = loaded;
                 active_category_id = "";
                 active_tag_ids.clear();
@@ -496,6 +513,11 @@ namespace Singularity.Shell {
             foreach (var choice in categories) {
                 options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
             }
+            // A filter with one option filters nothing. Bing's de-duplicated
+            // combined view is a single choice by construction, and an "Any
+            // category / Combined (All Markets)" dropdown next to a grid that
+            // is already exactly that is just noise.
+            category_row.visible = categories.size > 1;
             updating = true;
             set_choices(category_row, options, active_category_id);
             updating = false;
@@ -552,7 +574,11 @@ namespace Singularity.Shell {
                 return;
             }
             loading = true;
-            status.label = _("Loading %d categories…").printf(total);
+            // Bing's combined view is a one-entry crawl, so the plural form
+            // would read "Loading 1 categories…" for every user who has all
+            // markets enabled.
+            status.label = total == 1 ? _("Loading 1 category…")
+                                      : _("Loading %d categories…").printf(total);
             update_controls();
             // Shared crawl state -- heap-allocated so the workers can read
             // it; counters + queue are protected by the mutexes inside it.
