@@ -39,10 +39,13 @@ namespace Singularity.Shell {
         // the helper or the UI thread.
         private const int CRAWL_WORKERS = 4;
         // Hard cap on the total wallpapers merged across every usable category
-        // for one provider. One page per category at ~50 items/page across
-        // ~30 usable categories lands well under 1500 in practice; the cap is
-        // a safety belt against future providers with very large per-category
-        // pages or an order of magnitude more usable categories.
+        // for one provider. One page per category at the 50 items/page the
+        // OCS backend is asked for (see OcsWallpaperProvider) across the
+        // 45 usable pling categories measured 2026-09-12 yields ~1770 unique
+        // importable items, so this cap is what actually bounds the grid --
+        // it is a real limit, not only a safety belt. Do NOT assume the
+        // helper's own page default matches: OCS serves 10 per page unless
+        // asked otherwise, which is what silently held the crawl to ~400.
         private const int CRAWL_ITEM_CAP = 1500;
         // Per-category subprocess timeout, matches the previous single-call
         // bound so a slow category can't drag a worker beyond the overall
