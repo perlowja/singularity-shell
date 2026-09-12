@@ -28,22 +28,23 @@ namespace Singularity {
     // Parses the .collection registry (INI-shaped KeyFiles, one per pack or
     // provider) into a list of WallpaperCollectionInfo, in the priority order
     // the search roots are given -- a later root's file for the same Id is
-    // ignored, matching "first root wins" so callers pass roots most-specific
-    // (e.g. per-user) LAST if they want a user override to win, or FIRST if
-    // they want the shipped default to win. desktop_page.vala's caller passes
-    // system dirs then the user dir, so a user's own collection can override
-    // one bundled with the OS.
+    // ignored, matching "first root wins" -- so callers pass roots in the
+    // order they want honoured, most-specific FIRST if a user file should
+    // beat a shipped one. default_search_roots() below passes system dirs
+    // first, which means a shipped collection wins an Id collision against a
+    // user file reusing the same Id.
     //
     // Callers pass explicit search_roots (not read from GLib.Environment
     // here) so this class stays testable against a temp directory with no
     // real filesystem layout assumptions.
     public class WallpaperCollections : Object {
-        // The registry roots, in the priority order parse() documents above:
-        // system data dirs first, the user's own dir last so a user-installed
-        // collection can override one bundled with the OS. Shared by the
-        // settings page and the rotator -- two copies of this list drift, and
-        // a rotator that cannot see a pack the gallery shows is exactly the
-        // shape that bug takes.
+        // The registry roots: system data dirs, then the user's own. parse()
+        // is first-root-wins, so on an Id collision the system collection is
+        // the one kept and a user file reusing that Id is dropped -- worth
+        // knowing before relying on the order, and unchanged here from what
+        // the settings page built inline. Shared by the settings page and the
+        // rotator, because two copies of this list drift, and a rotator that
+        // cannot see a pack the gallery shows is the shape that bug takes.
         public static string[] default_search_roots() {
             string[] roots = {};
             foreach (unowned string d in GLib.Environment.get_system_data_dirs())
