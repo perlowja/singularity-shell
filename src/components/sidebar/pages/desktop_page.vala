@@ -2024,6 +2024,13 @@ namespace Singularity {
                         try {
                             ArtistPackManager.get_default().install_async.end(res);
                             captured_btn.label = _("Installed");
+                            // A freshly-installed pack drops a new
+                            // .collection file, which collection_dirs() only
+                            // re-reads when populate_grid() runs. Settings
+                            // pages are cached, so without this the new
+                            // wallpapers stay invisible until the user
+                            // navigates away and back.
+                            populate_grid();
                         } catch (Error e) {
                             warning("Artist Pack install of %s failed: %s", captured_package, e.message);
                             captured_btn.label = _("Install Failed");
