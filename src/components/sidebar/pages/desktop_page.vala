@@ -37,6 +37,10 @@ namespace Singularity {
         private static bool wallpaper_css_loaded = false;
         private PreferencesGroup? artist_pack_group = null;
         private int artist_pack_refresh_generation = 0;
+        // Packages whose apt transaction is in flight. Survives the row
+        // teardown that a refresh performs, so a rebuilt row can render the
+        // install state the freshly-fetched inventory does not know about yet.
+        private HashSet<string> artist_packs_installing = new HashSet<string>();
 
         // Appends a rounded-rectangle sub-path to the Cairo context.
         private static void round_rect(Cairo.Context ctx, double x, double y, double w, double h, double r) {
@@ -2012,39 +2016,73 @@ namespace Singularity {
             foreach (var pack in packs) {
                 var row = new ActionRow(pack.title, pack.summary);
                 row.activatable = false;
-                var install_btn = new Button.with_label(pack.installed ? _("Installed") : _("Install"));
-                install_btn.sensitive = !pack.installed;
+                // An apt transaction started before this refresh is still
+                // running, and the inventory we just fetched predates it, so
+                // it still reports the pack as not installed. Trust
+                // artist_packs_installing over that stale answer: handing the
+                // user a fresh enabled Install button here is what lets a
+                // second concurrent install be launched.
+                bool installing = artist_packs_installing.contains(pack.package);
+                var install_btn = new Button.with_label(
+                    installing ? _("Installing…") : (pack.installed ? _("Installed") : _("Install")));
+                install_btn.sensitive = !installing && !pack.installed;
                 string captured_package = pack.package;
                 string captured_source = pack.source;
                 Button captured_btn = install_btn;
                 install_btn.clicked.connect(() => {
-                    captured_btn.sensitive = false;
-                    captured_btn.label = _("Installing…");
-                    ArtistPackManager.get_default().install_async.begin(captured_package, captured_source, null, (obj, res) => {
-                        try {
-                            ArtistPackManager.get_default().install_async.end(res);
-                            captured_btn.label = _("Installed");
-                            // A freshly-installed pack drops a new
-                            // .collection file, which collection_dirs() only
-                            // re-reads when populate_grid() runs. Settings
-                            // pages are cached, so without this the new
-                            // wallpapers stay invisible until the user
-                            // navigates away and back.
-                            populate_grid();
-                        } catch (Error e) {
-                            warning("Artist Pack install of %s failed: %s", captured_package, e.message);
-                            captured_btn.label = _("Install Failed");
-                            GLib.Timeout.add_seconds(4, () => {
-                                captured_btn.label = _("Install");
-                                captured_btn.sensitive = true;
-                                return GLib.Source.REMOVE;
-                            });
-                        }
-                    });
+                    start_artist_pack_install(captured_package, captured_source, captured_btn);
                 });
                 row.add_suffix(install_btn);
                 artist_pack_group.add_row(row);
             }
+        }
+
+        // Installs one pack and settles the row it was started from.
+        //
+        // The button is only a safe thing to touch for as long as its row
+        // survives, and the header Refresh button destroys it: it calls
+        // populate_artist_packs_async(), which clears the whole group. So
+        // record the package in artist_packs_installing for the rebuild to
+        // read, and remember the refresh generation we started under -- if it
+        // moved, the button we hold is detached and relabelling it would leave
+        // the visible row stale, so repopulate from the (now current)
+        // inventory instead.
+        private void start_artist_pack_install(string package, string source, Button btn) {
+            if (!artist_packs_installing.add(package)) return;
+            int gen = artist_pack_refresh_generation;
+            btn.sensitive = false;
+            btn.label = _("Installing…");
+            ArtistPackManager.get_default().install_async.begin(package, source, null, (obj, res) => {
+                artist_packs_installing.remove(package);
+                bool row_alive = (gen == artist_pack_refresh_generation);
+                try {
+                    ArtistPackManager.get_default().install_async.end(res);
+                    if (row_alive) {
+                        btn.label = _("Installed");
+                    } else {
+                        populate_artist_packs_async.begin();
+                    }
+                    // A freshly-installed pack drops a new .collection file,
+                    // which collection_dirs() only re-reads when
+                    // populate_grid() runs. Settings pages are cached, so
+                    // without this the new wallpapers stay invisible until the
+                    // user navigates away and back.
+                    populate_grid();
+                } catch (Error e) {
+                    warning("Artist Pack install of %s failed: %s", package, e.message);
+                    if (!row_alive) {
+                        populate_artist_packs_async.begin();
+                        return;
+                    }
+                    btn.label = _("Install Failed");
+                    GLib.Timeout.add_seconds(4, () => {
+                        if (gen != artist_pack_refresh_generation) return GLib.Source.REMOVE;
+                        btn.label = _("Install");
+                        btn.sensitive = true;
+                        return GLib.Source.REMOVE;
+                    });
+                }
+            });
         }
 
         private void populate_grid() {
