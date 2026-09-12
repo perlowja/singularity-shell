@@ -1,19 +1,19 @@
 using Gtk;
+using Singularity.Widgets;
 
 namespace Singularity.Shell {
     // Shared credential UI: providers choose an email or a secret-key row
     // and handle submission without putting credentials in command arguments.
-    public class ProviderCredentialGroup : Adw.PreferencesGroup {
+    public class ProviderCredentialGroup : PreferencesGroup {
         public signal void submitted(string value);
-        private Adw.EntryRow entry;
+        private EntryRow entry;
         private Button submit;
-        private Adw.ActionRow state;
+        private ActionRow state;
 
         public ProviderCredentialGroup(string provider, string prompt, bool secret, string explanation) {
             title = provider;
             description = explanation;
-            entry = secret ? new Adw.PasswordEntryRow() : new Adw.EntryRow();
-            entry.title = prompt;
+            entry = secret ? new PasswordRow(prompt) : new EntryRow(prompt);
             submit = new Button.with_label(_("Submit"));
             submit.valign = Align.CENTER;
             submit.clicked.connect(() => {
@@ -21,11 +21,10 @@ namespace Singularity.Shell {
                 if (value != "") submitted(value);
             });
             entry.add_suffix(submit);
-            add(entry);
-            state = new Adw.ActionRow();
-            state.use_markup = false;
+            add_row(entry);
+            state = new ActionRow("");
             state.visible = false;
-            add(state);
+            add_row(state);
         }
 
         public void set_state(string message, bool can_submit) {
