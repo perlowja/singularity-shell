@@ -97,10 +97,18 @@ namespace Singularity.Shell {
         // this page sits cached: the in-memory "added" set still claims the
         // re-imported keys are present, so their cards render greyed out
         // ("Added", disabled) even though the files backing that claim are
-        // long gone. Re-run discover() (and force a re-browse so the grid's
-        // cards are rebuilt with fresh is_added() state baked into both
-        // their label and sensitivity) every time this page becomes visible
-        // again, not just once at construction.
+        // long gone. Re-run discover() (and re-browse so the grid's cards are
+        // rebuilt with fresh is_added() state baked into both their label and
+        // sensitivity) every time this page becomes visible again, not just
+        // once at construction.
+        //
+        // That re-browse is cache-aware: a crawl younger than
+        // WallpaperBrowseCache.TTL_SECONDS repaints the grid from disk instead
+        // of re-crawling every category over the network, which is what makes
+        // a repeat visit instant. It deliberately does NOT set force_refresh:
+        // returning to a page the user has already seen is not a request for
+        // fresher data, it is a request to see the page again. The Refresh
+        // button is the explicit way to bypass the cache.
         private bool mapped_once = false;
 
         public WallpaperOcsBrowserPage(SettingsView view, string[] roots) {
@@ -112,7 +120,6 @@ namespace Singularity.Shell {
             this.map.connect(() => {
                 if (!mapped_once) { mapped_once = true; return; }
                 imports.discover(WallpaperCollections.parse(collection_roots));
-                force_refresh = true;
                 browse_all.begin();
             });
             back_clicked.connect(() => view.navigate_to("desktop"));
@@ -160,7 +167,11 @@ namespace Singularity.Shell {
             search_row = new EntryRow(_("Filter loaded wallpapers"));
             search_row.entry_changed.connect(filter_cards);
             refresh = new Button.from_icon_name("view-refresh-symbolic");
-            refresh.tooltip_text = _("Refresh / Retry");
+            // force_refresh does two things: it bypasses the on-disk crawl
+            // cache in browse_all(), and it sets NCZ_WALLPAPER_REFRESH for the
+            // helper so its own cache is bypassed too. Refresh is therefore
+            // the one path that is guaranteed to hit the network.
+            refresh.tooltip_text = _("Refresh now (ignore cached results)");
             refresh.valign = Align.CENTER;
             refresh.clicked.connect(() => {
                 force_refresh = true;
@@ -565,8 +576,20 @@ namespace Singularity.Shell {
             int total = todo.size;
             cards.clear();
             grid.remove_all();
+            // The category side-map is keyed by item, not by provider, so it
+            // has to be dropped with the cards it described -- otherwise a
+            // cache load or a provider switch repopulates cards while stale
+            // entries from the previous crawl still answer card_matches().
+            item_category.clear();
             known_tag_ids.clear();
             rebuild_tag_row();
+            // A crawl younger than its TTL is repainted from disk; the network
+            // crawl below only runs when that cache is stale, absent, corrupt,
+            // or explicitly bypassed by Refresh. Every filter (category, tag,
+            // free text) is applied client-side to this same merged list, so
+            // one cache entry per provider serves every filter combination --
+            // changing a filter is a different VIEW, never a different crawl.
+            if (!force_refresh && load_cached(provider, gen, cancel)) return;
             if (total == 0) {
                 loading = false;
                 status.label = _("No usable wallpaper categories for this provider.");
@@ -625,8 +648,53 @@ namespace Singularity.Shell {
             if (state.errors.size > 0)
                 status.label = _("%d wallpapers loaded · %s").printf(cards.size, string.joinv(" · ", state.errors.to_array()));
             update_controls();
+            // Persist what the crawl actually merged, so the next visit can
+            // skip it. A cancelled crawl is a partial view of the user's
+            // intent, not a result, and is never written. A crawl that lost
+            // categories to errors is written but marked partial, which gives
+            // it a much shorter TTL than a clean one.
+            if (!cancel.is_cancelled() && cards.size > 0)
+                store_cache(provider, state.errors.size > 0);
             // Three bounded streaming requests, never one worker per tile.
             for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
+        }
+
+        // Repaint the grid from the on-disk crawl cache. False means "no
+        // usable cache" -- no file, a stale one, or one that would not parse
+        // -- and browse_all() then crawls exactly as it did before.
+        private bool load_cached(string provider, int gen, Cancellable cancel) {
+            int64 at = WallpaperBrowseCache.now();
+            var cached = WallpaperBrowseCache.load(provider, at);
+            if (cached == null || cached.entries.size == 0) return false;
+            foreach (var entry in cached.entries) {
+                bool card_new_tag;
+                add_card(entry.item, entry.category, out card_new_tag);
+            }
+            loading = false;
+            rebuild_tag_row();
+            filter_cards();
+            // filter_cards() has just written the shown/loaded counts; append
+            // the provenance so a cached grid never silently poses as a fresh
+            // crawl, and name the way out of it.
+            status.label = _("%d wallpapers · %s · Refresh for new uploads").printf(
+                cards.size, cache_age(cached.age(at)));
+            update_controls();
+            for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
+            return true;
+        }
+
+        private void store_cache(string provider, bool partial) {
+            var snapshot = new ArrayList<WallpaperBrowseCacheEntry>();
+            foreach (var card in cards)
+                snapshot.add(new WallpaperBrowseCacheEntry(card.item,
+                    item_category.has_key(card.item.key) ? item_category[card.item.key] : ""));
+            WallpaperBrowseCache.save(provider, snapshot, partial, WallpaperBrowseCache.now());
+        }
+
+        private static string cache_age(int64 seconds) {
+            if (seconds < 120) return _("loaded just now");
+            if (seconds < 7200) return _("loaded %d minutes ago").printf((int) (seconds / 60));
+            return _("loaded %d hours ago").printf((int) (seconds / 3600));
         }
 
         // Shared, heap-allocated crawl state. Vala forbids ref/out parameters

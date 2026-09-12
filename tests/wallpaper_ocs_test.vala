@@ -433,6 +433,139 @@ private void test_bing_items_rejects_bad_pinned_field() {
     assert(rejected);
 }
 
+private Gee.ArrayList<WallpaperBrowseCacheEntry> cache_fixture() {
+    var entries = new Gee.ArrayList<WallpaperBrowseCacheEntry>();
+    var ocs = new WallpaperItem();
+    ocs.provider_id = "pling";
+    ocs.id = "123";
+    ocs.name = "Space & <Stars>";
+    ocs.author = "Ada";
+    ocs.license = "CC-BY-4.0";
+    ocs.preview = "https://example.test/preview.jpg";
+    ocs.full_res_url = "https://example.test/full.jpg";
+    ocs.page_url = "https://example.test/page";
+    ocs.tags = { "nature", "4K" };
+    ocs.width = 3840;
+    ocs.height = 2160;
+    entries.add(new WallpaperBrowseCacheEntry(ocs, "pling:300"));
+    var bing = new WallpaperItem();
+    bing.provider_id = "bing";
+    bing.id = "en-US:OHR.Example";
+    bing.name = "A lake";
+    bing.market = "en-US";
+    bing.archive_date = "20260818";
+    bing.bing_image_id = "OHR.Example";
+    bing.thumbnail_path = "/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg";
+    bing.pinned = true;
+    entries.add(new WallpaperBrowseCacheEntry(bing, "en-US"));
+    return entries;
+}
+
+private void test_cache_roundtrip() {
+    string data = WallpaperBrowseCache.serialize("ocs", cache_fixture(), false, 1700000000);
+    try {
+        var cache = WallpaperBrowseCache.parse(data, "ocs");
+        assert(cache.provider == "ocs");
+        assert(cache.created == 1700000000);
+        assert(!cache.partial);
+        assert(cache.entries.size == 2);
+        var first = cache.entries[0];
+        assert(first.category == "pling:300");
+        assert(first.item.key == "pling:123");
+        assert(first.item.name == "Space & <Stars>");
+        assert(first.item.author == "Ada");
+        assert(first.item.license == "CC-BY-4.0");
+        assert(first.item.preview == "https://example.test/preview.jpg");
+        assert(first.item.full_res_url == "https://example.test/full.jpg");
+        assert(first.item.page_url == "https://example.test/page");
+        assert(first.item.width == 3840 && first.item.height == 2160);
+        assert(first.item.tags.length == 2 && first.item.tags[0] == "nature" && first.item.tags[1] == "4K");
+        // Bing-only fields survive the round trip; without them a cached Bing
+        // grid would lose its local thumbnails and its pin state.
+        var second = cache.entries[1];
+        assert(second.category == "en-US");
+        assert(second.item.key == "bing:en-US:OHR.Example");
+        assert(second.item.market == "en-US");
+        assert(second.item.archive_date == "20260818");
+        assert(second.item.bing_image_id == "OHR.Example");
+        assert(second.item.thumbnail_path.has_suffix("20260818_400x240.jpg"));
+        assert(second.item.pinned);
+    } catch (Error e) { error("roundtrip: %s", e.message); }
+}
+
+private void test_cache_rejects_corrupt() {
+    string good = WallpaperBrowseCache.serialize("ocs", cache_fixture(), false, 1700000000);
+    string[] bad = {
+        "", "not json", "[]", "{}", "null",
+        good.replace("\"schema\":1", "\"schema\":2"),
+        good.replace("\"created\":1700000000", "\"created\":\"soon\""),
+        good.replace("\"created\":1700000000", "\"created\":-5"),
+        good.replace("\"partial\":false", "\"partial\":\"no\""),
+        good.replace("\"items\":[", "\"items\":{\"a\":["),
+        good.replace("\"pinned\":true", "\"pinned\":1"),
+        good.replace("\"id\":\"123\"", "\"id\":\"\""),
+        good.replace("\"tags\":[\"nature\",\"4K\"]", "\"tags\":42"),
+        // Truncation is the realistic corruption: a write interrupted by a
+        // full disk or a crash leaves a prefix of valid JSON.
+        good.substring(0, good.length / 2)
+    };
+    foreach (string data in bad) {
+        bool rejected = false;
+        try { WallpaperBrowseCache.parse(data, "ocs"); } catch (Error e) { rejected = true; }
+        assert(rejected);
+    }
+    // A cache written for another provider must not be served to this one.
+    bool wrong_provider = false;
+    try { WallpaperBrowseCache.parse(good, "bing"); } catch (Error e) { wrong_provider = true; }
+    assert(wrong_provider);
+}
+
+private void test_cache_ttl() {
+    var entries = cache_fixture();
+    try {
+        var fresh = WallpaperBrowseCache.parse(
+            WallpaperBrowseCache.serialize("ocs", entries, false, 1700000000), "ocs");
+        assert(fresh.fresh(1700000000));
+        assert(fresh.fresh(1700000000 + WallpaperBrowseCache.TTL_SECONDS - 1));
+        assert(!fresh.fresh(1700000000 + WallpaperBrowseCache.TTL_SECONDS));
+        // A cache stamped in the future is a clock change, not a fresh crawl.
+        assert(!fresh.fresh(1700000000 - 1));
+        assert(fresh.age(1700000000 + 300) == 300);
+        // A crawl that lost categories expires far sooner, so a transient
+        // network failure cannot pin a degraded grid for the full TTL.
+        var partial = WallpaperBrowseCache.parse(
+            WallpaperBrowseCache.serialize("ocs", entries, true, 1700000000), "ocs");
+        assert(partial.partial);
+        assert(partial.fresh(1700000000 + WallpaperBrowseCache.PARTIAL_TTL_SECONDS - 1));
+        assert(!partial.fresh(1700000000 + WallpaperBrowseCache.PARTIAL_TTL_SECONDS));
+    } catch (Error e) { error("ttl: %s", e.message); }
+}
+
+private void test_cache_read_write() {
+    string root = "";
+    try {
+        root = DirUtils.make_tmp("wallpaper-cache-XXXXXX");
+        // Nested path: write() owns creating the directory, as it must on a
+        // machine that has never opened this page.
+        string path = Path.build_filename(root, "wallpaper-browse", "ocs.json");
+        assert(WallpaperBrowseCache.read(path, "ocs", 1700000000) == null);
+        assert(WallpaperBrowseCache.write(path, "ocs", cache_fixture(), false, 1700000000));
+        var loaded = WallpaperBrowseCache.read(path, "ocs", 1700000000 + 60);
+        assert(loaded != null);
+        assert(loaded.entries.size == 2);
+        // Past its TTL the same file reads as absent rather than as an error.
+        assert(WallpaperBrowseCache.read(path, "ocs", 1700000000 + WallpaperBrowseCache.TTL_SECONDS) == null);
+        // A corrupt file degrades to "no cache", never to a throw.
+        FileUtils.set_contents(path, "{\"schema\":1,\"provider\":\"ocs\",");
+        assert(WallpaperBrowseCache.read(path, "ocs", 1700000000) == null);
+        // A provider id that is not filename-safe is refused outright.
+        assert(!WallpaperBrowseCache.write(Path.build_filename(root, "x.json"), "../escape",
+            cache_fixture(), false, 1700000000));
+        assert(WallpaperBrowseCache.path_for("ocs").has_suffix("singularity/wallpaper-browse/ocs.json"));
+    } catch (Error e) { error("read-write: %s", e.message); }
+    remove_tree(root);
+}
+
 public int main(string[] args) {
     Test.init(ref args);
     Test.add_func("/providers/release-registry", () => {
@@ -516,5 +649,9 @@ public int main(string[] args) {
         remove_tree(root);
     });
     Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-accepts-deployed-legacy-shape", test_import_complete_accepts_deployed_legacy_shape); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path); Test.add_func("/ocs/bing-markets-parses-tsv", test_bing_markets_parses_tsv); Test.add_func("/ocs/bing-markets-tolerates-blank-lines-and-whitespace", test_bing_markets_tolerates_blank_lines_and_whitespace); Test.add_func("/ocs/bing-combined-view-absent-when-helper-omits-it", test_bing_combined_view_absent_when_helper_omits_it); Test.add_func("/ocs/bing-combined-view-replaces-the-market-list", test_bing_combined_view_replaces_the_market_list); Test.add_func("/ocs/bing-markets-empty", test_bing_markets_empty); Test.add_func("/ocs/bing-items-parses-list-array", test_bing_items_parses_list_array); Test.add_func("/ocs/bing-items-empty-array", test_bing_items_empty_array); Test.add_func("/ocs/bing-items-rejects-non-array-root", test_bing_items_rejects_non_array_root); Test.add_func("/ocs/bing-items-rejects-bad-pinned-field", test_bing_items_rejects_bad_pinned_field);
+    Test.add_func("/browse-cache/roundtrip", test_cache_roundtrip);
+    Test.add_func("/browse-cache/rejects-corrupt", test_cache_rejects_corrupt);
+    Test.add_func("/browse-cache/ttl", test_cache_ttl);
+    Test.add_func("/browse-cache/read-write", test_cache_read_write);
     return Test.run();
 }
