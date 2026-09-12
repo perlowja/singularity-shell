@@ -1,6 +1,7 @@
 using Gtk;
 using GtkLayerShell;
 using Gee;
+using Singularity.Widgets;
 
 namespace Singularity {
 
@@ -21,10 +22,28 @@ namespace Singularity {
         // Sensor counts vary by two orders of magnitude across platforms, so
         // the detail list is capped rather than unbounded.
         private const int MAX_ROWS_PER_GROUP = 6;
+        // Gdk.Monitor geometry is expressed in logical pixels.  Two 340px
+        // columns plus the popover margins fit comfortably from 1280px up;
+        // below that, keeping one column avoids a popover that dominates the
+        // display.
+        private const int TWO_COLUMN_MIN_WIDTH = 1280;
+        private const int DETAIL_COLUMN_WIDTH = 340;
+        private const int DETAIL_COLUMN_SPACING = 18;
+        private const int DETAIL_SCREEN_MARGIN = 96;
 
         private MenuButton button;
         private Label summary_label;
         private Box detail_box;
+        private Box detail_toggle_box;
+        private Box detail_columns_box;
+        private Box detail_left;
+        private Box detail_right;
+        private Box detail_target;
+        private ScrolledWindow detail_scroller;
+        private bool use_two_columns = false;
+        private int left_row_count = 0;
+        private int right_row_count = 0;
+        private static Gtk.CssProvider? compact_rows_provider = null;
         private SensorMonitor monitor;
         private bool show_frequency = true;
         private bool show_utilization = true;
@@ -56,47 +75,67 @@ namespace Singularity {
         public SensorsIndicator(GLib.Settings settings) {
             Object(orientation: Orientation.HORIZONTAL, spacing: 0);
             valign = Align.CENTER;
-            add_css_class("sensors-indicator");
             this.settings = settings;
 
             summary_label = new Label("");
-            summary_label.add_css_class("sensors-summary");
-            // Pango markup, not plain text: the compact chip colours each
-            // metric's dot + value independently (temperature by thermal
-            // severity, memory by capacity, CPU/frequency neutral) so a
-            // glance shows WHICH figure needs attention, not just that one
-            // does.
-            summary_label.use_markup = true;
+            // Match the panel clock and app-title typography exactly: 14px,
+            // bold, and (critically) inherited colour so the panel's bright-
+            // wallpaper and flat-panel contrast rules continue to work.
+            summary_label.add_css_class("clock");
 
             button = new MenuButton();
-            button.add_css_class("flat");
+            // Use the same padding, hover treatment and active treatment as
+            // the clock instead of maintaining a one-off sensors pill.
+            button.add_css_class("clock-button");
             button.tooltip_text = _("Temperatures and CPU clock");
             button.child = summary_label;
             append(button);
 
+            // Real Adw rows, with the original compact panel density rather
+            // than preferences-page group chrome and separators.
+            if (compact_rows_provider == null) {
+                compact_rows_provider = new Gtk.CssProvider();
+                compact_rows_provider.load_from_string(
+                    "row.sensors-compact-row { min-height: 0; padding: 0; " +
+                    "background: transparent; border: 0; box-shadow: none; }");
+                Gtk.StyleContext.add_provider_for_display(get_display(),
+                    compact_rows_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+            }
             detail_box = new Box(Orientation.VERTICAL, 4);
             detail_box.margin_top = 10;
             detail_box.margin_bottom = 10;
             detail_box.margin_start = 12;
             detail_box.margin_end = 12;
+
+            // The control spans the popover.  Variable-height sensor sections
+            // then flow into independent vertical columns; unlike a FlowBox
+            // row, a tall CPU section does not leave a matching blank hole
+            // beneath a short GPU section in the opposite column.
+            detail_toggle_box = new Box(Orientation.VERTICAL, 4);
+            detail_columns_box = new Box(Orientation.HORIZONTAL,
+                                         DETAIL_COLUMN_SPACING);
+            detail_columns_box.homogeneous = true;
+            detail_left = new Box(Orientation.VERTICAL, 8);
+            detail_right = new Box(Orientation.VERTICAL, 8);
+            detail_left.hexpand = true;
+            detail_right.hexpand = true;
+            detail_columns_box.append(detail_left);
+            detail_columns_box.append(detail_right);
+            detail_box.append(detail_toggle_box);
+            detail_box.append(detail_columns_box);
+            detail_target = detail_left;
+
             Popover popover = new Popover();
-            // Bound the WHOLE popover, not just each group.
-            //
-            // The per-group cap (MAX_ROWS_PER_GROUP) limits any single
-            // section, but nine sensor kinds plus headings plus the clock
-            // section still add up: on the 55-sensor Qualcomm topology this
-            // change explicitly targets, the aggregate reaches roughly 70
-            // rows and runs off the bottom of the screen, making the lower
-            // groups unreachable -- capped or not. propagate_natural_height
-            // keeps small machines rendering exactly as before (the popover
-            // shrinks to fit two or three groups); only once the content
-            // genuinely exceeds max_content_height does it start scrolling.
-            var detail_scroller = new ScrolledWindow();
+            // Natural size is the ordinary presentation.  Automatic vertical
+            // scrolling remains only as a safety net for unusually many rows
+            // on a short display; configure_detail_layout() derives the cap
+            // from the monitor every time the popover opens.
+            detail_scroller = new ScrolledWindow();
             detail_scroller.child = detail_box;
             detail_scroller.propagate_natural_height = true;
             detail_scroller.propagate_natural_width = true;
-            detail_scroller.max_content_height = 600;
             detail_scroller.hscrollbar_policy = PolicyType.NEVER;
+            detail_scroller.vscrollbar_policy = PolicyType.AUTOMATIC;
             popover.child = detail_scroller;
             button.popover = popover;
 
@@ -118,6 +157,7 @@ namespace Singularity {
             // before.
             popover.notify["visible"].connect(() => {
                 if (popover.visible) {
+                    configure_detail_layout();
                     monitor.refresh();
                 }
             });
@@ -228,6 +268,53 @@ namespace Singularity {
                 : "%d MHz".printf(khz / 1000);
         }
 
+        /** Find the monitor that owns the panel surface. */
+        private Gdk.Monitor? panel_monitor() {
+            var window = get_root() as Gtk.Window;
+            if (window != null) {
+                var surface = window.get_surface();
+                if (surface != null) {
+                    var display = surface.get_display();
+                    var at_surface = display.get_monitor_at_surface(surface);
+                    if (at_surface != null) return at_surface;
+                }
+            }
+
+            // The widget can briefly have no root during construction.  The
+            // first display monitor is the same fallback used elsewhere in
+            // the shell for pre-map sizing.
+            var display = Gdk.Display.get_default();
+            if (display != null && display.get_monitors().get_n_items() > 0) {
+                return display.get_monitors().get_item(0) as Gdk.Monitor;
+            }
+            return null;
+        }
+
+        /** Re-evaluate width and overflow bounds on every popover opening. */
+        private void configure_detail_layout() {
+            int screen_width = 1024;
+            int screen_height = 768;
+            var target_monitor = panel_monitor();
+            if (target_monitor != null) {
+                var geometry = target_monitor.get_geometry();
+                screen_width = geometry.width;
+                screen_height = geometry.height;
+            }
+
+            use_two_columns = screen_width >= TWO_COLUMN_MIN_WIDTH;
+            detail_right.visible = use_two_columns;
+            detail_columns_box.spacing = use_two_columns
+                ? DETAIL_COLUMN_SPACING : 0;
+
+            int content_width = use_two_columns
+                ? DETAIL_COLUMN_WIDTH * 2 + DETAIL_COLUMN_SPACING
+                : DETAIL_COLUMN_WIDTH;
+            detail_scroller.min_content_width = content_width;
+            detail_scroller.max_content_width = content_width;
+            detail_scroller.max_content_height = int.max(320,
+                screen_height - DETAIL_SCREEN_MARGIN);
+        }
+
         /**
          * True when utilisation has something real to show.
          *
@@ -240,40 +327,12 @@ namespace Singularity {
             return show_utilization && util.memory_fraction >= 0.0;
         }
 
-        /**
-         * Resolve a NAMED theme colour (e.g. "success_color") to a hex
-         * string for Pango markup.
-         *
-         * Markup spans take a literal colour, not a CSS variable, so the
-         * value has to be looked up at render time rather than written once
-         * -- this is what keeps it honest across a light/dark theme switch
-         * instead of baking in a colour that only happened to be right when
-         * the code was written. Falls back to the theme's plain text colour
-         * if the named token is ever missing, so a lookup failure degrades
-         * to unstyled text rather than invalid markup.
-         */
-        private string theme_color_hex(string color_name) {
-            // lookup_color lives on StyleContext, not on Widget directly
-            // (deprecated since GTK 4.10, but still the working path -- no
-            // non-deprecated replacement exists for resolving a NAMED CSS
-            // colour at runtime, only get_color() for the resolved `color`
-            // property itself).
-            var style = summary_label.get_style_context();
-            Gdk.RGBA rgba;
-            if (!style.lookup_color(color_name, out rgba)) {
-                if (!style.lookup_color("text_color", out rgba)) {
-                    return "#ffffff";
-                }
-            }
-            return "#%02x%02x%02x".printf(
-                (uint) Math.round(rgba.red * 255),
-                (uint) Math.round(rgba.green * 255),
-                (uint) Math.round(rgba.blue * 255));
-        }
-
-        /** One coloured "dot value" segment for the compact chip. */
-        private string markup_segment(string color_hex, string text) {
-            return "<span color='%s'>\u25cf %s</span>".printf(color_hex, Markup.escape_text(text));
+        /** Append one plain panel-coloured "dot value" segment. */
+        private static void append_summary_segment(StringBuilder summary,
+                                                    string text) {
+            if (summary.len > 0) summary.append("  ");
+            summary.append("\u25cf ");
+            summary.append(text);
         }
 
         private static int percent_of(double fraction) {
@@ -352,16 +411,6 @@ namespace Singularity {
                 ? monitor.cpu_millidegrees
                 : monitor.system_millidegrees;
 
-            // Colour the chip on the bar, not only the rows inside the
-            // popover. A temperature that needs attention is worth noticing
-            // WITHOUT opening anything -- a popover nobody opens conveys
-            // nothing. The severity shown is the one belonging to the sensor
-            // whose number is displayed, so the colour and the figure always
-            // describe the same sensor.
-            SensorKind primary_kind = monitor.cpu_millidegrees >= 0
-                ? SensorKind.CPU
-                : SensorKind.SYSTEM;
-
             // Last resort: the hottest reading of ANY kind.
             //
             // available == true only means SOMETHING is readable, not that a
@@ -370,45 +419,23 @@ namespace Singularity {
             // -1, and with cpufreq also unavailable the chip renders as an
             // empty label -- a blank control sitting next to a popover full
             // of perfectly good temperatures. Showing the hottest reading is
-            // both non-empty and the one worth surfacing; taking its kind too
-            // keeps the colour describing the number, which is the invariant
-            // the severity block below depends on.
+            // both non-empty and the one worth surfacing.
             if (primary < 0) {
                 foreach (SensorReading reading in monitor.readings()) {
                     if (reading.millidegrees > primary) {
                         primary = reading.millidegrees;
-                        primary_kind = reading.kind;
                     }
                 }
             }
 
-            Severity primary_severity = Severity.NORMAL;
-            foreach (SensorReading reading in monitor.readings()) {
-                if (reading.kind == primary_kind
-                    && reading.millidegrees == primary) {
-                    primary_severity = reading.severity;
-                    break;
-                }
-            }
-            // Drop the whole-label severity class the old plain-text chip
-            // used: each metric below now carries its OWN colour via
-            // markup, which is strictly more informative (which figure is
-            // hot, not just that something is) and would otherwise fight
-            // the per-segment colours for the eye.
-            summary_label.remove_css_class("warning");
-            summary_label.remove_css_class("error");
-
-            StringBuilder markup = new StringBuilder();
+            // Keep the compact values, but let the panel's established
+            // adaptive foreground colour style every segment consistently.
+            StringBuilder summary = new StringBuilder();
             if (primary >= 0) {
-                markup.append(markup_segment(theme_color_hex(severity_color_name(primary_severity)),
-                                              format_celsius(primary)));
+                append_summary_segment(summary, format_celsius(primary));
             }
             if (show_frequency && monitor.cpu_khz > 0) {
-                if (markup.len > 0) markup.append("  ");
-                // Clock speed is informational, never an alarm colour --
-                // same reasoning as CPU below: running near the maximum is
-                // the CPU doing its job, not a problem to flag red.
-                markup.append(markup_segment(theme_color_hex("accent_color"), format_clock(monitor.cpu_khz)));
+                append_summary_segment(summary, format_clock(monitor.cpu_khz));
             }
             // Utilisation in the compact chip, not only in the popover.
             //
@@ -419,23 +446,15 @@ namespace Singularity {
             // has no swap.
             if (show_utilization) {
                 if (util.cpu_fraction >= 0.0) {
-                    if (markup.len > 0) markup.append("  ");
-                    // CPU busy is never severity-coloured: a core at 100% is
-                    // doing its job, and painting that red would train the
-                    // user to ignore the colour that does mean something --
-                    // the same reasoning the popover's Clocks section and
-                    // capacity_severity() already document.
-                    markup.append(markup_segment(theme_color_hex("accent_color"),
-                                                  _("CPU %d%%").printf(percent_of(util.cpu_fraction))));
+                    append_summary_segment(summary,
+                        _("CPU %d%%").printf(percent_of(util.cpu_fraction)));
                 }
                 if (util.memory_fraction >= 0.0) {
-                    if (markup.len > 0) markup.append("  ");
-                    Severity mem_severity = capacity_severity(util.memory_fraction);
-                    markup.append(markup_segment(theme_color_hex(severity_color_name(mem_severity)),
-                                                  _("MEM %d%%").printf(percent_of(util.memory_fraction))));
+                    append_summary_segment(summary,
+                        _("MEM %d%%").printf(percent_of(util.memory_fraction)));
                 }
             }
-            summary_label.label = markup.str;
+            summary_label.label = summary.str;
 
             Popover? popover = button.popover;
             if (popover != null && popover.visible) {
@@ -443,12 +462,58 @@ namespace Singularity {
             }
         }
 
+        // Singularity.Widgets.PreferencesRow is the native row container.
+        // Custom compact content preserves the name/heat/value layout and
+        // label width cap.
+        private void append_compact_row(Gtk.Widget content) {
+            var row = new PreferencesRow();
+            row.activatable = false;
+            row.selectable = false;
+            row.add_css_class("sensors-compact-row");
+            row.set_child(content);
+            detail_target.append(row);
+        }
+
+        private static void clear_box(Box box) {
+            Gtk.Widget? child = box.get_first_child();
+            while (child != null) {
+                box.remove(child);
+                child = box.get_first_child();
+            }
+        }
+
+        private Box begin_detail_section() {
+            var section = new Box(Orientation.VERTICAL, 4);
+            detail_target = section;
+            return section;
+        }
+
+        /** Keep every heading with its rows and balance whole sections. */
+        private void finish_detail_section(Box section) {
+            if (section.get_first_child() == null) return;
+
+            int rows = 0;
+            for (Gtk.Widget? child = section.get_first_child(); child != null;
+                 child = child.get_next_sibling()) {
+                rows++;
+            }
+
+            if (!use_two_columns || left_row_count <= right_row_count) {
+                detail_left.append(section);
+                left_row_count += rows;
+            } else {
+                detail_right.append(section);
+                right_row_count += rows;
+            }
+            detail_target = detail_left;
+        }
+
         private void add_heading(string title) {
             Label heading = new Label(title);
             heading.add_css_class("heading");
             heading.halign = Align.START;
             heading.margin_top = 4;
-            detail_box.append(heading);
+            append_compact_row(heading);
         }
 
         /**
@@ -486,7 +551,7 @@ namespace Singularity {
             });
             row.append(toggle);
 
-            detail_box.append(row);
+            append_compact_row(row);
         }
 
         /**
@@ -503,25 +568,6 @@ namespace Singularity {
          * the first step of the ramp. Colour is spent only where it means
          * something: dim, plain, amber, red.
          */
-        /**
-         * Severity -> a named theme colour, for markup (not a CSS class).
-         *
-         * NORMAL reads as success (a calm "this is fine" green) rather than
-         * plain text, matching the standard status-dashboard convention the
-         * graphical chip is going for. WARM stays neutral -- the original
-         * design's severity_css() below also treats WARM as not yet worth
-         * flagging, and this mirrors that rather than inventing a new
-         * threshold.
-         */
-        private string severity_color_name(Severity severity) {
-            switch (severity) {
-                case Severity.CRITICAL: return "error_color";
-                case Severity.HOT:      return "warning_color";
-                case Severity.WARM:     return "text_color";
-                default:                return "success_color";
-            }
-        }
-
         private static string? severity_css(Severity severity) {
             switch (severity) {
                 case Severity.CRITICAL: return "error";
@@ -624,7 +670,7 @@ namespace Singularity {
                 value_label.add_css_class(css);
             }
             row.append(value_label);
-            detail_box.append(row);
+            append_compact_row(row);
         }
 
         /**
@@ -951,15 +997,16 @@ namespace Singularity {
 
         /** Built only while the popover is open. */
         private void rebuild_details() {
-            Gtk.Widget? child = detail_box.get_first_child();
-            while (child != null) {
-                detail_box.remove(child);
-                child = detail_box.get_first_child();
-            }
+            clear_box(detail_toggle_box);
+            clear_box(detail_left);
+            clear_box(detail_right);
+            left_row_count = 0;
+            right_row_count = 0;
 
             // One control for the whole popover, at the top so its scope is
             // obvious before any section renders: it decides whether every
             // group below (CPU/GPU/NPU/... and Clocks) shows its heading.
+            detail_target = detail_toggle_box;
             add_sensors_toggle();
 
             // Every kind the backend can name, hottest-silicon first and the
@@ -970,17 +1017,38 @@ namespace Singularity {
             // kinds were classified and then silently dropped -- on Sky1 that
             // hid eleven of nineteen readings, including the NVMe that was the
             // only one worth looking at.
+            Box section = begin_detail_section();
             add_cpu_section();
-            add_group(SensorKind.GPU,     _("GPU"));
-            add_group(SensorKind.NPU,     _("NPU"));
-            add_group(SensorKind.VPU,     _("VPU"));
-            add_group(SensorKind.MEMORY,  _("Memory"));
-            add_group(SensorKind.STORAGE, _("Storage"));
-            add_group(SensorKind.NETWORK, _("Network"));
-            add_group(SensorKind.BOARD,   _("Board"));
-            add_group(SensorKind.SYSTEM,  _("System"));
+            finish_detail_section(section);
 
+            section = begin_detail_section();
+            add_group(SensorKind.GPU,     _("GPU"));
+            finish_detail_section(section);
+            section = begin_detail_section();
+            add_group(SensorKind.NPU,     _("NPU"));
+            finish_detail_section(section);
+            section = begin_detail_section();
+            add_group(SensorKind.VPU,     _("VPU"));
+            finish_detail_section(section);
+            section = begin_detail_section();
+            add_group(SensorKind.MEMORY,  _("Memory"));
+            finish_detail_section(section);
+            section = begin_detail_section();
+            add_group(SensorKind.STORAGE, _("Storage"));
+            finish_detail_section(section);
+            section = begin_detail_section();
+            add_group(SensorKind.NETWORK, _("Network"));
+            finish_detail_section(section);
+            section = begin_detail_section();
+            add_group(SensorKind.BOARD,   _("Board"));
+            finish_detail_section(section);
+            section = begin_detail_section();
+            add_group(SensorKind.SYSTEM,  _("System"));
+            finish_detail_section(section);
+
+            section = begin_detail_section();
             add_utilization_details();
+            finish_detail_section(section);
         }
     }
 
