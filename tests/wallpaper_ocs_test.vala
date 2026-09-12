@@ -327,6 +327,33 @@ private void test_bing_markets_tolerates_blank_lines_and_whitespace() {
     } catch (Error e) { error("markets-noisy: %s", e.message); }
 }
 
+private void test_bing_combined_view_absent_when_helper_omits_it() {
+    // A subset of markets is configured, so the helper advertises markets
+    // only. combined_view() must say so by returning null -- the browser
+    // then crawls every market exactly as before.
+    try {
+        assert(WallpaperBing.combined_view(WallpaperBing.markets(BING_MARKETS_TSV)) == null);
+    } catch (Error e) { error("combined-absent: %s", e.message); }
+}
+
+private void test_bing_combined_view_replaces_the_market_list() {
+    // "all" is configured, so the helper prepends the combined pseudo-market.
+    // It must REPLACE the market list, not join it: the browser crawls one
+    // listing per choice into a single grid, so keeping both would show the
+    // de-duplicated set and every raw per-market set together and restore
+    // the duplication the combined view exists to remove.
+    string tsv = "consolidated\tCombined (All Markets)\n" + BING_MARKETS_TSV;
+    try {
+        var rows = WallpaperBing.markets(tsv);
+        assert(rows.size == 5);
+        var only = WallpaperBing.combined_view(rows);
+        assert(only != null);
+        assert(only.size == 1);
+        assert(only[0].id == WallpaperBing.CONSOLIDATED_ID);
+        assert(only[0].name == "Combined (All Markets)");
+    } catch (Error e) { error("combined-present: %s", e.message); }
+}
+
 private void test_bing_markets_empty() {
     // An empty response is a valid edge case (helper not installed, etc).
     try { assert(WallpaperBing.markets("").size == 0); } catch (Error e) { error("markets-empty: %s", e.message); }
@@ -488,6 +515,6 @@ public int main(string[] args) {
         } catch (Error e) { error("%s", e.message); }
         remove_tree(root);
     });
-    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-accepts-deployed-legacy-shape", test_import_complete_accepts_deployed_legacy_shape); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path); Test.add_func("/ocs/bing-markets-parses-tsv", test_bing_markets_parses_tsv); Test.add_func("/ocs/bing-markets-tolerates-blank-lines-and-whitespace", test_bing_markets_tolerates_blank_lines_and_whitespace); Test.add_func("/ocs/bing-markets-empty", test_bing_markets_empty); Test.add_func("/ocs/bing-items-parses-list-array", test_bing_items_parses_list_array); Test.add_func("/ocs/bing-items-empty-array", test_bing_items_empty_array); Test.add_func("/ocs/bing-items-rejects-non-array-root", test_bing_items_rejects_non_array_root); Test.add_func("/ocs/bing-items-rejects-bad-pinned-field", test_bing_items_rejects_bad_pinned_field);
+    Test.add_func("/ocs/providers", test_providers); Test.add_func("/ocs/categories", test_categories); Test.add_func("/ocs/items", test_items); Test.add_func("/ocs/tags", test_tags); Test.add_func("/ocs/empty", test_empty); Test.add_func("/ocs/invalid", test_invalid); Test.add_func("/ocs/bad-items", test_bad_items); Test.add_func("/ocs/bad-categories", test_bad_categories); Test.add_func("/ocs/import-retry", test_import_retry); Test.add_func("/ocs/import-complete", test_import_complete); Test.add_func("/ocs/discover-collects-multiple-sidecars-in-one-dir", test_discover_collects_multiple_sidecars_in_one_dir); Test.add_func("/ocs/discover-skips-orphan-sidecar-without-image", test_discover_skips_orphan_sidecar_without_image); Test.add_func("/ocs/discover-tolerates-old-shape-directory", test_discover_tolerates_old_shape_directory); Test.add_func("/ocs/import-complete-accepts-deployed-legacy-shape", test_import_complete_accepts_deployed_legacy_shape); Test.add_func("/ocs/import-complete-rejects-payload-without-sidecar-path", test_import_complete_rejects_payload_without_sidecar_path); Test.add_func("/ocs/bing-markets-parses-tsv", test_bing_markets_parses_tsv); Test.add_func("/ocs/bing-markets-tolerates-blank-lines-and-whitespace", test_bing_markets_tolerates_blank_lines_and_whitespace); Test.add_func("/ocs/bing-combined-view-absent-when-helper-omits-it", test_bing_combined_view_absent_when_helper_omits_it); Test.add_func("/ocs/bing-combined-view-replaces-the-market-list", test_bing_combined_view_replaces_the_market_list); Test.add_func("/ocs/bing-markets-empty", test_bing_markets_empty); Test.add_func("/ocs/bing-items-parses-list-array", test_bing_items_parses_list_array); Test.add_func("/ocs/bing-items-empty-array", test_bing_items_empty_array); Test.add_func("/ocs/bing-items-rejects-non-array-root", test_bing_items_rejects_non_array_root); Test.add_func("/ocs/bing-items-rejects-bad-pinned-field", test_bing_items_rejects_bad_pinned_field);
     return Test.run();
 }

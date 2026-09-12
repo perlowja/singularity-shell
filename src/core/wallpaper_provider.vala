@@ -113,18 +113,38 @@ namespace Singularity {
     }
 
     public class BingWallpaperProvider : WallpaperHelperProvider, WallpaperProvider {
+        // Set by choices() from the helper's own answer, never re-derived
+        // from the config file -- see WallpaperBing.CONSOLIDATED_ID. False
+        // until the first choices() call, so the name starts as plain "Bing"
+        // and the browser refreshes the label once the helper has replied.
+        private bool combined = false;
         public string id { get { return WallpaperBing.PROVIDER_ID; } }
-        public string display_name { owned get { return "Bing"; } }
+        // Matches the collection label the cix-installer rotator writes for
+        // the same de-duplicated view ("Bing (Combined, All Markets)"), so
+        // the online browser and the wallpaper theme picker name one thing
+        // one way.
+        public string display_name {
+            owned get { return combined ? "Bing (Combined, All Markets)" : "Bing"; }
+        }
         public bool requires_credentials { get { return false; } }
         public bool supports_search { get { return false; } }
         public BingWallpaperProvider() { base("/usr/local/bin/ncz-wallpaper-bing"); }
         public async ArrayList<WallpaperOcsChoice> choices(string index, Cancellable? cancel) throws Error {
-            return WallpaperBing.markets(yield command({helper, "markets"}, cancel, 30));
+            var loaded = WallpaperBing.markets(yield command({helper, "markets"}, cancel, 30));
+            // When the helper advertises the combined view it is the ONLY
+            // browsing axis (see WallpaperBing.combined_view). Per-market
+            // browsing stays available by choosing specific markets in the
+            // Bing Markets picker -- which is also what makes the helper stop
+            // advertising the combined view.
+            var only = WallpaperBing.combined_view(loaded);
+            combined = only != null;
+            return only ?? loaded;
         }
         public async WallpaperProviderResult browse(string market, string query, int page,
                 bool refresh, Cancellable? cancel) throws Error {
             var result = new WallpaperProviderResult();
-            result.items = WallpaperBing.items(yield command({helper, "list", market}, cancel, 60, refresh));
+            string selector = market == WallpaperBing.CONSOLIDATED_ID ? "--consolidated" : market;
+            result.items = WallpaperBing.items(yield command({helper, "list", selector}, cancel, 60, refresh));
             return result;
         }
         public async string import_item(WallpaperItem item, Cancellable? cancel) throws Error {
