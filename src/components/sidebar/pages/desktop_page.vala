@@ -23,7 +23,7 @@ namespace Singularity {
         private FlowBox wallpaper_grid;
         private Gee.ArrayList<WallpaperCollectionInfo> wallpaper_collections = new Gee.ArrayList<WallpaperCollectionInfo>();
         private WallpaperRotationState rotation_state = new WallpaperRotationState(
-            GLib.Path.build_filename(GLib.Environment.get_user_config_dir(), "ncz-wallpaper"));
+            GLib.Path.build_filename(GLib.Environment.get_user_config_dir(), "singularity", "wallpaper-rotation"));
         private int wallpaper_grid_generation = 0;
         private int wallpaper_accent_generation = 0;
         private string cached_wallpaper_accent = "#3584e4";
@@ -172,11 +172,16 @@ namespace Singularity {
             add_group(preview_group);
             var grid_group = new PreferencesGroup(_("Wallpapers"));
 
+            // "singularity/wallpaper-collections" is a project-owned registry
+            // location, not a specific vendor's: any downstream OS or pack
+            // installer can drop a .collection file here to have its wallpapers
+            // appear in this picker (see WallpaperCollections' class doc for the
+            // file format).
             var collection_roots = new Gee.ArrayList<string>();
             foreach (unowned string d in GLib.Environment.get_system_data_dirs())
-                collection_roots.add(GLib.Path.build_filename(d, "ncz-wallpapers", "collections"));
+                collection_roots.add(GLib.Path.build_filename(d, "singularity", "wallpaper-collections"));
             collection_roots.add(GLib.Path.build_filename(
-                GLib.Environment.get_user_data_dir(), "ncz-wallpapers", "collections"));
+                GLib.Environment.get_user_data_dir(), "singularity", "wallpaper-collections"));
             wallpaper_collections = WallpaperCollections.parse(collection_roots.to_array());
 
             var source_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
@@ -188,7 +193,10 @@ namespace Singularity {
                     id = collection.id, label = label
                 });
             }
-            string initial_collection_id = rotation_state.get_selected_collection("ncz");
+            // "" is not a real collection id -- it's just a value guaranteed
+            // not to match anything, so the fallback below always picks the
+            // first discovered collection when no prior selection is on disk.
+            string initial_collection_id = rotation_state.get_selected_collection("");
             bool have_initial = false;
             foreach (var opt in source_options) if (opt.id == initial_collection_id) have_initial = true;
             if (!have_initial && source_options.size > 0) initial_collection_id = source_options[0].id;
@@ -1891,7 +1899,7 @@ namespace Singularity {
             wallpaper_grid.remove_all();
             string[] recent = settings.get_strv("recent-wallpapers");
 
-            string selected_id = rotation_state.get_selected_collection("ncz");
+            string selected_id = rotation_state.get_selected_collection("");
             string? scan_dir = null;
             foreach (var collection in wallpaper_collections) {
                 if (collection.id == selected_id) { scan_dir = collection.dir; break; }

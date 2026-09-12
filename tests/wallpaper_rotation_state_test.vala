@@ -7,13 +7,13 @@ private string make_tmp_dir() {
 
 private void test_selected_collection_defaults_when_unset() {
     var state = new WallpaperRotationState(make_tmp_dir());
-    assert(state.get_selected_collection("ncz") == "ncz");
+    assert(state.get_selected_collection("default") == "default");
 }
 
 private void test_selected_collection_roundtrips() {
     var state = new WallpaperRotationState(make_tmp_dir());
     state.set_selected_collection("brandon-perlow");
-    assert(state.get_selected_collection("ncz") == "brandon-perlow");
+    assert(state.get_selected_collection("default") == "brandon-perlow");
 }
 
 private void test_selected_collection_strips_whitespace() {
@@ -22,7 +22,7 @@ private void test_selected_collection_strips_whitespace() {
         FileUtils.set_contents(GLib.Path.build_filename(dir, "collection"), " bing \n");
     } catch (Error e) { error("test setup failed: %s", e.message); }
     var state = new WallpaperRotationState(dir);
-    assert(state.get_selected_collection("ncz") == "bing");
+    assert(state.get_selected_collection("default") == "bing");
 }
 
 private void test_rotate_enabled_defaults_true() {

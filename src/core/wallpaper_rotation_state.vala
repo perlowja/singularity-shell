@@ -2,12 +2,16 @@ using GLib;
 
 namespace Singularity {
 
-    // Reads and writes the plain-text state files
-    // cix-installer/post-install/45-wallpaper-rotator.sh's ncz-wallpaper-rotate
-    // and ncz-wallpaper-daemon shell scripts already poll every rotation cycle
-    // -- this class is the UI's side of that same shared state, not a new
-    // mechanism. config_dir is injected (rather than read from
-    // GLib.Environment here) so it's testable against a temp directory.
+    // Reads and writes the plain-text rotation-state files under
+    // $XDG_CONFIG_HOME/singularity/wallpaper-rotation/: "collection" (the
+    // active collection id), "rotate-enabled" ("1"/"0") and
+    // "rotate-interval" (seconds). This is the documented, project-owned
+    // contract for wallpaper rotation -- any background daemon that wants to
+    // actually change the desktop wallpaper on a timer polls these files and
+    // this class is only the shell UI's side of that same shared state, not
+    // a new or vendor-specific mechanism. config_dir is injected (rather
+    // than read from GLib.Environment here) so it's testable against a temp
+    // directory.
     public class WallpaperRotationState : Object {
         private const int DEFAULT_INTERVAL_SECONDS = 600;
         private const int MIN_INTERVAL_SECONDS = 30;
