@@ -26,6 +26,8 @@ namespace Singularity {
         private string[] wallpaper_collection_roots;
 
         private Gee.ArrayList<WallpaperCollectionInfo> wallpaper_collections = new Gee.ArrayList<WallpaperCollectionInfo>();
+        // Same directory WallpaperRotator reads: these controls write the
+        // rotation state and the rotator in the shell process acts on it.
         private WallpaperRotationState rotation_state = new WallpaperRotationState(
             GLib.Path.build_filename(GLib.Environment.get_user_config_dir(), "ncz-wallpaper"));
         private int wallpaper_grid_generation = 0;

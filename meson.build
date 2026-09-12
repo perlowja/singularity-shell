@@ -295,6 +295,7 @@ singularity_core_sources = files(
     'src/core/wallpaper_provider.vala',
     'src/core/settings_safety.vala',
     'src/core/artist_pack_manager.vala',
+    'src/core/wallpaper_rotator.vala',
     'src/core/wayland_gamma_backend.vala',
     'src/core/shortcut_manager.vala',
     'src/core/ush_portal.vala',
@@ -526,3 +527,11 @@ settings_safety_test = executable('settings-safety-test',
   dependencies: [dependency('gobject-2.0'), dependency('gio-2.0')],
 )
 test('settings-safety', settings_safety_test)
+
+wallpaper_rotator_test = executable('wallpaper-rotator-test',
+  sources: ['src/core/wallpaper_collections.vala', 'src/core/wallpaper_gallery.vala',
+            'src/core/wallpaper_rotation_state.vala', 'src/core/wallpaper_rotator.vala',
+            'tests/wallpaper_rotator_test.vala'],
+  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep],
+)
+test('wallpaper-rotator', wallpaper_rotator_test)
