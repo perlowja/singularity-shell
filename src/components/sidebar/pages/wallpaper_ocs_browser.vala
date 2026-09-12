@@ -134,9 +134,9 @@ namespace Singularity.Shell {
             online_search_group = new PreferencesGroup();
             online_search = new EntryRow(_("Search Stock Photos"));
             online_search.text = "nature";
-            // EntryRow has no Adw.EntryRow-style show_apply_button/apply
-            // pair; an explicit suffix button plus Enter-to-search covers
-            // the same interaction.
+            // EntryRow has no built-in show_apply_button/apply pair; an
+            // explicit suffix button plus Enter-to-search covers the same
+            // interaction.
             var online_search_apply = new Button.from_icon_name("object-select-symbolic");
             online_search_apply.tooltip_text = _("Search");
             online_search_apply.valign = Align.CENTER;
@@ -719,7 +719,7 @@ namespace Singularity.Shell {
         // Called under updating so a selection notification cannot start a
         // crawl against a partially replaced option list. SelectionRow
         // stores id/label pairs directly (current_value is the id), so
-        // unlike the previous Adw.ComboRow code there is no separate
+        // unlike the previous combo-row code there is no separate
         // position -> id array to maintain.
         private static void set_choices(SelectionRow row,
                 Gee.ArrayList<Singularity.Core.AppSettingOption> options, string current) {

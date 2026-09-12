@@ -23,7 +23,6 @@ endif
 
 core_deps = [
   dependency('gtk4', version: '>= 4.10'),
-  dependency('libadwaita-1', version: '>= 1.2'),
   dependency('gio-2.0'),
   dependency('gio-unix-2.0'),
   dependency('vte-2.91-gtk4'),
