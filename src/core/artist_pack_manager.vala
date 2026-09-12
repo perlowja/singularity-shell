@@ -39,12 +39,13 @@ namespace Singularity {
      *
      * This class deliberately knows nothing about apt. It shells out to two
      * distro-provided scripts, `ncz-wallpaper-pack-inventory` and
-     * `ncz-wallpaper-pack-install`, resolved by name via PATH - the same
-     * pattern ScriptSearchProvider uses for search providers. A distro that
-     * does not ship them (including a non-NCZ / upstream build of this
-     * desktop) simply has is_available() return false, and the Artist Pack
-     * browser hides itself entirely: this is additive, opt-in integration,
-     * not something the shell hard-depends on.
+     * `ncz-wallpaper-pack-install`, each at a FIXED, root-owned absolute
+     * path - never resolved through PATH (see INVENTORY_HELPER /
+     * INSTALL_HELPER below for why that distinction is load-bearing). A
+     * distro that does not ship them (including a non-NCZ / upstream build
+     * of this desktop) simply has is_available() return false, and the
+     * Artist Pack browser hides itself entirely: this is additive, opt-in
+     * integration, not something the shell hard-depends on.
      *
      * Which apt source(s) count as "an artist pack source" is entirely the
      * distro's call, read by the inventory script from the
@@ -69,8 +70,29 @@ namespace Singularity {
      */
     public class ArtistPackManager : GLib.Object {
         private static ArtistPackManager? _instance = null;
-        private const string INVENTORY_HELPER = "ncz-wallpaper-pack-inventory";
-        private const string INSTALL_HELPER = "ncz-wallpaper-pack-install";
+
+        /**
+         * Fixed, absolute, root-owned locations of the distro backend
+         * helpers. These are deliberately NOT looked up with
+         * Environment.find_program_in_path().
+         *
+         * install_async() hands INSTALL_HELPER to pkexec as the PROGRAM to
+         * execute as root. A PATH-based lookup would therefore let anyone
+         * who can write to any directory that happens to sit earlier in the
+         * desktop process's PATH (~/.local/bin and ~/bin are user-writable
+         * and commonly precede /usr/local/bin) drop in a file named
+         * `ncz-wallpaper-pack-install` and have it run with full root
+         * privileges - a local privilege escalation. Resolving the helper
+         * from a compiled-in constant removes the attacker-controlled input
+         * from that decision entirely.
+         *
+         * These paths must stay in sync with where
+         * post-install/49-artist-pack-browser.sh installs the two helpers
+         * and with the org.freedesktop.policykit.exec.path annotation in
+         * dev.sinty.desktop.artist-pack-install.policy.
+         */
+        private const string INVENTORY_HELPER = "/usr/local/bin/ncz-wallpaper-pack-inventory";
+        private const string INSTALL_HELPER = "/usr/local/bin/ncz-wallpaper-pack-install";
 
         public static ArtistPackManager get_default() {
             if (_instance == null) _instance = new ArtistPackManager();
@@ -79,9 +101,28 @@ namespace Singularity {
 
         private ArtistPackManager() { }
 
+        /**
+         * pkexec's own fixed locations, in preference order. Also resolved
+         * without consulting PATH: the whole point of this call path is that
+         * nothing about which binary gets elevated comes from the
+         * environment.
+         */
+        private const string[] PKEXEC_PATHS = { "/usr/bin/pkexec", "/bin/pkexec" };
+
+        /**
+         * True when `path` names an existing, executable regular file.
+         *
+         * Used instead of Environment.find_program_in_path() so helper
+         * resolution never consults PATH - see INSTALL_HELPER above.
+         */
+        private static bool is_executable_file(string path) {
+            return FileUtils.test(path, FileTest.IS_REGULAR)
+                && FileUtils.test(path, FileTest.IS_EXECUTABLE);
+        }
+
         /** True when the distro provides the inventory backend. */
         public bool is_available() {
-            return Environment.find_program_in_path(INVENTORY_HELPER) != null;
+            return is_executable_file(INVENTORY_HELPER);
         }
 
         /**
@@ -94,10 +135,10 @@ namespace Singularity {
          */
         public async Gee.ArrayList<ArtistPackInfo> fetch_inventory_async(Cancellable? cancellable = null) throws Error {
             var results = new Gee.ArrayList<ArtistPackInfo>();
-            string? helper = Environment.find_program_in_path(INVENTORY_HELPER);
-            if (helper == null) return results;
+            if (!is_executable_file(INVENTORY_HELPER)) return results;
 
-            var proc = new Subprocess(SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE, helper);
+            var proc = new Subprocess(SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE,
+                                       INVENTORY_HELPER);
             string stdout_data;
             string stderr_data;
             yield proc.communicate_utf8_async(null, cancellable, out stdout_data, out stderr_data);
@@ -164,17 +205,26 @@ namespace Singularity {
                 throw new ArtistPackError.INVALID_RESPONSE(
                     "Refusing to install %s: no source URI given".printf(package));
             }
-            string? helper = Environment.find_program_in_path(INSTALL_HELPER);
-            if (helper == null) {
+            // Both binaries below come from compiled-in absolute paths, never
+            // from PATH: INSTALL_HELPER is the PROGRAM pkexec runs as root, so
+            // letting the environment decide which file that is would be a
+            // local privilege escalation. See INSTALL_HELPER's declaration.
+            if (!is_executable_file(INSTALL_HELPER)) {
                 throw new ArtistPackError.BACKEND_MISSING("%s is not installed".printf(INSTALL_HELPER));
             }
-            string? pkexec = Environment.find_program_in_path("pkexec");
+            string? pkexec = null;
+            foreach (unowned string candidate in PKEXEC_PATHS) {
+                if (is_executable_file(candidate)) {
+                    pkexec = candidate;
+                    break;
+                }
+            }
             if (pkexec == null) {
                 throw new ArtistPackError.BACKEND_MISSING("pkexec is not available");
             }
 
             var proc = new Subprocess(SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE,
-                                       pkexec, helper, package, source);
+                                       pkexec, INSTALL_HELPER, package, source);
             string stdout_data;
             string stderr_data;
             yield proc.communicate_utf8_async(null, cancellable, out stdout_data, out stderr_data);
