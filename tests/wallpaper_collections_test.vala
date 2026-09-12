@@ -24,7 +24,7 @@ private void test_parses_id_name_artist_dir() {
         "Name=Brandon Perlow\n" +
         "Artist=Brandon Perlow\n" +
         "Type=static\n" +
-        "Dir=/usr/share/backgrounds/ncz/brandon-perlow\n");
+        "Dir=/usr/share/backgrounds/vendor/brandon-perlow\n");
 
     var result = WallpaperCollections.parse({ root });
 
@@ -32,21 +32,21 @@ private void test_parses_id_name_artist_dir() {
     assert(result[0].id == "brandon-perlow");
     assert(result[0].name == "Brandon Perlow");
     assert(result[0].artist == "Brandon Perlow");
-    assert(result[0].dir == "/usr/share/backgrounds/ncz/brandon-perlow");
+    assert(result[0].dir == "/usr/share/backgrounds/vendor/brandon-perlow");
     assert(result[0].type == "static");
 }
 
 private void test_id_falls_back_to_filename_stem() {
     string root = make_tmp_dir();
-    write_collection(root, "ncz.collection",
+    write_collection(root, "vendor.collection",
         "[Collection]\n" +
-        "Name=NCZ-OS\n" +
-        "Dir=/usr/share/backgrounds/ncz\n");
+        "Name=Vendor OS\n" +
+        "Dir=/usr/share/backgrounds/vendor\n");
 
     var result = WallpaperCollections.parse({ root });
 
     assert(result.size == 1);
-    assert(result[0].id == "ncz");
+    assert(result[0].id == "vendor");
 }
 
 private void test_skips_dir_less_collection() {
@@ -79,10 +79,10 @@ private void test_ignores_non_collection_files_and_missing_dirs() {
 private void test_dedupes_by_id_first_root_wins() {
     string root_a = make_tmp_dir();
     string root_b = make_tmp_dir();
-    write_collection(root_a, "ncz.collection",
-        "[Collection]\nId=ncz\nName=System\nDir=/system/ncz\n");
-    write_collection(root_b, "ncz.collection",
-        "[Collection]\nId=ncz\nName=User Override\nDir=/user/ncz\n");
+    write_collection(root_a, "vendor.collection",
+        "[Collection]\nId=vendor\nName=System\nDir=/system/vendor\n");
+    write_collection(root_b, "vendor.collection",
+        "[Collection]\nId=vendor\nName=User Override\nDir=/user/vendor\n");
 
     var result = WallpaperCollections.parse({ root_a, root_b });
 

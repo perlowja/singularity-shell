@@ -3,7 +3,7 @@ using Gee;
 using Singularity;
 
 private string fixture_root;
-private string ncz;
+private string system_dir;
 private string artist;
 private string bing;
 
@@ -17,10 +17,10 @@ private string image_file(string dir, string name) {
 }
 
 private void test_recent_membership() {
-    string base_uri = image_file(ncz, "base");
+    string base_uri = image_file(system_dir, "base");
     string art_uri = image_file(artist, "art");
     string bing_uri = image_file(bing, "daily");
-    var result = WallpaperGallery.scan(artist, {ncz, artist, bing},
+    var result = WallpaperGallery.scan(artist, {system_dir, artist, bing},
                                       {bing_uri, base_uri, art_uri, art_uri});
     assert(result.size == 1);
     assert(result[0].uri == art_uri);
@@ -28,9 +28,9 @@ private void test_recent_membership() {
 }
 
 private void test_nested_collection_boundary() {
-    string base_uri = image_file(ncz, "base");
+    string base_uri = image_file(system_dir, "base");
     string art_uri = image_file(artist, "art");
-    var result = WallpaperGallery.scan(ncz + "/./", {ncz, artist + "/", bing}, {art_uri});
+    var result = WallpaperGallery.scan(system_dir + "/./", {system_dir, artist + "/", bing}, {art_uri});
     assert(result.size == 1);
     assert(result[0].uri == base_uri);
     assert(!result[0].is_recent);
@@ -38,7 +38,7 @@ private void test_nested_collection_boundary() {
 
 private void test_provider_subdirectories() {
     string daily = image_file(Path.build_filename(bing, "en-US"), "nested");
-    var result = WallpaperGallery.scan(bing, {ncz, artist, bing}, {});
+    var result = WallpaperGallery.scan(bing, {system_dir, artist, bing}, {});
     assert(result.size == 2);
     bool found = false;
     foreach (var candidate in result) if (candidate.uri == daily) found = true;
@@ -46,18 +46,18 @@ private void test_provider_subdirectories() {
 }
 
 private void test_missing_collection() {
-    string uri = image_file(ncz, "base");
-    assert(WallpaperGallery.scan(null, {ncz}, {uri}).size == 0);
-    assert(WallpaperGallery.scan(fixture_root + "/missing", {ncz}, {uri}).size == 0);
+    string uri = image_file(system_dir, "base");
+    assert(WallpaperGallery.scan(null, {system_dir}, {uri}).size == 0);
+    assert(WallpaperGallery.scan(fixture_root + "/missing", {system_dir}, {uri}).size == 0);
 }
 
 private void test_default_alias_and_directory_loop() {
     try {
-        File.new_for_path(ncz + "/default.svg").make_symbolic_link("base.svg");
-        File.new_for_path(ncz + "/loop").make_symbolic_link(ncz);
+        File.new_for_path(system_dir + "/default.svg").make_symbolic_link("base.svg");
+        File.new_for_path(system_dir + "/loop").make_symbolic_link(system_dir);
     } catch (Error e) { error("fixture: %s", e.message); }
-    string alias = File.new_for_path(ncz + "/default.svg").get_uri();
-    var result = WallpaperGallery.scan(ncz, {ncz, artist, bing}, {alias});
+    string alias = File.new_for_path(system_dir + "/default.svg").get_uri();
+    var result = WallpaperGallery.scan(system_dir, {system_dir, artist, bing}, {alias});
     assert(result.size == 1);
     assert(!result[0].is_recent);
 }
@@ -66,10 +66,10 @@ public int main(string[] args) {
     Test.init(ref args);
     try { fixture_root = DirUtils.make_tmp("wallpaper-gallery-XXXXXX"); }
     catch (Error e) { error("fixture: %s", e.message); }
-    ncz = fixture_root + "/ncz";
-    artist = ncz + "/artist";
+    system_dir = fixture_root + "/system";
+    artist = system_dir + "/artist";
     bing = fixture_root + "/bing";
-    image_file(ncz, "base");
+    image_file(system_dir, "base");
     image_file(artist, "art");
     image_file(bing, "daily");
     Test.add_func("/wallpaper-gallery/recent-membership", test_recent_membership);
