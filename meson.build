@@ -292,6 +292,7 @@ singularity_core_sources = files(
     'src/core/wallpaper_browse_cache.vala',
     'src/core/wallpaper_provider.vala',
     'src/core/settings_safety.vala',
+    'src/core/artist_pack_manager.vala',
     'src/core/wayland_gamma_backend.vala',
     'src/core/shortcut_manager.vala',
     'src/core/ush_portal.vala',
