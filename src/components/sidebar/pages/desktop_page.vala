@@ -100,6 +100,21 @@ namespace Singularity {
             return out;
         }
 
+        // Label for a stored rotate-interval that doesn't match a fixed
+        // preset. Hours when it divides evenly, else minutes, else seconds
+        // (WallpaperRotationState.MIN_INTERVAL_SECONDS is 30, below a minute).
+        private static string format_custom_interval_label(int seconds) {
+            if (seconds % 3600 == 0) {
+                int hours = seconds / 3600;
+                return ngettext("Every %d hour (custom)", "Every %d hours (custom)", hours).printf(hours);
+            }
+            if (seconds >= 60) {
+                int minutes = seconds / 60;
+                return ngettext("Every %d minute (custom)", "Every %d minutes (custom)", minutes).printf(minutes);
+            }
+            return ngettext("Every %d second (custom)", "Every %d seconds (custom)", seconds).printf(seconds);
+        }
+
         // Appends a rounded-rectangle sub-path to the Cairo context.
         private static void round_rect(Cairo.Context ctx, double x, double y, double w, double h, double r) {
             double PI = Math.PI;
@@ -384,7 +399,27 @@ namespace Singularity {
             string current_interval_id = current_interval.to_string();
             bool have_interval_match = false;
             foreach (var opt in interval_options) if (opt.id == current_interval_id) have_interval_match = true;
-            if (!have_interval_match) current_interval_id = "600"; // a custom/legacy value collapses to the closest preset shown
+            // A stored value outside the fixed presets (set by an older
+            // build, or a future settings surface) gets its own entry
+            // showing the real value, inserted in chronological order,
+            // instead of silently displaying the nearest preset while
+            // WallpaperRotator keeps using the actual stored interval.
+            if (!have_interval_match) {
+                var custom_option = new Singularity.Core.AppSettingOption() {
+                    id = current_interval_id,
+                    label = format_custom_interval_label(current_interval)
+                };
+                int insert_at = interval_options.size;
+                for (int i = 0; i < interval_options.size; i++) {
+                    int preset_seconds;
+                    if (int.try_parse(interval_options[i].id, out preset_seconds)
+                            && current_interval < preset_seconds) {
+                        insert_at = i;
+                        break;
+                    }
+                }
+                interval_options.insert(insert_at, custom_option);
+            }
 
             var interval_row = new SelectionRow.with_options(
                 _("Rotation Interval"), interval_options, current_interval_id);
