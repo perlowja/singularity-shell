@@ -36,30 +36,12 @@ namespace Singularity {
         // since Background windows are created per-monitor and the rules
         // are process-global, not per-instance.
         private static Gtk.CssProvider? attribution_css_provider = null;
-        // Corner-sample parameters. Sampled as a fractional rect inside
-        // the cached medium pixbuf so the sample tracks whatever size
-        // the manager uses for its display texture (currently 320x180,
-        // but the manager owns that decision). Bottom-left, 40% width x
-        // 30% height, with a small margin from the very edge so the
-        // sample doesn't include the empty space around the label.
-        private const double CORNER_SAMPLE_X_FRAC = 0.0;
-        private const double CORNER_SAMPLE_Y_FRAC = 0.65;
-        private const double CORNER_SAMPLE_W_FRAC = 0.40;
-        private const double CORNER_SAMPLE_H_FRAC = 0.30;
         // Pixel margin from the screen edge to the attribution label.
         // Bottom-left is clear of the dock (which is bottom-anchored
         // and horizontally centered) at any reasonable screen width,
         // but a 24px gutter keeps the scrim from clipping into the
         // screen edge on rounded displays / ultrawide aspects.
         private const int ATTRIBUTION_MARGIN = 24;
-        // topbar_lum_threshold -- copied from panel.vala (kept in sync
-        // with that constant by convention rather than a shared header,
-        // matching how the rest of the codebase pairs these CSS-class
-        // and contrast decisions). Above this luminance the wallpaper
-        // under the corner is "light", and the overlay switches to
-        // dark text; below it stays light text. 0.72 matches the
-        // value panel.vala uses for the top band.
-        private const double ATTRIBUTION_LUM_THRESHOLD = 0.72;
 
         public signal void first_painted();
         private bool _first_painted_done = false;
@@ -100,11 +82,7 @@ namespace Singularity {
             // prevents the label from grabbing Tab focus out of the
             // desktop. The scrim + padding + font live in the
             // `attribution-label` CSS class, loaded by
-            // ensure_attribution_css() above (wallpaper-specific styling
-            // lives here, not in libsingularity, per review on
-            // libsingularity#13). The `light-bg` class on the Background
-            // window (toggled below) is the same one panel.vala uses, so
-            // the contrast rule is consistent across panel + overlay.
+            // ensure_attribution_css() above.
             attribution_label = new Label("");
             attribution_label.add_css_class("attribution-label");
             attribution_label.halign = Align.START;
@@ -198,16 +176,8 @@ namespace Singularity {
         //
         // Sits in the bottom-left corner of the live desktop background
         // as a single Gtk.Label over the wallpaper cross-fade. The scrim
-        // is a semi-transparent rounded rectangle so the text reads
-        // against both bright and dark wallpapers without an aggressive
-        // box, and the light-bg / non-light-bg pair matches the
-        // convention panel.vala already uses for the top band -- same
-        // colour tokens, same threshold (ATTRIBUTION_LUM_THRESHOLD = 0.72,
-        // defined above).
-        //
-        // The luminance class selects an opposing scrim/text pair
-        // independently of the active application theme, since wallpaper
-        // contrast cannot be inferred from the theme's text colour.
+        // uses the same theme tokens, rounded shape, border, and shadow
+        // language as libsingularity's dock pill, scaled for caption text.
         //
         // Moved here from libsingularity's style.css (review on
         // libsingularity#13: that stylesheet should stay limited to
@@ -216,22 +186,14 @@ namespace Singularity {
         // and rationale unchanged, just relocated to the actual consumer.
         private const string ATTRIBUTION_CSS = """
 .background-window .attribution-label {
+    background-color: @surface_overlay;
+    color: @text_color;
     border-radius: 8px;
     padding: 6px 12px;
     font-size: 13px;
     font-weight: 400;
-}
-.background-window.light-bg .attribution-label {
-    /* Bright wallpaper: dark scrim with light foreground. */
-    background-color: alpha(black, 0.65);
-    color: white;
-    text-shadow: 0 1px 2px alpha(black, 0.45);
-}
-.background-window:not(.light-bg) .attribution-label {
-    /* Dark wallpaper: light scrim with dark foreground. */
-    background-color: alpha(white, 0.72);
-    color: black;
-    text-shadow: 0 1px 2px alpha(white, 0.35);
+    box-shadow: 0 4px 14px alpha(@shadow_color, 0.45), 0 1px 0 alpha(@text_color, 0.3) inset;
+    border: 1px solid alpha(@text_color, 0.03);
 }
 """;
 
@@ -263,23 +225,12 @@ namespace Singularity {
         // the parsers accept leniently -- an unescaped & < > in the
         // text would otherwise be a Pango parse error and crash the
         // label render.
-        //
-        // Contrast: sample the bottom-left corner rectangle from
-        // WallpaperManager.corner_luminance_frac() and compare against
-        // ATTRIBUTION_LUM_THRESHOLD. Above threshold = light
-        // background under the text = use dark text via .light-bg
-        // class on the Background window; below = dark background =
-        // use light text. Same `light-bg` CSS class the panel uses,
-        // extended in the stylesheet for .background-window.light-bg.
         private void update_attribution(WallpaperManager manager) {
             string title = manager.attribution_title ?? "";
             string author = manager.attribution_author ?? "";
             // The user-toggleable show-wallpaper-attribution gsettings key
             // shares the same early-return path as the no-title-and-no-author
-            // case below: when the overlay is hidden for any reason we
-            // clear the contrast class too, so re-enabling the toggle (or
-            // loading a wallpaper that carries attribution) re-samples
-            // cleanly on the next wallpaper_changed.
+            // case below.
             if (!settings.get_boolean("show-wallpaper-attribution")) {
                 title = "";
                 author = "";
@@ -287,41 +238,6 @@ namespace Singularity {
             if (title == "" && author == "") {
                 attribution_label.visible = false;
                 attribution_label.label = "";
-                // Remove the contrast class too: a hidden overlay
-                // shouldn't keep the .light-bg class set on the
-                // window, because if a future wallpaper is loaded
-                // without attribution we still want the window to
-                // re-sample cleanly on the next wallpaper_changed.
-                remove_css_class("light-bg");
-                return;
-            }
-            // Sample the corner FIRST, before showing anything. The
-            // sample reads WallpaperManager's cached _display_pixbuf,
-            // which for a freshly-changed wallpaper (Bing's async fetch
-            // in particular) can still be the PREVIOUS image for a short
-            // window after attribution metadata has already updated --
-            // reload() updates title/author synchronously from the
-            // sidecar/settings and fires wallpaper_changed() immediately,
-            // while the real pixbuf decode completes later on its own
-            // Idle callback and fires wallpaper_changed() again once
-            // ready. Showing the label before a valid sample exists risks
-            // pairing the NEW caption with the OLD photo's contrast class
-            // (or, if the class was never cleared, indefinitely on a
-            // pixbuf load failure -- see the warning() added at the
-            // pb_medium catch site in wallpaper_manager.vala). Deferring
-            // until lum is valid means the label simply appears a beat
-            // later rather than ever appearing with the wrong contrast;
-            // the next wallpaper_changed() (fired once the real pixbuf
-            // lands) re-invokes this function and completes it then.
-            double lum = manager.corner_luminance_frac(
-                CORNER_SAMPLE_X_FRAC,
-                CORNER_SAMPLE_Y_FRAC,
-                CORNER_SAMPLE_W_FRAC,
-                CORNER_SAMPLE_H_FRAC);
-            if (lum < 0.0) {
-                attribution_label.visible = false;
-                attribution_label.label = "";
-                remove_css_class("light-bg");
                 return;
             }
 
@@ -343,10 +259,6 @@ namespace Singularity {
             } else {
                 markup = safe_author;
             }
-
-            bool light_bg = lum > ATTRIBUTION_LUM_THRESHOLD;
-            if (light_bg) add_css_class("light-bg");
-            else remove_css_class("light-bg");
 
             // CSS class is not a supported Pango span attribute.
             attribution_label.set_markup(markup);
