@@ -289,6 +289,7 @@ singularity_core_sources = files(
     'src/core/wallpaper_sidecar.vala',
     'src/core/wallpaper_ocs.vala',
     'src/core/wallpaper_browse_cache.vala',
+    'src/core/wallpaper_thumbnail_cache.vala',
     'src/core/wallpaper_provider.vala',
     'src/core/settings_safety.vala',
     'src/core/wayland_gamma_backend.vala',
@@ -515,7 +516,7 @@ wallpaper_rotator_test = executable('wallpaper-rotator-test',
 test('wallpaper-rotator', wallpaper_rotator_test)
 
 wallpaper_ocs_test = executable('wallpaper-ocs-test',
-  sources: ['src/core/wallpaper_ocs.vala', 'src/core/wallpaper_browse_cache.vala', 'src/core/wallpaper_provider.vala', 'src/core/wallpaper_collections.vala', 'tests/wallpaper_ocs_test.vala'],
+  sources: ['src/core/wallpaper_ocs.vala', 'src/core/wallpaper_browse_cache.vala', 'src/core/wallpaper_thumbnail_cache.vala', 'src/core/wallpaper_provider.vala', 'src/core/wallpaper_collections.vala', 'tests/wallpaper_ocs_test.vala'],
   dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep, json_dep],
 )
 test('wallpaper-ocs', wallpaper_ocs_test)
