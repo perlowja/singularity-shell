@@ -77,9 +77,9 @@ namespace Singularity {
         public static string[] default_search_roots() {
             string[] roots = {};
             foreach (unowned string d in GLib.Environment.get_system_data_dirs())
-                roots += GLib.Path.build_filename(d, "singularity", "wallpaper-collections");
+                roots += GLib.Path.build_filename(d, "ncz-wallpapers", "collections");
             roots += GLib.Path.build_filename(
-                GLib.Environment.get_user_data_dir(), "singularity", "wallpaper-collections");
+                GLib.Environment.get_user_data_dir(), "ncz-wallpapers", "collections");
             return roots;
         }
 

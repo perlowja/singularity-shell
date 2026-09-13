@@ -26,7 +26,7 @@ namespace Singularity {
         // the change.
         public static string default_config_dir() {
             return GLib.Path.build_filename(
-                GLib.Environment.get_user_config_dir(), "singularity", "wallpaper-rotation");
+                GLib.Environment.get_user_config_dir(), "ncz-wallpaper");
         }
 
         private string path_for(string filename) {
