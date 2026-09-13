@@ -42,10 +42,11 @@ namespace Singularity {
      * `ncz-wallpaper-pack-install`, each at a FIXED, root-owned absolute
      * path - never resolved through PATH (see INVENTORY_HELPER /
      * INSTALL_HELPER below for why that distinction is load-bearing). A
-     * distro that does not ship them (including a non-NCZ / upstream build
-     * of this desktop) simply has is_available() return false, and the
-     * Artist Pack browser hides itself entirely: this is additive, opt-in
-     * integration, not something the shell hard-depends on.
+     * distro that does not ship the complete backend (both helpers, pkexec,
+     * and its polkit action) simply has is_available() return false, and the
+     * Artist Pack browser hides itself entirely. Checking the complete
+     * contract is intentional: an inventory-only deployment must not expose
+     * Install buttons that can never work.
      *
      * Which apt source(s) count as "an artist pack source" is entirely the
      * distro's call, read by the inventory script from the
@@ -86,13 +87,13 @@ namespace Singularity {
          * from a compiled-in constant removes the attacker-controlled input
          * from that decision entirely.
          *
-         * These paths must stay in sync with where
-         * post-install/49-artist-pack-browser.sh installs the two helpers
-         * and with the org.freedesktop.policykit.exec.path annotation in
-         * dev.sinty.desktop.artist-pack-install.policy.
+         * These paths form the backend packaging contract. The backend is
+         * tracked separately and must install both files here, with the
+         * install helper named by the policy action below.
          */
         private const string INVENTORY_HELPER = "/usr/local/bin/ncz-wallpaper-pack-inventory";
         private const string INSTALL_HELPER = "/usr/local/bin/ncz-wallpaper-pack-install";
+        private const string INSTALL_POLICY = "/usr/share/polkit-1/actions/dev.sinty.desktop.artist-pack-install.policy";
 
         public static ArtistPackManager get_default() {
             if (_instance == null) _instance = new ArtistPackManager();
@@ -120,9 +121,19 @@ namespace Singularity {
                 && FileUtils.test(path, FileTest.IS_EXECUTABLE);
         }
 
-        /** True when the distro provides the inventory backend. */
+        private static string? find_pkexec() {
+            foreach (unowned string candidate in PKEXEC_PATHS) {
+                if (is_executable_file(candidate)) return candidate;
+            }
+            return null;
+        }
+
+        /** True only when the distro provides the complete backend contract. */
         public bool is_available() {
-            return is_executable_file(INVENTORY_HELPER);
+            return is_executable_file(INVENTORY_HELPER)
+                && is_executable_file(INSTALL_HELPER)
+                && FileUtils.test(INSTALL_POLICY, FileTest.IS_REGULAR)
+                && find_pkexec() != null;
         }
 
         /**
@@ -212,13 +223,7 @@ namespace Singularity {
             if (!is_executable_file(INSTALL_HELPER)) {
                 throw new ArtistPackError.BACKEND_MISSING("%s is not installed".printf(INSTALL_HELPER));
             }
-            string? pkexec = null;
-            foreach (unowned string candidate in PKEXEC_PATHS) {
-                if (is_executable_file(candidate)) {
-                    pkexec = candidate;
-                    break;
-                }
-            }
+            string? pkexec = find_pkexec();
             if (pkexec == null) {
                 throw new ArtistPackError.BACKEND_MISSING("pkexec is not available");
             }
