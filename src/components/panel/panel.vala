@@ -5,6 +5,109 @@ using Singularity.Widgets;
 
 namespace Singularity {
 
+    private class WallpaperIndicator : Gtk.Box {
+        private GLib.Settings settings;
+        private WallpaperHistory history;
+        private WallpaperFavorites favorites;
+        private WallpaperRotationState rotation_state;
+        private Button previous_button;
+        private Button next_button;
+        private Button pause_button;
+        private Button favorite_button;
+        private string? navigation_target = null;
+
+        public WallpaperIndicator(GLib.Settings settings) {
+            Object(orientation: Orientation.HORIZONTAL, spacing: 0);
+            valign = Align.CENTER;
+            this.settings = settings;
+            history = new WallpaperHistory(settings);
+            favorites = new WallpaperFavorites(settings);
+            rotation_state = new WallpaperRotationState(
+                GLib.Path.build_filename(GLib.Environment.get_user_config_dir(), "ncz-wallpaper"));
+
+            var button = new MenuButton();
+            button.add_css_class("flat");
+            button.tooltip_text = _("Wallpaper controls");
+            var icon = new Image.from_icon_name("preferences-desktop-wallpaper-symbolic");
+            icon.pixel_size = 16;
+            button.child = icon;
+            append(button);
+
+            var controls = new Box(Orientation.HORIZONTAL, 6);
+            controls.margin_top = 10;
+            controls.margin_bottom = 10;
+            controls.margin_start = 12;
+            controls.margin_end = 12;
+
+            previous_button = new Button.from_icon_name("go-previous-symbolic");
+            previous_button.tooltip_text = _("Previous wallpaper");
+            previous_button.clicked.connect(() => navigate(history.go_back()));
+            controls.append(previous_button);
+
+            next_button = new Button.from_icon_name("go-next-symbolic");
+            next_button.tooltip_text = _("Next wallpaper");
+            next_button.clicked.connect(() => navigate(history.go_forward()));
+            controls.append(next_button);
+
+            pause_button = new Button();
+            pause_button.clicked.connect(() => {
+                rotation_state.set_rotate_enabled(!rotation_state.get_rotate_enabled());
+                update_controls();
+            });
+            controls.append(pause_button);
+
+            favorite_button = new Button();
+            favorite_button.clicked.connect(() => {
+                string? path = WallpaperManager.get_default().wallpaper_path;
+                if (path != null) favorites.toggle_favorite(path);
+            });
+            controls.append(favorite_button);
+
+            var popover = new Popover();
+            popover.child = controls;
+            button.popover = popover;
+            popover.notify["visible"].connect(() => {
+                if (popover.visible) update_controls();
+            });
+
+            var manager = WallpaperManager.get_default();
+            manager.wallpaper_path_changed.connect((path) => {
+                if (navigation_target == path) navigation_target = null;
+                else history.record(path);
+                update_controls();
+            });
+            favorites.favorites_changed.connect(update_controls);
+            if (manager.wallpaper_path != null && history.current_path != manager.wallpaper_path)
+                history.record(manager.wallpaper_path);
+            update_controls();
+        }
+
+        private void navigate(string? path) {
+            if (path == null) return;
+            navigation_target = path;
+            settings.delay();
+            SettingsSafety.set_string(settings, "background-picture-uri",
+                File.new_for_path(path).get_uri());
+            SettingsSafety.set_string(settings, "background-attribution-title", "");
+            SettingsSafety.set_string(settings, "background-attribution-author", "");
+            settings.apply();
+            update_controls();
+        }
+
+        private void update_controls() {
+            previous_button.sensitive = history.can_go_back();
+            next_button.sensitive = history.can_go_forward();
+            bool rotating = rotation_state.get_rotate_enabled();
+            pause_button.icon_name = rotating ? "media-playback-pause-symbolic" : "media-playback-start-symbolic";
+            pause_button.tooltip_text = rotating ? _("Pause wallpaper rotation") : _("Resume wallpaper rotation");
+            string? path = WallpaperManager.get_default().wallpaper_path;
+            bool is_favorite = path != null && favorites.is_favorite(path);
+            favorite_button.icon_name = is_favorite ? "starred-symbolic" : "non-starred-symbolic";
+            favorite_button.tooltip_text = is_favorite ? _("Remove from favorites") : _("Add to favorites");
+            favorite_button.sensitive = path != null;
+        }
+    }
+
     /**
      * SensorsIndicator — one compact chip in the panel, detail in a popover.
      *
@@ -1738,6 +1841,8 @@ namespace Singularity {
             // Users remove it the same way as any other default item, via the
             // panel customization settings.
             layout_items["sensors"] = new SensorsIndicator(_settings);
+            if (is_primary && !is_greeter_mode)
+                layout_items["wallpaper"] = new WallpaperIndicator(_settings);
 
             reload_bar_layout();
             _settings.changed["panel-layout-left"].connect(() => {
@@ -1757,8 +1862,8 @@ namespace Singularity {
                     center_box,
                     right_box,
                     layout_items,
-                    { "overview", "workspaces", "tiling-position", "app-title", "global-menu", "system", "notifications", "clock", "sensors" },
-                    { _("Overview"), _("Workspaces"), _("Scrolling Position"), _("App Title"), _("Global Menu"), _("System Status"), _("Notifications"), _("Clock"), _("Sensors") }
+                    { "overview", "workspaces", "tiling-position", "app-title", "global-menu", "system", "notifications", "clock", "sensors", "wallpaper" },
+                    { _("Overview"), _("Workspaces"), _("Scrolling Position"), _("App Title"), _("Global Menu"), _("System Status"), _("Notifications"), _("Clock"), _("Sensors"), _("Wallpaper") }
                 );
                 layout_editor.move_requested.connect((item_id, section, index) => {
                     if (bar_layout != null && bar_layout.move(item_id, section, index)) save_bar_layout();
@@ -2101,13 +2206,13 @@ namespace Singularity {
         private void reload_bar_layout() {
             string[] item_ids = {
                 "overview", "workspaces", "tiling-position", "app-title", "global-menu",
-                "system", "notifications", "clock", "sensors"
+                "system", "notifications", "clock", "sensors", "wallpaper"
             };
             bar_layout = new BarLayout(
                 item_ids,
                 { "overview", "workspaces", "app-title", "global-menu" },
                 { "tiling-position" },
-                { "system", "notifications", "clock", "sensors" },
+                { "system", "notifications", "clock", "sensors", "wallpaper" },
                 _settings.get_strv("panel-layout-left"),
                 _settings.get_strv("panel-layout-center"),
                 _settings.get_strv("panel-layout-right")
