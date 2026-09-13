@@ -22,27 +22,21 @@ namespace Singularity {
         // Sensor counts vary by two orders of magnitude across platforms, so
         // the detail list is capped rather than unbounded.
         private const int MAX_ROWS_PER_GROUP = 6;
-        // Gdk.Monitor geometry is expressed in logical pixels.  Two 340px
-        // columns plus the popover margins fit comfortably from 1280px up;
-        // below that, keeping one column avoids a popover that dominates the
-        // display.
-        private const int TWO_COLUMN_MIN_WIDTH = 1280;
+        private const int MAX_DETAIL_COLUMNS = 3;
         private const int DETAIL_COLUMN_WIDTH = 340;
         private const int DETAIL_COLUMN_SPACING = 18;
         private const int DETAIL_SCREEN_MARGIN = 96;
 
         private MenuButton button;
-        private Label summary_label;
+        private Box summary_box;
         private Box detail_box;
         private Box detail_toggle_box;
         private Box detail_columns_box;
-        private Box detail_left;
-        private Box detail_right;
+        private Box[] detail_columns;
         private Box detail_target;
         private ScrolledWindow detail_scroller;
-        private bool use_two_columns = false;
-        private int left_row_count = 0;
-        private int right_row_count = 0;
+        private int detail_column_count = 1;
+        private int[] detail_column_rows;
         private static Gtk.CssProvider? compact_rows_provider = null;
         private SensorMonitor monitor;
         private bool show_frequency = true;
@@ -78,23 +72,17 @@ namespace Singularity {
             add_css_class("sensors-indicator");
             this.settings = settings;
 
-            summary_label = new Label("");
-            summary_label.add_css_class("sensors-summary");
-            // Pango markup, not plain text: the compact chip colours each
-            // metric's dot + value independently (temperature by thermal
-            // severity, memory by capacity, CPU/frequency neutral) so a
-            // glance shows WHICH figure needs attention, not just that one
-            // does.
-            summary_label.use_markup = true;
+            summary_box = new Box(Orientation.HORIZONTAL, 10);
+            summary_box.add_css_class("sensors-summary");
 
             button = new MenuButton();
             button.add_css_class("flat");
             button.tooltip_text = _("Temperatures and CPU clock");
-            button.child = summary_label;
+            button.child = summary_box;
             append(button);
 
-            // Real Adw rows, with the original compact panel density rather
-            // than preferences-page group chrome and separators.
+            // Native Singularity rows, with the original compact panel
+            // density rather than preferences-page chrome and separators.
             if (compact_rows_provider == null) {
                 compact_rows_provider = new Gtk.CssProvider();
                 compact_rows_provider.load_from_string(
@@ -117,15 +105,17 @@ namespace Singularity {
             detail_columns_box = new Box(Orientation.HORIZONTAL,
                                          DETAIL_COLUMN_SPACING);
             detail_columns_box.homogeneous = true;
-            detail_left = new Box(Orientation.VERTICAL, 8);
-            detail_right = new Box(Orientation.VERTICAL, 8);
-            detail_left.hexpand = true;
-            detail_right.hexpand = true;
-            detail_columns_box.append(detail_left);
-            detail_columns_box.append(detail_right);
+            detail_columns = new Box[MAX_DETAIL_COLUMNS];
+            detail_column_rows = new int[MAX_DETAIL_COLUMNS];
+            for (int i = 0; i < MAX_DETAIL_COLUMNS; i++) {
+                detail_columns[i] = new Box(Orientation.VERTICAL, 8);
+                detail_columns[i].hexpand = true;
+                detail_columns[i].visible = i == 0;
+                detail_columns_box.append(detail_columns[i]);
+            }
             detail_box.append(detail_toggle_box);
             detail_box.append(detail_columns_box);
-            detail_target = detail_left;
+            detail_target = detail_columns[0];
 
             Popover popover = new Popover();
             // Natural size is the ordinary presentation.  Automatic vertical
@@ -296,21 +286,47 @@ namespace Singularity {
         private void configure_detail_layout() {
             int screen_width = 1024;
             int screen_height = 768;
+            int scale_factor = 1;
             var target_monitor = panel_monitor();
             if (target_monitor != null) {
                 var geometry = target_monitor.get_geometry();
                 screen_width = geometry.width;
                 screen_height = geometry.height;
+                scale_factor = target_monitor.get_scale_factor();
             }
 
-            use_two_columns = screen_width >= TWO_COLUMN_MIN_WIDTH;
-            detail_right.visible = use_two_columns;
-            detail_columns_box.spacing = use_two_columns
+            // Base density on effective physical resolution rather than one
+            // logical-pixel breakpoint. A scaled HiDPI panel can therefore
+            // use more columns than a native low-resolution display with the
+            // same GTK geometry.
+            int effective_width = screen_width * int.max(1, scale_factor);
+            int available_width = int.max(DETAIL_COLUMN_WIDTH,
+                effective_width - DETAIL_SCREEN_MARGIN);
+            // Budget a column-width of breathing room per detail column. The
+            // content itself remains DETAIL_COLUMN_WIDTH wide below; the
+            // extra budget prevents a merely wide monitor from producing a
+            // sparse, screen-dominating popover, while a 4K/HiDPI output has
+            // enough effective pixels to justify all three columns.
+            int density_slot = DETAIL_COLUMN_WIDTH * 2
+                + DETAIL_COLUMN_SPACING;
+            int physical_column_count = int.min(MAX_DETAIL_COLUMNS,
+                int.max(1, (available_width + DETAIL_COLUMN_SPACING) /
+                    density_slot));
+            int logical_width = int.max(DETAIL_COLUMN_WIDTH,
+                screen_width - DETAIL_SCREEN_MARGIN);
+            int logical_column_count = int.max(1,
+                (logical_width + DETAIL_COLUMN_SPACING) /
+                    (DETAIL_COLUMN_WIDTH + DETAIL_COLUMN_SPACING));
+            detail_column_count = int.min(physical_column_count,
+                                          logical_column_count);
+            for (int i = 0; i < MAX_DETAIL_COLUMNS; i++) {
+                detail_columns[i].visible = i < detail_column_count;
+            }
+            detail_columns_box.spacing = detail_column_count > 1
                 ? DETAIL_COLUMN_SPACING : 0;
 
-            int content_width = use_two_columns
-                ? DETAIL_COLUMN_WIDTH * 2 + DETAIL_COLUMN_SPACING
-                : DETAIL_COLUMN_WIDTH;
+            int content_width = DETAIL_COLUMN_WIDTH * detail_column_count
+                + DETAIL_COLUMN_SPACING * (detail_column_count - 1);
             detail_scroller.min_content_width = content_width;
             detail_scroller.max_content_width = content_width;
             detail_scroller.max_content_height = int.max(320,
@@ -329,40 +345,18 @@ namespace Singularity {
             return show_utilization && util.memory_fraction >= 0.0;
         }
 
-        /**
-         * Resolve a NAMED theme colour (e.g. "success_color") to a hex
-         * string for Pango markup.
-         *
-         * Markup spans take a literal colour, not a CSS variable, so the
-         * value has to be looked up at render time rather than written once
-         * -- this is what keeps it honest across a light/dark theme switch
-         * instead of baking in a colour that only happened to be right when
-         * the code was written. Falls back to the theme's plain text colour
-         * if the named token is ever missing, so a lookup failure degrades
-         * to unstyled text rather than invalid markup.
-         */
-        private string theme_color_hex(string color_name) {
-            // lookup_color lives on StyleContext, not on Widget directly
-            // (deprecated since GTK 4.10, but still the working path -- no
-            // non-deprecated replacement exists for resolving a NAMED CSS
-            // colour at runtime, only get_color() for the resolved `color`
-            // property itself).
-            var style = summary_label.get_style_context();
-            Gdk.RGBA rgba;
-            if (!style.lookup_color(color_name, out rgba)) {
-                if (!style.lookup_color("text_color", out rgba)) {
-                    return "#ffffff";
-                }
-            }
-            return "#%02x%02x%02x".printf(
-                (uint) Math.round(rgba.red * 255),
-                (uint) Math.round(rgba.green * 255),
-                (uint) Math.round(rgba.blue * 255));
+        /** Add one compact metric using the panel theme's inherited colour. */
+        private void append_summary_segment(string text) {
+            summary_box.append(new Label("\u25cf %s".printf(text)));
         }
 
-        /** One coloured "dot value" segment for the compact chip. */
-        private string markup_segment(string color_hex, string text) {
-            return "<span color='%s'>\u25cf %s</span>".printf(color_hex, Markup.escape_text(text));
+        /** Add one compact alarm metric using the same GTK class as its row. */
+        private void append_severity_summary_segment(string text,
+                                                     Severity severity) {
+            var label = new Label("\u25cf %s".printf(text));
+            string? css = severity_css(severity);
+            if (css != null) label.add_css_class(css);
+            summary_box.append(label);
         }
 
         private static int percent_of(double fraction) {
@@ -479,25 +473,16 @@ namespace Singularity {
                     break;
                 }
             }
-            // Drop the whole-label severity class the old plain-text chip
-            // used: each metric below now carries its OWN colour via
-            // markup, which is strictly more informative (which figure is
-            // hot, not just that something is) and would otherwise fight
-            // the per-segment colours for the eye.
-            summary_label.remove_css_class("warning");
-            summary_label.remove_css_class("error");
-
-            StringBuilder markup = new StringBuilder();
+            clear_box(summary_box);
             if (primary >= 0) {
-                markup.append(markup_segment(theme_color_hex(severity_color_name(primary_severity)),
-                                              format_celsius(primary)));
+                append_severity_summary_segment(format_celsius(primary),
+                                                primary_severity);
             }
             if (show_frequency && monitor.cpu_khz > 0) {
-                if (markup.len > 0) markup.append("  ");
                 // Clock speed is informational, never an alarm colour --
                 // same reasoning as CPU below: running near the maximum is
                 // the CPU doing its job, not a problem to flag red.
-                markup.append(markup_segment(theme_color_hex("accent_color"), format_clock(monitor.cpu_khz)));
+                append_summary_segment(format_clock(monitor.cpu_khz));
             }
             // Utilisation in the compact chip, not only in the popover.
             //
@@ -508,23 +493,21 @@ namespace Singularity {
             // has no swap.
             if (show_utilization) {
                 if (util.cpu_fraction >= 0.0) {
-                    if (markup.len > 0) markup.append("  ");
                     // CPU busy is never severity-coloured: a core at 100% is
                     // doing its job, and painting that red would train the
                     // user to ignore the colour that does mean something --
                     // the same reasoning the popover's Clocks section and
                     // capacity_severity() already document.
-                    markup.append(markup_segment(theme_color_hex("accent_color"),
-                                                  _("CPU %d%%").printf(percent_of(util.cpu_fraction))));
+                    append_summary_segment(
+                        _("CPU %d%%").printf(percent_of(util.cpu_fraction)));
                 }
                 if (util.memory_fraction >= 0.0) {
-                    if (markup.len > 0) markup.append("  ");
                     Severity mem_severity = capacity_severity(util.memory_fraction);
-                    markup.append(markup_segment(theme_color_hex(severity_color_name(mem_severity)),
-                                                  _("MEM %d%%").printf(percent_of(util.memory_fraction))));
+                    append_severity_summary_segment(
+                        _("MEM %d%%").printf(percent_of(util.memory_fraction)),
+                        mem_severity);
                 }
             }
-            summary_label.label = markup.str;
 
             Popover? popover = button.popover;
             if (popover != null && popover.visible) {
@@ -568,14 +551,15 @@ namespace Singularity {
                 rows++;
             }
 
-            if (!use_two_columns || left_row_count <= right_row_count) {
-                detail_left.append(section);
-                left_row_count += rows;
-            } else {
-                detail_right.append(section);
-                right_row_count += rows;
+            int target_column = 0;
+            for (int i = 1; i < detail_column_count; i++) {
+                if (detail_column_rows[i] < detail_column_rows[target_column]) {
+                    target_column = i;
+                }
             }
-            detail_target = detail_left;
+            detail_columns[target_column].append(section);
+            detail_column_rows[target_column] += rows;
+            detail_target = detail_columns[0];
         }
 
         private void add_heading(string title) {
@@ -638,25 +622,6 @@ namespace Singularity {
          * the first step of the ramp. Colour is spent only where it means
          * something: dim, plain, amber, red.
          */
-        /**
-         * Severity -> a named theme colour, for markup (not a CSS class).
-         *
-         * NORMAL reads as success (a calm "this is fine" green) rather than
-         * plain text, matching the standard status-dashboard convention the
-         * graphical chip is going for. WARM stays neutral -- the original
-         * design's severity_css() below also treats WARM as not yet worth
-         * flagging, and this mirrors that rather than inventing a new
-         * threshold.
-         */
-        private string severity_color_name(Severity severity) {
-            switch (severity) {
-                case Severity.CRITICAL: return "error_color";
-                case Severity.HOT:      return "warning_color";
-                case Severity.WARM:     return "text_color";
-                default:                return "success_color";
-            }
-        }
-
         private static string? severity_css(Severity severity) {
             switch (severity) {
                 case Severity.CRITICAL: return "error";
@@ -1087,10 +1052,10 @@ namespace Singularity {
         /** Built only while the popover is open. */
         private void rebuild_details() {
             clear_box(detail_toggle_box);
-            clear_box(detail_left);
-            clear_box(detail_right);
-            left_row_count = 0;
-            right_row_count = 0;
+            for (int i = 0; i < MAX_DETAIL_COLUMNS; i++) {
+                clear_box(detail_columns[i]);
+                detail_column_rows[i] = 0;
+            }
 
             // One control for the whole popover, at the top so its scope is
             // obvious before any section renders: it decides whether every
