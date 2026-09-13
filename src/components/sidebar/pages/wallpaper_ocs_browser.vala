@@ -48,6 +48,12 @@ namespace Singularity.Shell {
         // OCS serves 10 per page unless asked otherwise.
         private const int CRAWL_ITEM_CAP = 4000;
         private const int THUMBNAIL_FETCH_LANES = 8;
+        // One extra screenful keeps the next rows ready without decoding the
+        // thousands of FlowBox children that have never approached view.
+        private const int VIEWPORT_PREFETCH_MARGIN_PX = 400;
+        // Keep several screenfuls behind/ahead as hysteresis so small scrolls
+        // do not repeatedly discard and decode thumbnails at the load edge.
+        private const int VIEWPORT_EVICT_MARGIN_PX = 1600;
         // Per-category subprocess timeout, matches the previous single-call
         // bound so a slow category can't drag a worker beyond the overall
         // window the user is willing to wait.
@@ -57,6 +63,8 @@ namespace Singularity.Shell {
         private ArrayList<WallpaperOcsChoice> providers = new ArrayList<WallpaperOcsChoice>();
         private ArrayList<WallpaperOcsChoice> categories = new ArrayList<WallpaperOcsChoice>();
         private ArrayList<OcsCard> cards = new ArrayList<OcsCard>();
+        private HashSet<int> thumbnail_requested = new HashSet<int>();
+        private HashSet<int> thumbnail_pending = new HashSet<int>();
         // Filters use stable provider/tag IDs; display labels are separate.
         private string active_category_id = "";
         private HashSet<string> active_tag_ids = new HashSet<string>();
@@ -230,6 +238,7 @@ namespace Singularity.Shell {
             grid.row_spacing = 14;
             grid.margin_top = grid.margin_bottom = 10;
             grid.margin_start = grid.margin_end = 10;
+            scroller.vadjustment.value_changed.connect(queue_viewport_thumbnails);
             var grid_row = new PreferencesRow();
             grid_row.activatable = false;
             grid_row.set_child(grid);
@@ -408,6 +417,7 @@ namespace Singularity.Shell {
             var cancel = request;
             loading = true;
             cards.clear();
+            reset_thumbnail_loading();
             grid.remove_all();
             item_category.clear();
             known_tag_ids.clear();
@@ -436,8 +446,7 @@ namespace Singularity.Shell {
             loading = false;
             filter_cards();
             status.label = result_status;
-            if (cards.size > 0)
-                for (int i = 0; i < THUMBNAIL_FETCH_LANES; i++) thumbnails.begin(i, gen, cancel);
+            queue_viewport_thumbnails();
             update_controls();
         }
 
@@ -473,6 +482,7 @@ namespace Singularity.Shell {
                 generation++;
                 request.cancel();
                 cards.clear();
+                reset_thumbnail_loading();
                 grid.remove_all();
                 loading = false;
                 status.label = _("OCS category index is missing. Install the wallpaper helpers, then reopen this page.");
@@ -511,6 +521,7 @@ namespace Singularity.Shell {
                 rebuild_category_row();
                 rebuild_tag_row();
                 cards.clear();
+                reset_thumbnail_loading();
                 grid.remove_all();
                 loading = false;
                 update_controls();
@@ -580,6 +591,7 @@ namespace Singularity.Shell {
             foreach (var c in categories) todo.add(c.id);
             int total = todo.size;
             cards.clear();
+            reset_thumbnail_loading();
             grid.remove_all();
             // The category side-map is keyed by item, not by provider, so it
             // has to be dropped with the cards it described -- otherwise a
@@ -660,8 +672,7 @@ namespace Singularity.Shell {
             // it a much shorter TTL than a clean one.
             if (!cancel.is_cancelled() && cards.size > 0)
                 store_cache(provider, state.errors.size > 0);
-            // Bounded streaming requests, never one worker per tile.
-            for (int i = 0; i < THUMBNAIL_FETCH_LANES; i++) thumbnails.begin(i, gen, cancel);
+            queue_viewport_thumbnails();
         }
 
         // Repaint the grid from the on-disk crawl cache. False means "no
@@ -684,7 +695,7 @@ namespace Singularity.Shell {
             status.label = _("%d wallpapers · %s · Refresh for new uploads").printf(
                 cards.size, cache_age(cached.age(at)));
             update_controls();
-            for (int i = 0; i < THUMBNAIL_FETCH_LANES; i++) thumbnails.begin(i, gen, cancel);
+            queue_viewport_thumbnails();
             return true;
         }
 
@@ -849,6 +860,7 @@ namespace Singularity.Shell {
                 if (card.matches) count++;
             }
             grid.invalidate_filter();
+            queue_viewport_thumbnails();
             if (!loading && !imports.busy) {
                 if (cards.size == 0) status.label = _("No importable wallpapers for this provider.");
                 else if (count == 0) status.label = _("No matches among loaded wallpapers. Clear the filter or refresh.");
@@ -969,7 +981,54 @@ namespace Singularity.Shell {
             cards.add(card);
         }
 
-        // Async thumbnail loader, fanned out from browse_all().
+        private void reset_thumbnail_loading() {
+            thumbnail_requested.clear();
+            thumbnail_pending.clear();
+        }
+
+        // Recompute after allocation: cache/crawl repaint leaves the scroll
+        // value unchanged, while the newly appended FlowBox children do not
+        // have meaningful bounds until GTK's next layout pass.
+        private void queue_viewport_thumbnails() {
+            int gen = generation;
+            Idle.add(() => {
+                if (gen != generation || request.is_cancelled()) return Source.REMOVE;
+                double top = scroller.vadjustment.value;
+                double bottom = top + scroller.vadjustment.page_size;
+                bool queued = false;
+                for (int i = 0; i < cards.size; i++) {
+                    var child = grid.get_child_at_index(i);
+                    if (child == null) continue;
+                    if (!cards[i].matches) {
+                        thumbnail_requested.remove(i);
+                        thumbnail_pending.remove(i);
+                        cards[i].card.set_paintable(null);
+                        continue;
+                    }
+                    Graphene.Rect bounds;
+                    if (!child.compute_bounds(content_box, out bounds)) continue;
+                    double child_top = bounds.origin.y;
+                    double child_bottom = child_top + bounds.size.height;
+                    bool near = child_bottom >= top - VIEWPORT_PREFETCH_MARGIN_PX &&
+                        child_top <= bottom + VIEWPORT_PREFETCH_MARGIN_PX;
+                    bool far = child_bottom < top - VIEWPORT_EVICT_MARGIN_PX ||
+                        child_top > bottom + VIEWPORT_EVICT_MARGIN_PX;
+                    if (near && thumbnail_requested.add(i)) {
+                        thumbnail_pending.add(i);
+                        queued = true;
+                    } else if (far && thumbnail_requested.remove(i)) {
+                        thumbnail_pending.remove(i);
+                        cards[i].card.set_paintable(null);
+                    }
+                }
+                if (queued)
+                    for (int lane = 0; lane < THUMBNAIL_FETCH_LANES; lane++)
+                        thumbnails.begin(lane, gen, request);
+                return Source.REMOVE;
+            });
+        }
+
+        // Async thumbnail loader, fanned out for newly visible cards.
         // Two source paths:
         //   * Bing items: thumbnail_path is a local file (helper pre-
         //     downloaded the 400x240 JPEG before the `list` response was
@@ -988,6 +1047,7 @@ namespace Singularity.Shell {
         // call from arbitrary worker contexts).
         private async void thumbnails(int start, int gen, Cancellable cancel) {
             for (int i = start; i < cards.size && gen == generation && !cancel.is_cancelled(); i += THUMBNAIL_FETCH_LANES) {
+                if (!thumbnail_pending.remove(i)) continue;
                 var card = cards[i];
                 Gdk.Pixbuf? pixbuf = null;
                 if (card.item.thumbnail_path != "") {
@@ -1086,8 +1146,9 @@ namespace Singularity.Shell {
                 // object and `card` is a strong ref into the cards[] list.
                 Gdk.Pixbuf captured_pb = pixbuf;
                 OcsCard captured_card = card;
+                int captured_index = i;
                 Idle.add(() => {
-                    if (gen == generation && captured_card.card != null)
+                    if (gen == generation && thumbnail_requested.contains(captured_index) && captured_card.card != null)
                         captured_card.card.set_paintable(Gdk.Texture.for_pixbuf(captured_pb));
                     return GLib.Source.REMOVE;
                 });
