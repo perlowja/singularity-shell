@@ -37,59 +37,33 @@ namespace Singularity {
     /**
      * Browses and installs curated Artist Packs (ncz-wallpapers-* debs).
      *
-     * This class deliberately knows nothing about apt. It shells out to two
-     * distro-provided scripts, `ncz-wallpaper-pack-inventory` and
-     * `ncz-wallpaper-pack-install`, each at a FIXED, root-owned absolute
-     * path - never resolved through PATH (see INVENTORY_HELPER /
-     * INSTALL_HELPER below for why that distinction is load-bearing). A
-     * distro that does not ship the complete backend (both helpers, pkexec,
-     * and its polkit action) simply has is_available() return false, and the
-     * Artist Pack browser hides itself entirely. Checking the complete
-     * contract is intentional: an inventory-only deployment must not expose
-     * Install buttons that can never work.
+     * Shells out to two distro-provided scripts at FIXED, root-owned
+     * absolute paths, never resolved through PATH (see INSTALL_HELPER).
+     * is_available() gates the complete contract (both helpers, pkexec, the
+     * polkit action) so an inventory-only deployment never shows an Install
+     * button that can't work.
      *
-     * Which apt source(s) count as "an artist pack source" is entirely the
-     * distro's call, read by the inventory script from the
-     * dev.sinty.desktop `artist-pack-apt-sources` GSettings key - this class
-     * never reads or filters on that value itself, so the browser and the
-     * source policy stay independently configurable.
+     * Which apt source(s) count as an Artist Pack source is the distro's
+     * call, read by the inventory script from `artist-pack-apt-sources` -
+     * this class never reads or filters on that value itself.
      *
-     * install_async() intentionally takes the exact `source` URI the
-     * inventory script already reported for a pack, and passes it through
-     * to the privileged install helper as its own argv (rather than the
-     * privileged helper re-deriving "which sources are trusted" itself by
-     * re-reading GSettings as root under pkexec). The helper still
-     * independently re-checks that argv-supplied source both against the
-     * apt sources actually configured on the system and against the
-     * package's live apt candidate before installing anything - it does not
-     * blindly trust the caller. This split matters because GSettings/dconf
-     * is a per-user mechanism: a `pkexec`-elevated root process does not
-     * share the desktop user's dconf session, so having the privileged side
-     * re-read a GSettings key is fragile in a way that reading a plain,
-     * root-owned apt sources file is not. See the install helper and
-     * packaging/singularity/README.md for the full reasoning.
+     * install_async() passes the inventory step's `source` straight through
+     * to the privileged helper rather than having the helper re-derive
+     * trust by re-reading GSettings as root: a pkexec-elevated process
+     * doesn't share the desktop user's dconf session, so the helper instead
+     * re-validates the argv-supplied source against apt's own root-owned
+     * configuration and the package's live candidate.
      */
     public class ArtistPackManager : GLib.Object {
         private static ArtistPackManager? _instance = null;
 
         /**
-         * Fixed, absolute, root-owned locations of the distro backend
-         * helpers. These are deliberately NOT looked up with
-         * Environment.find_program_in_path().
-         *
-         * install_async() hands INSTALL_HELPER to pkexec as the PROGRAM to
-         * execute as root. A PATH-based lookup would therefore let anyone
-         * who can write to any directory that happens to sit earlier in the
-         * desktop process's PATH (~/.local/bin and ~/bin are user-writable
-         * and commonly precede /usr/local/bin) drop in a file named
-         * `ncz-wallpaper-pack-install` and have it run with full root
-         * privileges - a local privilege escalation. Resolving the helper
-         * from a compiled-in constant removes the attacker-controlled input
-         * from that decision entirely.
-         *
-         * These paths form the backend packaging contract. The backend is
-         * tracked separately and must install both files here, with the
-         * install helper named by the policy action below.
+         * Fixed, absolute, root-owned helper paths - deliberately NOT
+         * resolved via Environment.find_program_in_path(). INSTALL_HELPER
+         * is handed to pkexec as the PROGRAM to run as root; a PATH lookup
+         * would let anything earlier on the desktop process's PATH (e.g.
+         * ~/.local/bin) shadow it and get elevated - a local privilege
+         * escalation.
          */
         private const string INVENTORY_HELPER = "/usr/local/bin/ncz-wallpaper-pack-inventory";
         private const string INSTALL_HELPER = "/usr/local/bin/ncz-wallpaper-pack-install";
@@ -102,20 +76,10 @@ namespace Singularity {
 
         private ArtistPackManager() { }
 
-        /**
-         * pkexec's own fixed locations, in preference order. Also resolved
-         * without consulting PATH: the whole point of this call path is that
-         * nothing about which binary gets elevated comes from the
-         * environment.
-         */
+        /** pkexec's own fixed locations - also resolved without PATH, same reason as INSTALL_HELPER. */
         private const string[] PKEXEC_PATHS = { "/usr/bin/pkexec", "/bin/pkexec" };
 
-        /**
-         * True when `path` names an existing, executable regular file.
-         *
-         * Used instead of Environment.find_program_in_path() so helper
-         * resolution never consults PATH - see INSTALL_HELPER above.
-         */
+        /** True when `path` names an existing, executable regular file. */
         private static bool is_executable_file(string path) {
             return FileUtils.test(path, FileTest.IS_REGULAR)
                 && FileUtils.test(path, FileTest.IS_EXECUTABLE);
@@ -190,22 +154,11 @@ namespace Singularity {
         /**
          * Installs one Artist Pack via pkexec + the distro's install helper.
          *
-         * `source` must be the exact `source` URI the inventory step
-         * already reported for this package (ArtistPackInfo.source) - it is
-         * passed through to the privileged helper as argv, which
-         * re-validates it independently rather than trusting this call.
-         * Never pass anything here other than a value that came back from
-         * fetch_inventory_async().
-         *
-         * Idempotent by construction: the helper's own `apt-get install` is
-         * a no-op (exit 0) when the package is already at the candidate
-         * version, so calling this on an already-installed pack is a safe,
-         * repeatable no-op rather than an error. The package-name shape
-         * check here is defense in depth only - the privileged helper
-         * re-validates both the name and the source against the system's
-         * actual apt configuration and the package's live apt candidate
-         * before touching apt, so this check existing or not does not
-         * change what the helper will actually do.
+         * `source` must be the exact value fetch_inventory_async() reported
+         * for this package - it's passed through as argv and independently
+         * re-validated by the privileged helper, which does not trust it.
+         * The package-name check here is defense in depth only; the helper
+         * re-validates both name and source before touching apt regardless.
          */
         public async void install_async(string package, string source, Cancellable? cancellable = null) throws Error {
             if (!Regex.match_simple("^ncz-wallpapers-[a-z0-9][a-z0-9-]*$", package)) {
@@ -216,10 +169,6 @@ namespace Singularity {
                 throw new ArtistPackError.INVALID_RESPONSE(
                     "Refusing to install %s: no source URI given".printf(package));
             }
-            // Both binaries below come from compiled-in absolute paths, never
-            // from PATH: INSTALL_HELPER is the PROGRAM pkexec runs as root, so
-            // letting the environment decide which file that is would be a
-            // local privilege escalation. See INSTALL_HELPER's declaration.
             if (!is_executable_file(INSTALL_HELPER)) {
                 throw new ArtistPackError.BACKEND_MISSING("%s is not installed".printf(INSTALL_HELPER));
             }

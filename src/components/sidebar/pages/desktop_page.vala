@@ -1986,7 +1986,7 @@ namespace Singularity {
             int gen = ++artist_pack_refresh_generation;
 
             artist_pack_group.clear();
-            var loading_row = new ActionRow(_("Loading…"));
+            var loading_row = new ActionRow(_("Loading..."));
             loading_row.activatable = false;
             artist_pack_group.add_row(loading_row);
 
@@ -2016,15 +2016,12 @@ namespace Singularity {
             foreach (var pack in packs) {
                 var row = new ActionRow(pack.title, pack.summary);
                 row.activatable = false;
-                // An apt transaction started before this refresh is still
-                // running, and the inventory we just fetched predates it, so
-                // it still reports the pack as not installed. Trust
-                // artist_packs_installing over that stale answer: handing the
-                // user a fresh enabled Install button here is what lets a
-                // second concurrent install be launched.
+                // installing overrides pack.installed: a transaction started
+                // before this refresh predates it, so the fresh inventory
+                // still reports "not installed".
                 bool installing = artist_packs_installing.contains(pack.package);
                 var install_btn = new Button.with_label(
-                    installing ? _("Installing…") : (pack.installed ? _("Installed") : _("Install")));
+                    installing ? _("Installing...") : (pack.installed ? _("Installed") : _("Install")));
                 install_btn.sensitive = !installing && !pack.installed;
                 string captured_package = pack.package;
                 string captured_source = pack.source;
@@ -2037,21 +2034,14 @@ namespace Singularity {
             }
         }
 
-        // Installs one pack and settles the row it was started from.
-        //
-        // The button is only a safe thing to touch for as long as its row
-        // survives, and the header Refresh button destroys it: it calls
-        // populate_artist_packs_async(), which clears the whole group. So
-        // record the package in artist_packs_installing for the rebuild to
-        // read, and remember the refresh generation we started under -- if it
-        // moved, the button we hold is detached and relabelling it would leave
-        // the visible row stale, so repopulate from the (now current)
-        // inventory instead.
+        // A Refresh click during an install destroys `btn`'s row, so track
+        // the generation we started under: if it moved, repopulate instead
+        // of relabelling a detached button.
         private void start_artist_pack_install(string package, string source, Button btn) {
             if (!artist_packs_installing.add(package)) return;
             int gen = artist_pack_refresh_generation;
             btn.sensitive = false;
-            btn.label = _("Installing…");
+            btn.label = _("Installing...");
             ArtistPackManager.get_default().install_async.begin(package, source, null, (obj, res) => {
                 artist_packs_installing.remove(package);
                 bool row_alive = (gen == artist_pack_refresh_generation);
