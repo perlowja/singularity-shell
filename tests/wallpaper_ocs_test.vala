@@ -40,6 +40,26 @@ private void test_tags() {
         assert(rows.size == 1);
         assert(rows[0].tags.length == 0);
     } catch (Error e) { error("no-tags: %s", e.message); }
+    // Format/control characters are removed before deduplication, and tags
+    // made empty by sanitization disappear entirely.
+    try {
+        string unsafe_item = "{\"provider\":\"pling\",\"id\":\"654\",\"name\":\"Unsafe tags\",\"tags\":[\"na\\u202eture\",\"nature\",\"\\u200b\",\"\\u0001 abstract \\u0007\"]}";
+        var rows = WallpaperOcs.items(browse("[" + unsafe_item + "]"), "pling", "300");
+        assert(rows.size == 1);
+        assert(rows[0].tags.length == 2);
+        assert(rows[0].tags[0] == "nature");
+        assert(rows[0].tags[1] == "abstract");
+    } catch (Error e) { error("sanitized-tags: %s", e.message); }
+    // The cap counts Unicode characters rather than UTF-8 bytes.
+    try {
+        string long_tag = string.nfill(65, 'x');
+        string unicode_tag = string.nfill(64, 'x') + "é";
+        string item = "{\"provider\":\"pling\",\"id\":\"987\",\"name\":\"Long tags\",\"tags\":[\"%s\",\"%s\"]}".printf(long_tag, unicode_tag);
+        var rows = WallpaperOcs.items(browse("[" + item + "]"), "pling", "300");
+        assert(rows.size == 1);
+        assert(rows[0].tags.length == 1);
+        assert(rows[0].tags[0] == string.nfill(64, 'x'));
+    } catch (Error e) { error("long-tags: %s", e.message); }
 }
 private void test_empty() {
     try { assert(WallpaperOcs.items(browse("[]"), "pling", "300").size == 0); } catch (Error e) { error("%s", e.message); }

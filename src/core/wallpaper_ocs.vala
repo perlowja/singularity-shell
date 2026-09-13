@@ -49,6 +49,8 @@ namespace Singularity {
     // JSON from the helper is untrusted. Check types before Json-GLib getters,
     // which otherwise emit criticals (fatal in the GLib.Test harness).
     public class WallpaperOcs : Object {
+        private const int TAG_CHARACTER_LIMIT = 64;
+
         internal static Json.Object object_node(Json.Node? node) throws Error {
             if (node == null || node.get_node_type() != Json.NodeType.OBJECT)
                 throw new WallpaperOcsError.INVALID("Expected a JSON object");
@@ -98,7 +100,19 @@ namespace Singularity {
             foreach (var element in arr.get_elements()) {
                 if (element == null || element.get_value_type() != typeof(string))
                     throw new WallpaperOcsError.INVALID("Invalid OCS tag entry: " + field);
-                string t = element.get_string().strip();
+                var sanitized = new StringBuilder();
+                int index = 0;
+                int characters = 0;
+                unichar c = 0;
+                string raw = element.get_string();
+                while (characters < TAG_CHARACTER_LIMIT && raw.get_next_char(ref index, out c)) {
+                    var type = c.type();
+                    if (type == UnicodeType.FORMAT ||
+                        (type == UnicodeType.CONTROL && !c.isspace())) continue;
+                    sanitized.append_unichar(c);
+                    characters++;
+                }
+                string t = sanitized.str.strip();
                 if (t != "" && !result.contains(t)) result.add(t);
             }
             return result.to_array();
