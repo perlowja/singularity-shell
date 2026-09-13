@@ -272,6 +272,10 @@ namespace Singularity {
         private void update_attribution_position() {
             string position = settings.get_string("wallpaper-attribution-position");
             attribution_label.halign = position == "right" ? Align.END : Align.START;
+            // Gtk.Overlay keeps its current child allocation when only the
+            // alignment changes, so explicitly request a fresh allocation for
+            // live GSettings changes to move the label immediately.
+            attribution_label.queue_allocate();
         }
 
         private void update_wallpaper(WallpaperManager manager) {
