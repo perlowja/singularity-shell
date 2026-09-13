@@ -295,6 +295,36 @@ namespace Singularity {
                 remove_css_class("light-bg");
                 return;
             }
+            // Sample the corner FIRST, before showing anything. The
+            // sample reads WallpaperManager's cached _display_pixbuf,
+            // which for a freshly-changed wallpaper (Bing's async fetch
+            // in particular) can still be the PREVIOUS image for a short
+            // window after attribution metadata has already updated --
+            // reload() updates title/author synchronously from the
+            // sidecar/settings and fires wallpaper_changed() immediately,
+            // while the real pixbuf decode completes later on its own
+            // Idle callback and fires wallpaper_changed() again once
+            // ready. Showing the label before a valid sample exists risks
+            // pairing the NEW caption with the OLD photo's contrast class
+            // (or, if the class was never cleared, indefinitely on a
+            // pixbuf load failure -- see the warning() added at the
+            // pb_medium catch site in wallpaper_manager.vala). Deferring
+            // until lum is valid means the label simply appears a beat
+            // later rather than ever appearing with the wrong contrast;
+            // the next wallpaper_changed() (fired once the real pixbuf
+            // lands) re-invokes this function and completes it then.
+            double lum = manager.corner_luminance_frac(
+                CORNER_SAMPLE_X_FRAC,
+                CORNER_SAMPLE_Y_FRAC,
+                CORNER_SAMPLE_W_FRAC,
+                CORNER_SAMPLE_H_FRAC);
+            if (lum < 0.0) {
+                attribution_label.visible = false;
+                attribution_label.label = "";
+                remove_css_class("light-bg");
+                return;
+            }
+
             string safe_title = Markup.escape_text(title, -1);
             string safe_author = Markup.escape_text(author, -1);
             string markup;
@@ -305,24 +335,14 @@ namespace Singularity {
             } else {
                 markup = safe_author;
             }
+
+            bool light_bg = lum > ATTRIBUTION_LUM_THRESHOLD;
+            if (light_bg) add_css_class("light-bg");
+            else remove_css_class("light-bg");
+
             // CSS class is not a supported Pango span attribute.
             attribution_label.set_markup(markup);
             attribution_label.visible = true;
-
-            // Sample the corner. The pixbuf aspect matches the screen
-            // aspect so a fractional bottom-left corner maps 1:1 to a
-            // fractional bottom-left corner of the screen at the same
-            // proportional position.
-            double lum = manager.corner_luminance_frac(
-                CORNER_SAMPLE_X_FRAC,
-                CORNER_SAMPLE_Y_FRAC,
-                CORNER_SAMPLE_W_FRAC,
-                CORNER_SAMPLE_H_FRAC);
-            if (lum >= 0.0) {
-                bool light_bg = lum > ATTRIBUTION_LUM_THRESHOLD;
-                if (light_bg) add_css_class("light-bg");
-                else remove_css_class("light-bg");
-            }
         }
 
         private void update_wallpaper(WallpaperManager manager) {

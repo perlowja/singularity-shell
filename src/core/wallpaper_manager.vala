@@ -203,10 +203,14 @@ namespace Singularity {
                     Pixbuf? pb_small = null;
                     try {
                         pb_medium = new Pixbuf.from_file_at_scale(load_path, 320, 180, true);
-                    } catch (Error e) {}
+                    } catch (Error e) {
+                        warning("Failed to build medium wallpaper pixbuf (contrast sampling will be unavailable for %s): %s", load_path, e.message);
+                    }
                     try {
                         pb_small = new Pixbuf.from_file_at_scale(load_path, 120, 67, false);
-                    } catch (Error e) {}
+                    } catch (Error e) {
+                        warning("Failed to build small wallpaper preview for %s: %s", load_path, e.message);
+                    }
 
                     pb_display = ensure_alpha(pb_display);
                     pb_medium = ensure_alpha(pb_medium);
