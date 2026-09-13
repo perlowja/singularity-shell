@@ -4,12 +4,7 @@ using Gee;
 namespace Singularity {
 
     public class WallpaperCollectionInfo : Object {
-        // Plain public fields, not GObject properties: Vala's property
-        // system rejects a property literally named "type" ("error:
-        // Property 'type' not allowed", collides with GObject's own type
-        // machinery). Plain fields sidestep that and still match the
-        // interface this class is documented to expose -- "public fields:
-        // string id, string name, string artist, string dir, string type".
+        // Vala rejects a GObject property named "type"; keep these as fields.
         public string id;
         public string name;
         public string artist;
@@ -25,26 +20,8 @@ namespace Singularity {
         }
     }
 
-    // Parses the .collection registry (INI-shaped KeyFiles, one per pack or
-    // provider) into a list of WallpaperCollectionInfo, in the priority order
-    // the search roots are given -- a later root's file for the same Id is
-    // ignored, matching "first root wins" -- so callers pass roots in the
-    // order they want honoured, most-specific FIRST if a user file should
-    // beat a shipped one. default_search_roots() below passes system dirs
-    // first, which means a shipped collection wins an Id collision against a
-    // user file reusing the same Id.
-    //
-    // Callers pass explicit search_roots (not read from GLib.Environment
-    // here) so this class stays testable against a temp directory with no
-    // real filesystem layout assumptions.
     public class WallpaperCollections : Object {
-        // The registry roots: system data dirs, then the user's own. parse()
-        // is first-root-wins, so on an Id collision the system collection is
-        // the one kept and a user file reusing that Id is dropped -- worth
-        // knowing before relying on the order, and unchanged here from what
-        // the settings page built inline. Shared by the settings page and the
-        // rotator, because two copies of this list drift, and a rotator that
-        // cannot see a pack the gallery shows is the shape that bug takes.
+        // parse() is first-root-wins, so system collections take precedence.
         public static string[] default_search_roots() {
             string[] roots = {};
             foreach (unowned string d in GLib.Environment.get_system_data_dirs())

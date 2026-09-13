@@ -22,8 +22,6 @@ namespace Singularity {
         private WallpaperPreviewWidget preview_widget;
         private FlowBox wallpaper_grid;
         private Gee.ArrayList<WallpaperCollectionInfo> wallpaper_collections = new Gee.ArrayList<WallpaperCollectionInfo>();
-        // Same directory WallpaperRotator reads: these controls write the
-        // rotation state and the rotator in the shell process acts on it.
         private WallpaperRotationState rotation_state = new WallpaperRotationState(
             WallpaperRotationState.default_config_dir());
         private int wallpaper_grid_generation = 0;
@@ -174,26 +172,18 @@ namespace Singularity {
             add_group(preview_group);
             var grid_group = new PreferencesGroup(_("Wallpapers"));
 
-            // "singularity/wallpaper-collections" is a project-owned registry
-            // location, not a specific vendor's: any downstream OS or pack
-            // installer can drop a .collection file here to have its wallpapers
-            // appear in this picker (see WallpaperCollections' class doc for the
-            // file format).
             wallpaper_collections = WallpaperCollections.parse(
                 WallpaperCollections.default_search_roots());
 
             var source_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             foreach (var collection in wallpaper_collections) {
                 string label = (collection.artist != null && collection.artist != "" && collection.artist != collection.name)
-                    ? "%s — %s".printf(collection.name, collection.artist)
+                    ? "%s - %s".printf(collection.name, collection.artist)
                     : collection.name;
                 source_options.add(new Singularity.Core.AppSettingOption() {
                     id = collection.id, label = label
                 });
             }
-            // "" is not a real collection id -- it's just a value guaranteed
-            // not to match anything, so the fallback below always picks the
-            // first discovered collection when no prior selection is on disk.
             string initial_collection_id = rotation_state.get_selected_collection("");
             bool have_initial = false;
             foreach (var opt in source_options) if (opt.id == initial_collection_id) have_initial = true;
@@ -1902,13 +1892,7 @@ namespace Singularity {
             foreach (var collection in wallpaper_collections) {
                 if (collection.id == selected_id) { scan_dir = collection.dir; break; }
             }
-            // A selection with no matching collection (deleted pack, stale
-            // state file) must not empty the grid silently -- fall back to
-            // whatever the first known collection is, same "never leave the
-            // desktop with no wallpaper" principle the rotator script itself
-            // follows. Persist the fallback so the source row and the state
-            // file agree with what's actually on screen instead of re-falling
-            // back (and re-logging the same mismatch) on every refresh.
+            // Persist stale-selection fallback so the UI and saved state agree.
             if (scan_dir == null && wallpaper_collections.size > 0) {
                 selected_id = wallpaper_collections[0].id;
                 scan_dir = wallpaper_collections[0].dir;

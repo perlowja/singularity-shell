@@ -28,13 +28,9 @@ private void write_collection(string registry, string id, string dir) {
     } catch (Error e) { error("fixture: %s", e.message); }
 }
 
-// ---- pick(): which image is next ------------------------------------------
-
 private void test_pick_single_candidate() {
     var uris = new ArrayList<string>();
     uris.add("file:///a.png");
-    // The only image in the pack is also the one on screen: keep showing it
-    // rather than report "nothing to rotate to".
     assert(WallpaperRotator.pick(uris, "file:///a.png", 0) == "file:///a.png");
 }
 
@@ -53,8 +49,6 @@ private void test_pick_never_returns_the_current_wallpaper() {
     uris.add("file:///a.png");
     uris.add("file:///b.png");
     uris.add("file:///c.png");
-    // A rotation that lands on the image already showing reads as a broken
-    // feature, so every roll must skip it.
     for (uint32 roll = 0; roll < 12; roll++) {
         assert(WallpaperRotator.pick(uris, "file:///b.png", roll) != "file:///b.png");
     }
@@ -63,8 +57,6 @@ private void test_pick_never_returns_the_current_wallpaper() {
 private void test_pick_on_empty_list() {
     assert(WallpaperRotator.pick(new ArrayList<string>(), null, 0) == null);
 }
-
-// ---- choose_next(): which collection ---------------------------------------
 
 private void test_rotates_within_the_selected_collection_only() {
     string registry = make_dir("registry-scoped");
@@ -93,8 +85,6 @@ private void test_stale_collection_id_falls_back_to_the_first() {
     write_collection(registry, "alpha", alpha);
 
     string config = make_dir("config-stale");
-    // A pack the user had selected and has since uninstalled must not leave
-    // the rotator doing nothing forever.
     new WallpaperRotationState(config).set_selected_collection("uninstalled-pack");
 
     var rotator = new WallpaperRotator(config, { registry });
@@ -119,8 +109,6 @@ private void test_no_registry_at_all() {
     assert(rotator.choose_next() == null);
 }
 
-// ---- rotate_now(): the announcement ----------------------------------------
-
 private void test_rotate_now_announces_and_records_the_choice() {
     string registry = make_dir("registry-emit");
     string pack = make_dir("emit-pack");
@@ -136,7 +124,6 @@ private void test_rotate_now_announces_and_records_the_choice() {
     rotator.rotate_now();
 
     assert(announced == only);
-    // Recorded, so the next rotation knows what is already on screen.
     assert(rotator.current_uri == only);
 }
 
@@ -160,8 +147,6 @@ private void test_choose_next_for_excludes_the_supplied_wallpaper() {
     string config = make_dir("config-exclude");
     new WallpaperRotationState(config).set_selected_collection("exclude");
 
-    // The threaded rotation passes a main-thread snapshot rather than
-    // reading the property, so the exclusion has to hold for the argument.
     var rotator = new WallpaperRotator(config, { registry });
     for (int i = 0; i < 8; i++) {
         assert(rotator.choose_next_for(a) == b);
@@ -169,10 +154,6 @@ private void test_choose_next_for_excludes_the_supplied_wallpaper() {
     }
 }
 
-// The path every real rotation takes: the scan happens on a worker thread and
-// the result is announced back on the main loop. rotate_now() is the same
-// decision made synchronously, so testing only that would leave the threaded
-// hand-off -- the part that actually runs -- unexercised.
 private void test_rotate_async_announces_on_the_main_loop() {
     string registry = make_dir("registry-async");
     string pack = make_dir("async-pack");
@@ -189,10 +170,7 @@ private void test_rotate_async_announces_on_the_main_loop() {
         announced = uri;
         loop.quit();
     });
-    // Fail on the assertion below rather than hang the suite if the hand-off
-    // never happens. The flag matters: once this fires the source is already
-    // gone, and removing it again is a GLib critical that would mask the real
-    // failure with "Source ID was not found".
+    // Avoid removing a timeout source after its callback already removed it.
     bool timed_out = false;
     uint bail = Timeout.add_seconds(10, () => {
         timed_out = true;
@@ -209,11 +187,6 @@ private void test_rotate_async_announces_on_the_main_loop() {
     assert(rotator.current_uri == only);
 }
 
-// ---- reschedule(): the switch and the interval actually govern the timer ----
-
-// Rotation must not start on its own. Before a runtime consumer existed the
-// "absent means enabled" default was inert; now it would mean every install
-// that never touched the switch starts replacing a hand-picked wallpaper.
 private void test_untouched_install_does_not_rotate() {
     string config = make_dir("config-untouched");
     var rotator = new WallpaperRotator(config, { make_dir("registry-untouched") });
@@ -227,11 +200,9 @@ private void test_timer_follows_the_rotation_state() {
     var state = new WallpaperRotationState(config);
     var rotator = new WallpaperRotator(config, { make_dir("registry-timer") });
 
-    // Nothing written yet: off, so no timer at all.
     rotator.reschedule();
     assert(rotator.armed_interval_seconds == 0);
 
-    // Turning it on is what starts it, at the default period.
     state.set_rotate_enabled(true);
     rotator.reschedule();
     assert(rotator.armed_interval_seconds == 600);
@@ -240,7 +211,6 @@ private void test_timer_follows_the_rotation_state() {
     rotator.reschedule();
     assert(rotator.armed_interval_seconds == 3600);
 
-    // The switch is what decides whether a timer exists at all.
     state.set_rotate_enabled(false);
     rotator.reschedule();
     assert(rotator.armed_interval_seconds == 0);

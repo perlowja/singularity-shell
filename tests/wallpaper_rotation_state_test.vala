@@ -26,8 +26,6 @@ private void test_selected_collection_strips_whitespace() {
 }
 
 private void test_rotate_enabled_defaults_false() {
-    // Opt-in: with no state file written, nothing should be rotating the
-    // wallpaper a user chose by hand.
     var state = new WallpaperRotationState(make_tmp_dir());
     assert(state.get_rotate_enabled() == false);
 }

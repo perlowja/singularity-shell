@@ -2,16 +2,6 @@ using GLib;
 
 namespace Singularity {
 
-    // Reads and writes the plain-text rotation-state files under
-    // $XDG_CONFIG_HOME/singularity/wallpaper-rotation/: "collection" (the
-    // active collection id), "rotate-enabled" ("1"/"0") and
-    // "rotate-interval" (seconds). This is the documented, project-owned
-    // contract for wallpaper rotation -- any background daemon that wants to
-    // actually change the desktop wallpaper on a timer polls these files and
-    // this class is only the shell UI's side of that same shared state, not
-    // a new or vendor-specific mechanism. config_dir is injected (rather
-    // than read from GLib.Environment here) so it's testable against a temp
-    // directory.
     public class WallpaperRotationState : Object {
         private const int DEFAULT_INTERVAL_SECONDS = 600;
         private const int MIN_INTERVAL_SECONDS = 30;
@@ -22,12 +12,6 @@ namespace Singularity {
             this.config_dir = config_dir;
         }
 
-        // The one place this location is spelled out. The settings page (which
-        // writes the files) and the rotator (which reads them) are in the same
-        // process but were reached through separate code paths; a second
-        // literal here is a silent disagreement about where the contract
-        // lives, with a UI that appears to save and a rotator that never sees
-        // the change.
         public static string default_config_dir() {
             return GLib.Path.build_filename(
                 GLib.Environment.get_user_config_dir(), "singularity", "wallpaper-rotation");
@@ -54,10 +38,7 @@ namespace Singularity {
             string dest = path_for(filename);
             string tmp = dest + ".tmp";
             try {
-                // Write-then-rename: the rotator daemon polls these files on
-                // its own timer, so a partial write it reads mid-flush would
-                // be picked up as-is. rename(2) within the same directory is
-                // atomic, so the daemon only ever sees a complete write.
+                // Same-directory rename keeps state updates atomic for readers.
                 FileUtils.set_contents(tmp, contents);
                 if (FileUtils.rename(tmp, dest) != 0) {
                     warning("wallpaper rotation state: could not rename %s into place", filename);
@@ -76,13 +57,7 @@ namespace Singularity {
             write("collection", id);
         }
 
-        // Absent means OFF, not on. While nothing read these files the
-        // default was inert either way; now that WallpaperRotator acts on
-        // them, defaulting an absent file to enabled would mean every
-        // existing install starts replacing the wallpaper its user chose,
-        // every ten minutes, from a collection they never picked, without
-        // anyone having touched the switch. Rotation is opt-in: the file
-        // exists once the user has turned it on.
+        // Rotation is opt-in; an absent state file must remain off.
         public bool get_rotate_enabled() {
             string? value = read_trimmed("rotate-enabled");
             if (value == null) return false;

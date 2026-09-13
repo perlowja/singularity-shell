@@ -13,8 +13,7 @@ namespace Singularity {
     }
 
     internal class WallpaperGallery : Object {
-        // Membership comes from the selected scan. History can reorder its
-        // members, but must never introduce images from another source.
+        // History may reorder results, but cannot add another source's images.
         public static ArrayList<WallpaperCandidate> scan(string? selected_dir,
                                                         string[] collection_dirs,
                                                         string[] recent) {
@@ -43,11 +42,7 @@ namespace Singularity {
         // Bound traversal of user-controlled collection directories.
         private const int WALLPAPER_SCAN_MAX_DEPTH = 3;
 
-        // Dir= values across .collection files may point at the same
-        // directory through different symlinks (a pack install living
-        // outside /usr/share is a common layout) -- resolve to the real
-        // path before comparing, or the source-boundary exclusion above
-        // silently fails to recognize them as the same root.
+        // Resolve symlinks before enforcing collection boundaries.
         private static string canonical_path(string path) {
             string? real = Posix.realpath(path, null);
             return real ?? File.new_for_path(path).get_path();
@@ -75,23 +70,15 @@ namespace Singularity {
                     var child = dir.get_child(info.get_name());
 
                     if (info.get_file_type() == FileType.DIRECTORY) {
-                        // Not followed as a directory either: a symlinked
-                        // directory is the easy way to walk in a circle.
+                        // Do not follow symlinked directories; they may form cycles.
                         if (info.get_is_symlink()) continue;
                         scan_wallpaper_dir(child.get_path(), candidates, thread_seen,
                                            visited_dirs, excluded_dirs, depth + 1);
                         continue;
                     }
 
-                    // default.jpg is a symlink the rotator repoints at whichever
-                    // wallpaper is current, at a target enumerated in this same
-                    // directory -- following it would list one image twice, once
-                    // under its own name and once as "default". Only elide a
-                    // same-directory pointer like that one: a pack that ships an
-                    // image as a symlink to a shared asset OUTSIDE this directory
-                    // is real content, and the previous scanner listed it fine
-                    // (content-type resolves through the link either way, since
-                    // enumerate_children above passes no NOFOLLOW flag).
+                    // Ignore same-directory aliases such as the mutable default.jpg,
+                    // but retain symlinks to shared assets outside the collection.
                     if (info.get_is_symlink()) {
                         string? target = info.get_symlink_target();
                         if (target != null) {
