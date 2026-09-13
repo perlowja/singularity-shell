@@ -152,11 +152,15 @@ namespace Singularity {
         public BingWallpaperProvider() { base("/usr/local/bin/ncz-wallpaper-bing"); }
         public async ArrayList<WallpaperOcsChoice> choices(string index, Cancellable? cancel) throws Error {
             var loaded = WallpaperBing.markets(yield command({helper, "markets"}, cancel, 30));
-            // When the helper advertises the combined view it is the ONLY
-            // browsing axis (see WallpaperBing.combined_view). Per-market
-            // browsing stays available by choosing specific markets in the
-            // Bing Markets picker -- which is also what makes the helper stop
-            // advertising the combined view.
+            // The helper now ALWAYS advertises the combined view (it always
+            // fetches every market; see configured_markets() in
+            // 45-wallpaper-rotator.sh), so this is unconditionally the ONLY
+            // browsing axis now -- per-market browsing is no longer
+            // reachable through the picker, because the picker no longer
+            // restricts which markets are fetched at all. What the picker
+            // sets today (see BING_MARKETS_ID_PICK in desktop_page.vala) is
+            // a PREFERRED region for dedup tie-breaking, not a fetch
+            // filter, so it has no bearing on what choices() returns here.
             var only = WallpaperBing.combined_view(loaded);
             combined = only != null;
             return only ?? loaded;

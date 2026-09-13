@@ -33,15 +33,26 @@ namespace Singularity {
         private string cached_wallpaper_accent = "#3584e4";
         private static bool wallpaper_css_loaded = false;
 
-        // Bing wallpaper markets selector. The UI side of
-        // cix-installer's 45-wallpaper-rotator.sh's ncz-wallpaper-bing
-        // contract -- the rotator script reads its market list from
-        // ~/.config/ncz-wallpaper/bing-markets and accepts the literal
-        // "all" (case-insensitive) as shorthand for every market below.
-        // id "all" = "All Markets" (immediate write of "all"); id "pick"
-        // = "Choose Markets..." opens a multi-select picker dialog. The
-        // same dialog object is reused across opens and its checkboxes
-        // are pre-checked from the file each time it's shown.
+        // Bing preferred-region selector. The UI side of cix-installer's
+        // 45-wallpaper-rotator.sh's ncz-wallpaper-bing contract -- the
+        // rotator script always fetches and combines EVERY market now
+        // (operator 2026-09-12: "just have it be the preferred language,
+        // and have all the feeds be combined"). The file this writes,
+        // ~/.config/ncz-wallpaper/bing-markets, no longer restricts which
+        // markets are fetched; it only tells the rotator which region's
+        // copy of a photo to prefer when the SAME photograph is served to
+        // more than one market and has to be de-duplicated down to one
+        // (see cmd_consolidate()'s preferred_market() in the rotator
+        // script). The literal "all" (case-insensitive) sentinel, or an
+        // absent file, means "no preference" -- the rotator falls back to
+        // its original alphabetical dedup-winner order.
+        // id "all" = "All Markets, No Preference" (immediate write of
+        // "all"); id "pick" = "Choose Preferred Region..." opens a
+        // picker dialog. The same dialog object is reused across opens
+        // and its checkboxes are pre-checked from the file each time it's
+        // shown. Checking a region here does NOT narrow which markets are
+        // fetched or shown -- every market is always fetched -- it only
+        // sets which one wins ties.
         private const string BING_MARKETS_ID_ALL = "all";
         private const string BING_MARKETS_ID_PICK = "pick";
         // 13 markets, grouped by region for the picker dialog. Order
@@ -295,26 +306,32 @@ namespace Singularity {
                 settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
             });
 
-            // Bing markets selector. The two-entry SelectionRow matches
-            // ncz-wallpaper-bing's existing "all" sentinel in
+            // Bing preferred-region selector. The two-entry SelectionRow
+            // matches ncz-wallpaper-bing's existing "all" sentinel in
             // ~/.config/ncz-wallpaper/bing-markets (45-wallpaper-rotator.sh
-            // reads that file verbatim). "All Markets" writes "all"
-            // immediately; "Choose Markets..." opens a multi-select
-            // dialog with one checkbox per market grouped by region,
-            // pre-checked from the current file state. We don't gate
-            // the row on the active wallpaper provider -- the rest of
+            // reads that file verbatim), but the MEANING changed: every
+            // market is always fetched and combined now, so this no
+            // longer restricts what's fetched. It only sets which
+            // region's copy of a duplicate photo the rotator prefers when
+            // de-duplicating -- "All Markets, No Preference" writes "all"
+            // immediately (today's alphabetical dedup-winner order, kept
+            // as the neutral default); "Choose Preferred Region..." opens
+            // a picker dialog with one checkbox per market grouped by
+            // region, pre-checked from the current file state. We don't
+            // gate the row on the active wallpaper provider -- the rest of
             // this page (rotate_row, interval_row, attribution_row) is
             // also unconditional, and there's no clean existing
             // provider-detection hook to reuse.
             init_bing_markets_table();
             var bing_markets_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_ALL, label = _("All Markets") });
-            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_PICK, label = _("Choose Markets…") });
+            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_ALL, label = _("All Markets, No Preference") });
+            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_PICK, label = _("Choose Preferred Region…") });
             // Initial selection reflects the file: "all" or absent =
-            // All Markets, anything else = Choose Markets... so the
-            // dialog opens against the actually-configured subset.
-            bing_markets_row = new SelectionRow.with_options(_("Bing Markets"), bing_markets_options,
+            // All Markets, anything else = Choose Preferred Region... so
+            // the dialog opens pre-checked against the actual preference.
+            bing_markets_row = new SelectionRow.with_options(_("Bing Preferred Region"), bing_markets_options,
                 bing_markets_file_is_all() ? BING_MARKETS_ID_ALL : BING_MARKETS_ID_PICK);
+            bing_markets_row.subtitle = _("Bing always combines every region's photo of the day; this only picks whose caption and credit win when the same photo is shared");
             bing_markets_row.selected.connect((id) => {
                 if (bing_markets_updating || bing_markets_row == null) return;
                 if (id == BING_MARKETS_ID_ALL) {
@@ -2600,10 +2617,12 @@ namespace Singularity {
         }
 
         // Read the bing-markets file and report whether its content
-        // (trimmed, lowercased) is the "all" sentinel. Absent file also
-        // returns true so the ComboRow starts on "All Markets" on a
-        // fresh install where the daemon's 13-market default is what
-        // runs anyway -- UI intent matches effective behaviour.
+        // (trimmed, lowercased) is the "all" sentinel -- i.e. "no
+        // preferred region". Absent file also returns true so the
+        // SelectionRow starts on "All Markets, No Preference" on a fresh
+        // install, matching the rotator's own default (preferred_market()
+        // in 45-wallpaper-rotator.sh returns None for an absent file too
+        // -- UI intent matches effective behaviour on both sides now).
         private bool bing_markets_file_is_all() {
             string path = bing_markets_file_path();
             if (!FileUtils.test(path, FileTest.EXISTS)) return true;
@@ -2618,9 +2637,13 @@ namespace Singularity {
 
         // Read the bing-markets file and return the configured codes as
         // an array. "all" (any case) or absent -> empty list (i.e. the
-        // sentinel meaning "every market"). Otherwise split on any of
-        // whitespace/comma and keep tokens matching the 2-letter-2-
-        // letter market pattern, preserving file order.
+        // sentinel meaning "no preferred region"). Otherwise split on any
+        // of whitespace/comma and keep tokens matching the 2-letter-2-
+        // letter market pattern, preserving file order. The rotator only
+        // ever honours the FIRST entry as the preference (a preference is
+        // singular); this still returns every matched token so a legacy
+        // multi-market file written by an older build degrades to "the
+        // first one wins" rather than silently losing the whole value.
         private string[] bing_markets_read_codes() {
             string path = bing_markets_file_path();
             if (!FileUtils.test(path, FileTest.EXISTS)) return {};
@@ -2670,15 +2693,16 @@ namespace Singularity {
             write_bing_markets_contents("all\n");
         }
 
-        // Write the checked markets as a single space-separated line
-        // (newline-terminated, matching the format the daemon already
-        // expects). Empty list -> fall back to "all" rather than an
-        // empty file, because ncz-wallpaper-bing treats an empty value
-        // as the default 13-market set anyway, and an empty file would
-        // be picked up by the daemon's split() as a literal empty list
-        // with no behaviour change -- but writing "all" makes the user's
-        // "I left this blank, give me everything" intent explicit on
-        // disk.
+        // Write the chosen preferred market as a single line
+        // (newline-terminated, matching the format the rotator already
+        // expects -- it only ever honours the FIRST valid token in the
+        // file now; see preferred_market() in 45-wallpaper-rotator.sh).
+        // Empty list -> fall back to "all" rather than an empty file,
+        // because ncz-wallpaper-bing treats an empty value as "no
+        // preference" anyway, and an empty file would be picked up by
+        // the rotator's split() as a literal empty list with no
+        // behaviour change -- but writing "all" makes the user's "no
+        // preferred region" intent explicit on disk.
         private void write_bing_markets_codes(string[] codes) {
             if (codes.length == 0) {
                 write_bing_markets_all();
@@ -2687,18 +2711,22 @@ namespace Singularity {
             write_bing_markets_contents(string.joinv(" ", codes) + "\n");
         }
 
-        // Build (once) and present the multi-select dialog. The same
-        // dialog object is reused across opens; checkboxes are
-        // re-synced against the current file state each time, so a
-        // user who picks "All Markets", then "Choose Markets..." gets
-        // every market pre-checked, and a user who picks an explicit
-        // subset then reopens sees exactly that subset.
+        // Build (once) and present the preferred-region dialog. The
+        // checkboxes behave as a single-select group (checking one
+        // unchecks every other) rather than a genuine multi-select --
+        // there is exactly one preferred region, never a subset, so the
+        // dialog picks ONE market or none at all. The same dialog object
+        // is reused across opens; the checked state is re-synced against
+        // the current file state each time, so a user who picks "All
+        // Markets, No Preference", then "Choose Preferred Region..."
+        // sees nothing pre-checked, and a user who has a region set sees
+        // exactly that one checked on reopen.
         private void open_bing_markets_dialog() {
             if (bing_markets_dialog == null) {
                 var app = GLib.Application.get_default() as Gtk.Application;
                 bing_markets_dialog = new ConfirmDialog(app,
-                    _("Choose Bing Markets"), null,
-                    _("Pick the regional markets Bing should pull images from. Defaults to all 13 if none are checked."),
+                    _("Choose Preferred Region"), null,
+                    _("Bing always fetches and combines every region's photo of the day. Pick one region here to prefer its caption and credit whenever the same photo is shared across regions. Leave nothing checked for no preference."),
                     _("Apply"), ConfirmDialog.ActionStyle.SUGGESTED);
 
                 // Build the picker body: one section per region with a
@@ -2722,6 +2750,16 @@ namespace Singularity {
                         if (row.region != region) continue;
                         var check = new Gtk.CheckButton.with_label(row.label);
                         check.set_data("bing-market-code", row.code);
+                        // Single-select: picking one clears every other
+                        // checkbox across all regions, so at most one
+                        // market is ever checked -- a preference is
+                        // singular, unlike the old multi-market subset.
+                        check.toggled.connect(() => {
+                            if (!check.active) return;
+                            foreach (var other in bing_markets_checkboxes) {
+                                if (other != check) other.active = false;
+                            }
+                        });
                         region_box.append(check);
                         bing_markets_checkboxes.add(check);
                     }
@@ -2739,27 +2777,26 @@ namespace Singularity {
                 bing_markets_dialog.response.connect(on_bing_markets_dialog_response);
             }
 
-            // Re-sync checkbox state from the file every open. Read
-            // the configured codes; an "all" sentinel means every
-            // checkbox on.
+            // Re-sync checkbox state from the file every open. Only the
+            // FIRST configured code (if any) is checked -- a preference
+            // is singular now. "all" (or absent) means no preference, so
+            // nothing is pre-checked.
             string[] configured = bing_markets_read_codes();
-            bool all_on = (configured.length == 0);
+            string? preferred = configured.length > 0 ? configured[0] : null;
             foreach (var check in bing_markets_checkboxes) {
-                if (all_on) {
-                    check.active = true;
-                } else {
-                    string? code = check.get_data<string>("bing-market-code");
-                    check.active = (code != null && code in configured);
-                }
+                string? code = check.get_data<string>("bing-market-code");
+                check.active = (preferred != null && code == preferred);
             }
             bing_markets_dialog.present();
         }
 
-        // Dialog "Apply" writes the checked markets to
-        // ~/.config/ncz-wallpaper/bing-markets. "Cancel" (or dismissing
-        // the dialog) leaves the file alone -- the SelectionRow state
-        // already reflects the user's last intent ("Choose Markets..."),
-        // but no list was changed on disk.
+        // Dialog "Apply" writes the checked region (at most one, thanks
+        // to the mutual-exclusion wiring above) to
+        // ~/.config/ncz-wallpaper/bing-markets, or "all" if none is
+        // checked. "Cancel" (or dismissing the dialog) leaves the file
+        // alone -- the SelectionRow state already reflects the user's
+        // last intent ("Choose Preferred Region..."), but no preference
+        // was changed on disk.
         private void on_bing_markets_dialog_response(ConfirmDialog.Response response) {
             if (response != ConfirmDialog.Response.PRIMARY) return;
             string[] checked_codes = {};
