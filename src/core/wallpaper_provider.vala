@@ -152,17 +152,35 @@ namespace Singularity {
         public BingWallpaperProvider() { base("/usr/local/bin/ncz-wallpaper-bing"); }
         public async ArrayList<WallpaperOcsChoice> choices(string index, Cancellable? cancel) throws Error {
             var loaded = WallpaperBing.markets(yield command({helper, "markets"}, cancel, 30));
-            // The helper now ALWAYS advertises the combined view (it always
-            // fetches every market; see configured_markets() in
-            // 45-wallpaper-rotator.sh), so this is unconditionally the ONLY
-            // browsing axis now -- per-market browsing is no longer
+            // The helper is SUPPOSED to always advertise the combined view
+            // now (it always fetches every market; see configured_markets()
+            // in 45-wallpaper-rotator.sh), so this should unconditionally be
+            // the ONLY browsing axis -- per-market browsing is no longer
             // reachable through the picker, because the picker no longer
             // restricts which markets are fetched at all. What the picker
-            // sets today (see BING_MARKETS_ID_PICK in desktop_page.vala) is
-            // a PREFERRED region for dedup tie-breaking, not a fetch
-            // filter, so it has no bearing on what choices() returns here.
+            // sets today (the Bing Preferred Region SelectionRow in
+            // desktop_page.vala) is a PREFERRED region for dedup
+            // tie-breaking, not a fetch filter, so it should have no
+            // bearing on what choices() returns here.
             var only = WallpaperBing.combined_view(loaded);
             combined = only != null;
+            // "Should" above is load-bearing: this is only true once the
+            // deployed ncz-wallpaper-bing binary matches the 2026-09-13
+            // contract change (see the CONSOLIDATED_ID comment in
+            // wallpaper_ocs.vala). A helper that predates that change still
+            // gates the combined view on the bing-markets file literally
+            // holding "all", and the Preferred Region picker now routinely
+            // writes a single specific market code -- so combined coming
+            // back false here on a host where every market was expected is
+            // the signature of that version skew, not a bug in this file.
+            // Surface it instead of silently returning a narrowed per-
+            // market list that looks like "Bing is broken".
+            if (!combined) {
+                warning("wallpaper_provider: ncz-wallpaper-bing did not advertise the consolidated view " +
+                    "(got %d raw market choices) -- if the bing-markets file does not hold \"all\", this " +
+                    "usually means the deployed helper predates the 2026-09-13 always-combine contract " +
+                    "change; see CONSOLIDATED_ID in wallpaper_ocs.vala", loaded.size);
+            }
             return only ?? loaded;
         }
         public async WallpaperProviderResult browse(string market, string query, int page,
