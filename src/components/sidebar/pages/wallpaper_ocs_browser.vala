@@ -86,6 +86,8 @@ namespace Singularity.Shell {
         private bool loading = false;
         private string category_index = "";
 
+        private enum CacheLoadResult { NONE, FRESH, STALE }
+
         // One card per wallpapers item in the grid. The visible widget is
         // a WallpaperCard (reused from desktop_page.vala so the OCS/Bing
         // grid LOOKS identical to the main wallpaper picker). The action button
@@ -606,7 +608,14 @@ namespace Singularity.Shell {
             // free text) is applied client-side to this same merged list, so
             // one cache entry per provider serves every filter combination --
             // changing a filter is a different VIEW, never a different crawl.
-            if (!force_refresh && load_cached(provider, gen, cancel)) return;
+            if (!force_refresh) {
+                var cache_result = load_cached(provider, gen, cancel);
+                if (cache_result == CacheLoadResult.FRESH) return;
+                if (cache_result == CacheLoadResult.STALE) {
+                    revalidate_cached.begin(selected_provider, provider, todo, gen, cancel);
+                    return;
+                }
+            }
             if (total == 0) {
                 loading = false;
                 status.label = _("No usable wallpaper categories for this provider.");
@@ -675,13 +684,23 @@ namespace Singularity.Shell {
             queue_viewport_thumbnails();
         }
 
-        // Repaint the grid from the on-disk crawl cache. False means "no
-        // usable cache" -- no file, a stale one, or one that would not parse
-        // -- and browse_all() then crawls exactly as it did before.
-        private bool load_cached(string provider, int gen, Cancellable cancel) {
+        // Repaint from any valid on-disk snapshot. Freshness controls whether
+        // browse_all() is finished or starts a silent background revalidate;
+        // it never controls whether already persisted metadata can be shown.
+        private CacheLoadResult load_cached(string provider, int gen, Cancellable cancel) {
             int64 at = WallpaperBrowseCache.now();
-            var cached = WallpaperBrowseCache.load(provider, at);
-            if (cached == null || cached.entries.size == 0) return false;
+            WallpaperBrowseCache? cached = null;
+            string path = WallpaperBrowseCache.path_for(provider);
+            if (FileUtils.test(path, FileTest.IS_REGULAR)) {
+                try {
+                    string data;
+                    FileUtils.get_contents(path, out data);
+                    cached = WallpaperBrowseCache.parse(data, provider);
+                } catch (Error e) {
+                    message("Discarding unreadable wallpaper browse cache %s: %s", path, e.message);
+                }
+            }
+            if (cached == null || cached.entries.size == 0) return CacheLoadResult.NONE;
             foreach (var entry in cached.entries) {
                 bool card_new_tag;
                 add_card(entry.item, entry.category, out card_new_tag);
@@ -696,7 +715,60 @@ namespace Singularity.Shell {
                 cards.size, cache_age(cached.age(at)));
             update_controls();
             queue_viewport_thumbnails();
-            return true;
+            return cached.fresh(at) ? CacheLoadResult.FRESH : CacheLoadResult.STALE;
+        }
+
+        // Crawl into a detached metadata list while the stale card hierarchy
+        // remains mounted. Rebuilding the live grid happens synchronously in
+        // one main-loop turn, so GTK cannot paint an empty intermediate view.
+        private async void revalidate_cached(WallpaperProvider backend, string provider,
+                ArrayList<string> todo, int gen, Cancellable cancel) {
+            if (todo.size == 0) return;
+            var state = new CrawlState();
+            state.background = true;
+            state.generation = gen;
+            state.provider = provider;
+            state.backend = backend;
+            state.todo = todo;
+            state.total = todo.size;
+            state.cancel = cancel;
+            worker.begin(state);
+            for (int i = 1; i < CRAWL_WORKERS && i < state.total; i++) worker.begin(state);
+            while (gen == generation && state.done_count < state.total && !cancel.is_cancelled()) {
+                SourceFunc resume = revalidate_cached.callback;
+                Timeout.add(100, () => {
+                    if (resume != null) {
+                        SourceFunc cb = (owned) resume;
+                        resume = null;
+                        cb();
+                    }
+                    return Source.REMOVE;
+                });
+                yield;
+            }
+            if (gen != generation || cancel.is_cancelled()) return;
+            if (state.results.size == 0) {
+                warning("Background wallpaper cache revalidation for %s produced no usable results", provider);
+                return;
+            }
+            WallpaperBrowseCache.save(provider, state.results,
+                state.errors.size > 0, WallpaperBrowseCache.now());
+            cards.clear();
+            reset_thumbnail_loading();
+            grid.remove_all();
+            item_category.clear();
+            known_tag_ids.clear();
+            foreach (var entry in state.results) {
+                bool card_new_tag;
+                add_card(entry.item, entry.category, out card_new_tag);
+            }
+            rebuild_tag_row();
+            filter_cards();
+            if (state.errors.size > 0)
+                status.label = _("%d wallpapers loaded · %s").printf(
+                    cards.size, string.joinv(" · ", state.errors.to_array()));
+            update_controls();
+            queue_viewport_thumbnails();
         }
 
         private void store_cache(string provider, bool partial) {
@@ -720,6 +792,10 @@ namespace Singularity.Shell {
         // CrawlState serialise the queue pull and the counters.
         private class CrawlState : Object {
             public ArrayList<string> errors = new ArrayList<string>();
+            public ArrayList<WallpaperBrowseCacheEntry> results = new ArrayList<WallpaperBrowseCacheEntry>();
+            public HashSet<string> seen_keys = new HashSet<string>();
+            public HashSet<string> seen_ocs_ids = new HashSet<string>();
+            public bool background;
             public int generation;
             public string provider;
             public WallpaperProvider backend;
@@ -765,7 +841,8 @@ namespace Singularity.Shell {
                     int d;
                     try { d = ++state.done_count; } finally { state.count_lock.unlock(); }
                     Idle.add(() => {
-                        if (state.generation == generation) status.label = _("Loaded %d/%d categories · %d wallpapers (cap reached)").printf(d, state.total, state.item_count);
+                        if (!state.background && state.generation == generation)
+                            status.label = _("Loaded %d/%d categories · %d wallpapers (cap reached)").printf(d, state.total, state.item_count);
                         return Source.REMOVE;
                     });
                     return;
@@ -779,7 +856,11 @@ namespace Singularity.Shell {
                     var items = result.items;
                     if (result.warning != "") error = _(result.warning);
                     foreach (var item in items) {
-                        if (has_card(item)) continue;
+                        if (state.background) {
+                            bool duplicate = state.seen_keys.contains(item.key) ||
+                                (WallpaperOcs.provider_id(item.provider_id) && state.seen_ocs_ids.contains(item.id));
+                            if (duplicate) continue;
+                        } else if (has_card(item)) continue;
                         // Re-check the cap under the lock so two workers
                         // can never both push past it on the last item.
                         state.count_lock.lock();
@@ -794,9 +875,15 @@ namespace Singularity.Shell {
                             state.count_lock.unlock();
                         }
                         if (overflow) break;
-                        bool card_new_tag;
-                        add_card(item, category, out card_new_tag);
-                        any_new_tag = any_new_tag || card_new_tag;
+                        if (state.background) {
+                            state.seen_keys.add(item.key);
+                            if (WallpaperOcs.provider_id(item.provider_id)) state.seen_ocs_ids.add(item.id);
+                            state.results.add(new WallpaperBrowseCacheEntry(item, category));
+                        } else {
+                            bool card_new_tag;
+                            add_card(item, category, out card_new_tag);
+                            any_new_tag = any_new_tag || card_new_tag;
+                        }
                     }
                 } catch (Error e) {
                     if (e is GLib.IOError.CANCELLED) return;
@@ -813,6 +900,7 @@ namespace Singularity.Shell {
                 // callback that fires after this async function yields.
                 Idle.add(() => {
                     if (state.generation != generation) return Source.REMOVE;
+                    if (state.background) return Source.REMOVE;
                     if (error != null) {
                         // One bad category must not block the others; just
                         // surface it in the status line alongside the count.
