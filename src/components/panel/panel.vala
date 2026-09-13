@@ -570,6 +570,16 @@ namespace Singularity {
             append_compact_row(heading);
         }
 
+        /** A quiet metric label inside one physical-resource section. */
+        private void add_subheading(string title) {
+            Label heading = new Label(title);
+            heading.add_css_class("dim-label");
+            heading.halign = Align.START;
+            heading.margin_top = 3;
+            heading.margin_start = 2;
+            append_compact_row(heading);
+        }
+
         /**
          * Popover-wide Grouped/Ungrouped toggle. Rendered first, before any
          * sensor section, so its scope (every group below, not just one
@@ -727,165 +737,44 @@ namespace Singularity {
             append_compact_row(row);
         }
 
-        /**
-         * Live utilisation: processor, memory, storage.
-         *
-         * Gated on the SAME preference as the compact chip. A setting honoured
-         * in one render path and ignored in the other is how sensors-show-
-         * frequency shipped a half-working toggle.
-         */
-        private void add_utilization_details() {
-            if (!show_utilization) {
-                return;
-            }
-
-            // ---- processor ----
-            UtilizationReading[] cores = util.per_cpu();
-            if (util.cpu_fraction >= 0.0 || cores.length > 0) {
-                add_heading(_("Processor"));
-                if (util.cpu_fraction >= 0.0) {
-                    add_row(_("Total"), "%d%%".printf(percent_of(util.cpu_fraction)),
-                            Severity.NORMAL, util.cpu_fraction);
-                }
-                // Same cap-and-count convention as add_group(). Sky1 has 12
-                // cores and server parts have far more; the popover scrolls,
-                // but an unbounded list still buries the temperatures under
-                // it.
-                int shown = 0;
-                int hidden = 0;
-                double hidden_sum = 0.0;
-                foreach (UtilizationReading core in cores) {
-                    if (core.fraction < 0.0) {
-                        continue;   // first sample: no rate yet
-                    }
-                    if (shown < MAX_ROWS_PER_GROUP) {
-                        add_row(core.label, "%d%%".printf(percent_of(core.fraction)),
-                                Severity.NORMAL, core.fraction);
-                        shown++;
-                    } else {
-                        hidden++;
-                        hidden_sum += core.fraction;
-                    }
-                }
-                // The overflow row shows the AVERAGE of what got cut, not
-                // just a count with no data in it -- a machine with 64 cores
-                // still tells you roughly how busy the other 58 are, instead
-                // of discarding that information entirely.
-                if (hidden > 0) {
-                    add_row(_("%d more").printf(hidden),
-                            "%d%%".printf(percent_of(hidden_sum / hidden)));
-                }
-            }
-
-            // ---- memory ----
-            if (util.memory_fraction >= 0.0) {
-                add_heading(_("Memory"));
-                add_row(_("RAM"),
-                        _("%s / %s").printf(format_bytes(util.memory_used_bytes),
-                                            format_bytes(util.memory_total_bytes)),
-                        capacity_severity(util.memory_fraction),
-                        util.memory_fraction);
-                // Omitted entirely when there is no swap. A "Swap 0%" row on a
-                // swapless machine says the swap is empty, not that there is
-                // none, which is a different and misleading claim.
-                if (util.swap_fraction >= 0.0) {
-                    add_row(_("Swap"), "%d%%".printf(percent_of(util.swap_fraction)),
-                            capacity_severity(util.swap_fraction),
-                            util.swap_fraction);
-                }
-            }
-
-            // ---- storage ----
-            CapacityReading[] volumes = util.filesystems();
-            UtilizationReading[] spindles = util.disks();
-            if (volumes.length > 0 || spindles.length > 0) {
-                add_heading(_("Storage"));
-
-                int shown = 0;
-                // Capacity and activity get SEPARATE overflow counters, not
-                // one shared one: they are different quantities (a fill
-                // level vs a busy rate) and averaging them together, or
-                // averaging capacity % across differently-sized volumes,
-                // would blend numbers that don't mean the same thing. Only
-                // the activity overflow gets an average -- it is a rate,
-                // the same class of number CPU busy already is.
-                int hidden_volumes = 0;
-                foreach (CapacityReading vol in volumes) {
-                    if (vol.fraction < 0.0) {
-                        continue;
-                    }
-                    if (shown < MAX_ROWS_PER_GROUP) {
-                        add_row(vol.label,
-                                _("%s / %s").printf(format_bytes(vol.used_bytes),
-                                                    format_bytes(vol.total_bytes)),
-                                capacity_severity(vol.fraction), vol.fraction);
-                        shown++;
-                    } else {
-                        hidden_volumes++;
-                    }
-                }
-                if (hidden_volumes > 0) {
-                    add_row(_("%d more").printf(hidden_volumes), "");
-                }
-
-                // Busy percentage is a RATE, not a fill level, so it is listed
-                // after capacity and left uncoloured -- a disk at 100% busy is
-                // working, a disk at 100% full is broken, and they must not
-                // look alike.
-                int hidden_disks = 0;
-                double hidden_disk_sum = 0.0;
-                foreach (UtilizationReading disk in spindles) {
-                    if (disk.fraction < 0.0) {
-                        continue;
-                    }
-                    if (shown < MAX_ROWS_PER_GROUP) {
-                        add_row(_("%s activity").printf(disk.label),
-                                "%d%%".printf(percent_of(disk.fraction)),
-                                Severity.NORMAL, disk.fraction);
-                        shown++;
-                    } else {
-                        hidden_disks++;
-                        hidden_disk_sum += disk.fraction;
-                    }
-                }
-                if (hidden_disks > 0) {
-                    add_row(_("%d more").printf(hidden_disks),
-                            "%d%%".printf(percent_of(hidden_disk_sum / hidden_disks)));
-                }
-            }
-        }
-
-        private void add_group(SensorKind kind, string title) {
+        /** Select temperature readings for one physical resource pool. */
+        private SensorReading[] readings_for(SensorKind kind) {
             SensorReading[] matching = {};
             foreach (SensorReading reading in monitor.readings()) {
                 if (reading.kind == kind) {
                     matching += reading;
                 }
             }
-            if (matching.length == 0) {
-                return;
-            }
+            return matching;
+        }
+
+        /** Temperature metric within a resource section already in progress. */
+        private void add_temperatures(SensorKind kind) {
+            SensorReading[] matching = readings_for(kind);
+            if (matching.length == 0) return;
 
             if (sensors_grouped) {
-                // Collapse the whole family into ONE row: the average
-                // temperature across every reading of this kind, labelled by
-                // the kind itself rather than any individual sensor. No
-                // heading -- the row's own label ("CPU", "GPU", ...) already
-                // says what it is. Deliberately uncoloured and bar-less, same
-                // reasoning as the overflow rows in the ungrouped branch:
-                // severity is classified per-sensor against that sensor's own
-                // limit, and averaging across sensors -- let alone an entire
-                // family of them -- has no single threshold to colour or
-                // scale a bar against.
-                int64 sum = 0;
+                // Average like with like, including the limits. This gives the
+                // aggregate its own honest thermal margin, so collapsing rows
+                // never discards the alarm colour or heat bar.
+                int64 temp_sum = 0;
+                int64 limit_sum = 0;
                 foreach (SensorReading reading in matching) {
-                    sum += reading.millidegrees;
+                    temp_sum += reading.millidegrees;
+                    limit_sum += reading.limit_millidegrees;
                 }
-                add_row(title, format_celsius((int) (sum / matching.length)));
+                int average = (int) (temp_sum / matching.length);
+                int limit = (int) (limit_sum / matching.length);
+                int span = limit - AMBIENT_MILLIDEGREES;
+                double heat = span > 0
+                    ? ((double) (average - AMBIENT_MILLIDEGREES) / span).clamp(0.0, 1.0)
+                    : 0.0;
+                add_row(_("Temperature"), format_celsius(average),
+                        Thresholds.classify(average, limit), heat);
                 return;
             }
 
-            add_heading(title);
+            add_subheading(_("Temperatures"));
             // Cap the rows. Sensor count varies enormously by platform: an ARM
             // dev board reports 5, a Qualcomm SC8280XP reports 55. Listing all
             // of them turns the popover into a wall of near-identical numbers,
@@ -903,12 +792,6 @@ namespace Singularity {
                     hidden_millidegrees_sum += reading.millidegrees;
                 }
             }
-            // The overflow row shows the AVERAGE temperature of what got
-            // cut, not just a count with no data in it -- same reasoning as
-            // the per-core and per-disk overflow rows below. Deliberately
-            // uncoloured: severity is classified per-sensor against that
-            // sensor's own limit, and averaging across sensors that may have
-            // different limits has no single threshold to colour against.
             if (hidden > 0) {
                 add_row(_("%d more").printf(hidden),
                         format_celsius((int) (hidden_millidegrees_sum / hidden)));
@@ -934,29 +817,24 @@ namespace Singularity {
          * cluster underneath it.
          */
         private void add_cpu_section() {
-            SensorReading[] cpu_temps = {};
-            foreach (SensorReading reading in monitor.readings()) {
-                if (reading.kind == SensorKind.CPU) {
-                    cpu_temps += reading;
-                }
-            }
+            SensorReading[] cpu_temps = readings_for(SensorKind.CPU);
             // Honour sensors-show-frequency here too. It previously gated
             // only the compact summary, so turning frequency "off" still
             // rendered the entire Clocks section the moment the popover was
             // opened -- the preference silently did half of what it says.
             ClockReading[] clocks = show_frequency ? monitor.clocks() : new ClockReading[0];
-            if (cpu_temps.length == 0 && clocks.length == 0) {
+            UtilizationReading[] cores = show_utilization
+                ? util.per_cpu() : new UtilizationReading[0];
+            if (cpu_temps.length == 0 && clocks.length == 0
+                && (!show_utilization || (util.cpu_fraction < 0.0
+                                          && cores.length == 0))) {
                 return;
             }
 
+            add_heading(_("CPU"));
+            add_temperatures(SensorKind.CPU);
+
             if (sensors_grouped) {
-                if (cpu_temps.length > 0) {
-                    int64 sum = 0;
-                    foreach (SensorReading reading in cpu_temps) {
-                        sum += reading.millidegrees;
-                    }
-                    add_row(_("CPU"), format_celsius((int) (sum / cpu_temps.length)));
-                }
                 // Group by max_khz -- the actual performance-tier signal.
                 // clocks() is one entry per cpufreq POLICY, and a policy is
                 // a clock domain: cores sharing one on a heterogeneous SoC
@@ -979,6 +857,7 @@ namespace Singularity {
                 int[] tier_max = {};
                 int64[] tier_khz_sum = {};
                 int[] tier_count = {};
+                string[] tier_label = {};
                 foreach (ClockReading c in clocks) {
                     int idx = -1;
                     for (int i = 0; i < tier_max.length; i++) {
@@ -988,6 +867,7 @@ namespace Singularity {
                         tier_max += c.max_khz;
                         tier_khz_sum += (int64) c.khz;
                         tier_count += 1;
+                        tier_label += c.label;
                     } else {
                         tier_khz_sum[idx] += c.khz;
                         tier_count[idx] += 1;
@@ -1002,50 +882,157 @@ namespace Singularity {
                             int tmp_max = tier_max[i]; tier_max[i] = tier_max[j]; tier_max[j] = tmp_max;
                             int64 tmp_sum = tier_khz_sum[i]; tier_khz_sum[i] = tier_khz_sum[j]; tier_khz_sum[j] = tmp_sum;
                             int tmp_cnt = tier_count[i]; tier_count[i] = tier_count[j]; tier_count[j] = tmp_cnt;
+                            string tmp_label = tier_label[i]; tier_label[i] = tier_label[j]; tier_label[j] = tmp_label;
                         }
                     }
                 }
                 for (int i = 0; i < tier_max.length; i++) {
                     int avg_khz = (int) (tier_khz_sum[i] / tier_count[i]);
+                    // A cpufreq policy is a clock domain, not a core. Preserve
+                    // the sysfs identity instead of repeating the false and
+                    // unhelpful label "1 core" for every Sky1 cluster.
                     string label = tier_count[i] > 1
-                        ? _("%d cores").printf(tier_count[i])
-                        : _("1 core");
+                        ? _("%s + %d policies").printf(tier_label[i],
+                                                       tier_count[i] - 1)
+                        : tier_label[i];
                     string value = tier_max[i] > 0
                         ? "%s / %s".printf(format_clock(avg_khz), format_clock(tier_max[i]))
                         : format_clock(avg_khz);
                     add_row(label, value);
                 }
+                if (show_utilization && util.cpu_fraction >= 0.0) {
+                    add_row(_("Utilization"),
+                            "%d%%".printf(percent_of(util.cpu_fraction)),
+                            Severity.NORMAL, util.cpu_fraction);
+                }
                 return;
             }
 
-            add_heading(_("CPU"));
-            int shown = 0;
-            int hidden = 0;
-            int64 hidden_millidegrees_sum = 0;
-            foreach (SensorReading reading in cpu_temps) {
-                if (shown < MAX_ROWS_PER_GROUP) {
-                    add_row(reading.label, format_celsius(reading.millidegrees),
-                            reading.severity, reading.heat_fraction);
-                    shown++;
-                } else {
-                    hidden++;
-                    hidden_millidegrees_sum += reading.millidegrees;
-                }
-            }
-            if (hidden > 0) {
-                add_row(_("%d more").printf(hidden),
-                        format_celsius((int) (hidden_millidegrees_sum / hidden)));
-            }
             // Raw, one row per cpufreq policy, in whatever order clocks()
             // returned them -- no grouping, no averaging. The label is the
             // policy's own sysfs directory name (e.g. "policy0"), the same
             // identifier a person would see if they went and looked at
             // /sys/devices/system/cpu/cpufreq/ themselves.
-            foreach (ClockReading c in clocks) {
-                string value = c.max_khz > 0
-                    ? "%s / %s".printf(format_clock(c.khz), format_clock(c.max_khz))
-                    : format_clock(c.khz);
-                add_row(c.label, value);
+            if (clocks.length > 0) {
+                add_subheading(_("Clocks — current / maximum"));
+                foreach (ClockReading c in clocks) {
+                    string value = c.max_khz > 0
+                        ? "%s / %s".printf(format_clock(c.khz), format_clock(c.max_khz))
+                        : format_clock(c.khz);
+                    add_row(c.label, value);
+                }
+            }
+
+            if (show_utilization
+                && (util.cpu_fraction >= 0.0 || cores.length > 0)) {
+                add_subheading(_("Utilization"));
+                if (util.cpu_fraction >= 0.0) {
+                    add_row(_("Total"),
+                            "%d%%".printf(percent_of(util.cpu_fraction)),
+                            Severity.NORMAL, util.cpu_fraction);
+                }
+                int shown = 0;
+                int hidden = 0;
+                double hidden_sum = 0.0;
+                foreach (UtilizationReading core in cores) {
+                    if (core.fraction < 0.0) continue;
+                    if (shown < MAX_ROWS_PER_GROUP) {
+                        add_row(core.label,
+                                "%d%%".printf(percent_of(core.fraction)),
+                                Severity.NORMAL, core.fraction);
+                        shown++;
+                    } else {
+                        hidden++;
+                        hidden_sum += core.fraction;
+                    }
+                }
+                if (hidden > 0) {
+                    add_row(_("%d more").printf(hidden),
+                            "%d%%".printf(percent_of(hidden_sum / hidden)));
+                }
+            }
+        }
+
+        private void add_simple_resource_section(SensorKind kind,
+                                                 string title) {
+            if (readings_for(kind).length == 0) return;
+            add_heading(title);
+            add_temperatures(kind);
+        }
+
+        private void add_gpu_section() {
+            SensorReading[] temperatures = readings_for(SensorKind.GPU);
+            if (temperatures.length == 0 && monitor.gpu_utilization < 0.0) return;
+            add_heading(_("GPU"));
+            add_temperatures(SensorKind.GPU);
+            if (monitor.gpu_utilization >= 0.0) {
+                if (!sensors_grouped && temperatures.length > 0) {
+                    add_subheading(_("Utilization"));
+                }
+                add_row(_("Utilization"),
+                        "%d%%".printf(percent_of(monitor.gpu_utilization)),
+                        Severity.NORMAL, monitor.gpu_utilization);
+            }
+        }
+
+        private void add_memory_section() {
+            SensorReading[] temperatures = readings_for(SensorKind.MEMORY);
+            bool has_capacity = show_utilization && util.memory_fraction >= 0.0;
+            if (temperatures.length == 0 && !has_capacity) return;
+            add_heading(_("Memory"));
+            add_temperatures(SensorKind.MEMORY);
+            if (has_capacity) {
+                if (!sensors_grouped && temperatures.length > 0) {
+                    add_subheading(_("Capacity"));
+                }
+                add_row(_("RAM"),
+                        _("%s / %s").printf(format_bytes(util.memory_used_bytes),
+                                            format_bytes(util.memory_total_bytes)),
+                        capacity_severity(util.memory_fraction),
+                        util.memory_fraction);
+                if (util.swap_fraction >= 0.0) {
+                    add_row(_("Swap"),
+                            "%d%%".printf(percent_of(util.swap_fraction)),
+                            capacity_severity(util.swap_fraction),
+                            util.swap_fraction);
+                }
+            }
+        }
+
+        private void add_storage_section() {
+            SensorReading[] temperatures = readings_for(SensorKind.STORAGE);
+            CapacityReading[] volumes = show_utilization
+                ? util.filesystems() : new CapacityReading[0];
+            UtilizationReading[] disks = show_utilization
+                ? util.disks() : new UtilizationReading[0];
+            if (temperatures.length == 0 && volumes.length == 0
+                && disks.length == 0) return;
+            add_heading(_("Storage"));
+            add_temperatures(SensorKind.STORAGE);
+
+            if (volumes.length > 0) {
+                if (!sensors_grouped) add_subheading(_("Capacity"));
+                int shown = 0;
+                foreach (CapacityReading volume in volumes) {
+                    if (volume.fraction < 0.0) continue;
+                    if (shown++ >= MAX_ROWS_PER_GROUP) continue;
+                    add_row(volume.label,
+                            _("%s / %s").printf(format_bytes(volume.used_bytes),
+                                                format_bytes(volume.total_bytes)),
+                            capacity_severity(volume.fraction), volume.fraction);
+                }
+            }
+
+            if (disks.length > 0) {
+                if (!sensors_grouped) add_subheading(_("Activity"));
+                int shown = 0;
+                foreach (UtilizationReading disk in disks) {
+                    if (disk.fraction < 0.0) continue;
+                    if (shown++ >= MAX_ROWS_PER_GROUP) continue;
+                    add_row(disk.label,
+                            "%d%%".printf(percent_of(disk.fraction)),
+                            Severity.NORMAL, disk.fraction);
+                }
             }
         }
 
@@ -1076,32 +1063,28 @@ namespace Singularity {
             finish_detail_section(section);
 
             section = begin_detail_section();
-            add_group(SensorKind.GPU,     _("GPU"));
+            add_gpu_section();
             finish_detail_section(section);
             section = begin_detail_section();
-            add_group(SensorKind.NPU,     _("NPU"));
+            add_simple_resource_section(SensorKind.NPU, _("NPU"));
             finish_detail_section(section);
             section = begin_detail_section();
-            add_group(SensorKind.VPU,     _("VPU"));
+            add_simple_resource_section(SensorKind.VPU, _("VPU"));
             finish_detail_section(section);
             section = begin_detail_section();
-            add_group(SensorKind.MEMORY,  _("Memory"));
+            add_memory_section();
             finish_detail_section(section);
             section = begin_detail_section();
-            add_group(SensorKind.STORAGE, _("Storage"));
+            add_storage_section();
             finish_detail_section(section);
             section = begin_detail_section();
-            add_group(SensorKind.NETWORK, _("Network"));
+            add_simple_resource_section(SensorKind.NETWORK, _("Network"));
             finish_detail_section(section);
             section = begin_detail_section();
-            add_group(SensorKind.BOARD,   _("Board"));
+            add_simple_resource_section(SensorKind.BOARD, _("Board"));
             finish_detail_section(section);
             section = begin_detail_section();
-            add_group(SensorKind.SYSTEM,  _("System"));
-            finish_detail_section(section);
-
-            section = begin_detail_section();
-            add_utilization_details();
+            add_simple_resource_section(SensorKind.SYSTEM, _("System"));
             finish_detail_section(section);
         }
     }
