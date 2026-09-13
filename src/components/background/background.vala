@@ -329,7 +329,15 @@ namespace Singularity {
             string safe_author = Markup.escape_text(author, -1);
             string markup;
             if (title != "" && author != "") {
-                markup = "<b>%s</b>  ·  %s".printf(safe_title, safe_author);
+                // Two lines, not one wide line joined by a separator: a long
+                // title+author pair on a single line can reach far enough
+                // right to overlap the bottom-anchored, horizontally
+                // centered dock -- operator feedback, 2026-09-13 live
+                // review. Stacking narrows the footprint at the cost of one
+                // extra line of height, which ATTRIBUTION_MARGIN already
+                // accounts for from the screen edge.
+                markup = "<b>%s</b>
+%s".printf(safe_title, safe_author);
             } else if (title != "") {
                 markup = "<b>%s</b>".printf(safe_title);
             } else {

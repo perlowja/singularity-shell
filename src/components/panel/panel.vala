@@ -537,6 +537,11 @@ namespace Singularity {
 
         private Box begin_detail_section() {
             var section = new Box(Orientation.VERTICAL, 4);
+            // Bordered frame so stacked resource-pool sections in the same
+            // column read as distinct cards, not one continuous list --
+            // operator feedback: GPU/VPU/Storage sharing a column with no
+            // visual boundary looked like one resource.
+            section.add_css_class("sensors-resource-section");
             detail_target = section;
             return section;
         }
