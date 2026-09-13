@@ -326,6 +326,18 @@ namespace Singularity {
                 settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
             });
 
+            var attribution_position_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            attribution_position_options.add(new Singularity.Core.AppSettingOption() { id = "left", label = _("Left") });
+            attribution_position_options.add(new Singularity.Core.AppSettingOption() { id = "right", label = _("Right") });
+            string attribution_position = settings.get_string("wallpaper-attribution-position");
+            if (attribution_position != "right") attribution_position = "left";
+            var attribution_position_row = new SelectionRow.with_options(
+                _("Wallpaper Info Position"), attribution_position_options, attribution_position);
+            attribution_position_row.selected.connect((id) => {
+                settings.set_string("wallpaper-attribution-position", id);
+            });
+            grid_group.add_row(attribution_position_row);
+
             // Bing preferred-region selector. The SelectionRow's expanded
             // list matches ncz-wallpaper-bing's existing "all" sentinel in
             // ~/.config/ncz-wallpaper/bing-markets (45-wallpaper-rotator.sh

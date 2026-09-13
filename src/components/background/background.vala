@@ -37,7 +37,7 @@ namespace Singularity {
         // are process-global, not per-instance.
         private static Gtk.CssProvider? attribution_css_provider = null;
         // Pixel margin from the screen edge to the attribution label.
-        // Bottom-left is clear of the dock (which is bottom-anchored
+        // Either bottom corner is clear of the dock (which is bottom-anchored
         // and horizontally centered) at any reasonable screen width,
         // but a 24px gutter keeps the scrim from clipping into the
         // screen edge on rounded displays / ultrawide aspects.
@@ -74,8 +74,8 @@ namespace Singularity {
             wp_stack.add_named(picture_a, "a");
             wp_stack.add_named(picture_b, "b");
 
-            // Attribution overlay. The label is bottom-left-anchored
-            // (halign=START, valign=END, ATTRIBUTION_MARGIN gutter)
+            // Attribution overlay. The label is bottom-corner-anchored
+            // (halign comes from GSettings, valign=END, ATTRIBUTION_MARGIN gutter)
             // and click-through so it never intercepts desktop mouse
             // events. can_target=false is GTK4's correct way to make a
             // widget hit-test-transparent; setting can_focus=false
@@ -111,6 +111,10 @@ namespace Singularity {
             settings.changed["show-wallpaper-attribution"].connect(() => {
                 update_attribution(WallpaperManager.get_default());
             });
+            settings.changed["wallpaper-attribution-position"].connect(() => {
+                update_attribution_position();
+            });
+            update_attribution_position();
             // First load: set both pictures to avoid flash, no animation needed
             if (manager.display_texture != null) {
                 picture_a.set_paintable(manager.display_texture);
@@ -174,7 +178,7 @@ namespace Singularity {
 
         // Wallpaper attribution overlay (Background.vala).
         //
-        // Sits in the bottom-left corner of the live desktop background
+        // Sits in a user-selected bottom corner of the live desktop background
         // as a single Gtk.Label over the wallpaper cross-fade. The scrim
         // uses the same theme tokens, rounded shape, border, and shadow
         // language as libsingularity's dock pill, scaled for caption text.
@@ -263,6 +267,11 @@ namespace Singularity {
             // CSS class is not a supported Pango span attribute.
             attribution_label.set_markup(markup);
             attribution_label.visible = true;
+        }
+
+        private void update_attribution_position() {
+            string position = settings.get_string("wallpaper-attribution-position");
+            attribution_label.halign = position == "right" ? Align.END : Align.START;
         }
 
         private void update_wallpaper(WallpaperManager manager) {
