@@ -206,7 +206,7 @@ namespace Singularity {
 
             // Artist Packs: curated wallpaper packs installed via the
             // distro's package manager. Entirely opt-in -- it only appears
-            // when the distro ships the inventory backend (see
+            // when the distro ships the complete backend contract (see
             // ArtistPackManager), which is where the trusted apt source(s)
             // live (dev.sinty.desktop artist-pack-apt-sources). Nothing here
             // hardcodes a repository.
