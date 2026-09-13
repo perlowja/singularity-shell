@@ -83,9 +83,9 @@ namespace Singularity {
         // not the ~50 the aggregate crawl was written against. A single
         // 10-item page per category is a fraction of what a category holds
         // (pling 300 reports totalitems=1971), so the crawl was returning
-        // roughly 400 wallpapers where the browser's CRAWL_ITEM_CAP of 1500
-        // was meant to be the binding limit. Ask for the page size the crawl
-        // always assumed: still ONE request per category, so the request
+        // roughly 400 wallpapers where the browser's crawl safety cap was
+        // meant to be the binding limit. Ask for the server's maximum page
+        // size: still ONE request per category, so the request
         // count and the per-category timeout budget are unchanged. The
         // server rejects anything above 100 with statuscode 400, and the
         // helper clamps to that.
@@ -98,7 +98,7 @@ namespace Singularity {
         // two ship together from one image build (cix-installer
         // post-install/45-wallpaper-rotator.sh installs the helper), so keep
         // them in step rather than feature-probing on every category.
-        private const string OCS_PAGE_SIZE = "50";
+        private const string OCS_PAGE_SIZE = "100";
         public string id { get { return "ocs"; } }
         public string display_name { owned get { return "OCS Network"; } }
         public bool requires_credentials { get { return false; } }
