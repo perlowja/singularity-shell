@@ -61,19 +61,21 @@ namespace Singularity {
         // script). The literal "all" (case-insensitive) sentinel, or an
         // absent file, means "no preference" -- the rotator falls back to
         // its original alphabetical dedup-winner order.
-        // id "all" = "All Markets, No Preference" (immediate write of
-        // "all"); id "pick" = "Choose Preferred Region..." opens a
-        // picker dialog. The same dialog object is reused across opens
-        // and its checkboxes are pre-checked from the file each time it's
-        // shown. Checking a region here does NOT narrow which markets are
-        // fetched or shown -- every market is always fetched -- it only
-        // sets which one wins ties.
+        //
+        // The picker is one SelectionRow whose expanded list is "All
+        // Markets, No Preference" followed by all 13 individual markets
+        // (operator 2026-09-13: a popup ConfirmDialog was rejected in
+        // favor of the row expanding INLINE in place, matching every
+        // other single-choice setting on this page). Picking any row
+        // collapses the expander and writes that choice immediately --
+        // there is no separate "Apply" step and no dialog object.
         private const string BING_MARKETS_ID_ALL = "all";
-        private const string BING_MARKETS_ID_PICK = "pick";
-        // 13 markets, grouped by region for the picker dialog. Order
-        // matches the comment block in
-        // cix-installer/post-install/45-wallpaper-rotator.sh's
-        // ncz-wallpaper-bing (Americas, Europe, Asia-Pacific).
+        // 13 markets, grouped by region. Order matches the comment block
+        // in cix-installer/post-install/45-wallpaper-rotator.sh's
+        // ncz-wallpaper-bing (Americas, Europe, Asia-Pacific); the group
+        // order is preserved in the flat picker list below so markets
+        // from the same region still sit together even without a
+        // section header.
         // [0] = market code, [1] = display label, [2] = region header.
         private const string BING_MARKETS_TABLE = "en-US\tUnited States\tAmericas"
             + "|en-CA\tCanada English\tAmericas"
@@ -89,10 +91,7 @@ namespace Singularity {
             + "|zh-CN\tChina\tAsia-Pacific"
             + "|ko-KR\tSouth Korea\tAsia-Pacific";
         private Gee.ArrayList<BingMarketEntry> bing_markets_rows = new Gee.ArrayList<BingMarketEntry>();
-        private Gee.ArrayList<string> bing_markets_regions = new Gee.ArrayList<string>();
         private SelectionRow? bing_markets_row = null;
-        private ConfirmDialog? bing_markets_dialog = null;
-        private Gee.ArrayList<Gtk.CheckButton> bing_markets_checkboxes = new Gee.ArrayList<Gtk.CheckButton>();
         private bool bing_markets_updating = false;
 
         // Lower-case an ASCII string. Vala's GLib string has no public
@@ -321,18 +320,30 @@ namespace Singularity {
                 settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
             });
 
-            // Bing preferred-region selector. The two-entry SelectionRow
-            // matches ncz-wallpaper-bing's existing "all" sentinel in
+            // Bing preferred-region selector. The SelectionRow's expanded
+            // list matches ncz-wallpaper-bing's existing "all" sentinel in
             // ~/.config/ncz-wallpaper/bing-markets (45-wallpaper-rotator.sh
             // reads that file verbatim), but the MEANING changed: every
             // market is always fetched and combined now, so this no
             // longer restricts what's fetched. It only sets which
             // region's copy of a duplicate photo the rotator prefers when
-            // de-duplicating -- "All Markets, No Preference" writes "all"
-            // immediately (today's alphabetical dedup-winner order, kept
-            // as the neutral default); "Choose Preferred Region..." opens
-            // a picker dialog with one checkbox per market grouped by
-            // region, pre-checked from the current file state. We don't
+            // de-duplicating.
+            //
+            // Operator 2026-09-13: the previous popup ConfirmDialog picker
+            // was rejected -- the row now expands INLINE, in place, the
+            // same way every other single-choice SelectionRow on this page
+            // works (see e.g. interval_row below). "All Markets, No
+            // Preference" is the first entry and writes "all" immediately
+            // (today's alphabetical dedup-winner order, kept as the
+            // neutral default); every one of the 13 markets from
+            // BING_MARKETS_TABLE follows as its own row, labelled
+            // "<Region> — <Market>" so the region grouping the old dialog
+            // expressed with section headers survives as label text (and
+            // SelectionRow's own search entry, which kicks in past 5
+            // items, lets a region name filter the list). Picking any row
+            // is a single click: SelectionRow always collapses and fires
+            // `selected` with exactly the one id chosen, so there is no
+            // separate multi-select/Apply step to reproduce. We don't
             // gate the row on the active wallpaper provider -- the rest of
             // this page (rotate_row, interval_row, attribution_row) is
             // also unconditional, and there's no clean existing
@@ -340,19 +351,33 @@ namespace Singularity {
             init_bing_markets_table();
             var bing_markets_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_ALL, label = _("All Markets, No Preference") });
-            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_PICK, label = _("Choose Preferred Region…") });
-            // Initial selection reflects the file: "all" or absent =
-            // All Markets, anything else = Choose Preferred Region... so
-            // the dialog opens pre-checked against the actual preference.
+            foreach (var market in bing_markets_rows) {
+                bing_markets_options.add(new Singularity.Core.AppSettingOption() {
+                    id = market.code, label = "%s — %s".printf(market.region, market.label) });
+            }
+            // Initial selection reflects the file: "all" or absent = All
+            // Markets; otherwise the first configured market code (a
+            // preference is singular -- see bing_markets_read_codes()).
+            // Falls back to "all" if the file names a code that isn't in
+            // the current table, so the row always opens on a real entry.
+            string bing_markets_current = BING_MARKETS_ID_ALL;
+            if (!bing_markets_file_is_all()) {
+                string[] configured = bing_markets_read_codes();
+                if (configured.length > 0) {
+                    foreach (var opt in bing_markets_options) {
+                        if (opt.id == configured[0]) { bing_markets_current = configured[0]; break; }
+                    }
+                }
+            }
             bing_markets_row = new SelectionRow.with_options(_("Bing Preferred Region"), bing_markets_options,
-                bing_markets_file_is_all() ? BING_MARKETS_ID_ALL : BING_MARKETS_ID_PICK);
+                bing_markets_current);
             bing_markets_row.subtitle = _("Bing always combines every region's photo of the day; this only picks whose caption and credit win when the same photo is shared");
             bing_markets_row.selected.connect((id) => {
                 if (bing_markets_updating || bing_markets_row == null) return;
                 if (id == BING_MARKETS_ID_ALL) {
                     write_bing_markets_all();
-                } else if (id == BING_MARKETS_ID_PICK) {
-                    open_bing_markets_dialog();
+                } else {
+                    write_bing_markets_codes({id});
                 }
             });
             grid_group.add_row(bing_markets_row);
@@ -2620,18 +2645,14 @@ namespace Singularity {
         // -------------------------------------------------------------------------
 
         // Parse BING_MARKETS_TABLE into bing_markets_rows ({code, label,
-        // region}) and bing_markets_regions (unique region order).
-        // Called once from the constructor before the ComboRow model is
-        // built.
+        // region}), in table order. Called once from the constructor,
+        // before the flat SelectionRow option list is built from it.
         private void init_bing_markets_table() {
             foreach (string entry in BING_MARKETS_TABLE.split("|")) {
                 string[] cols = entry.split("\t");
                 if (cols.length != 3) continue;
                 var row = new BingMarketEntry() { code = cols[0], label = cols[1], region = cols[2] };
                 bing_markets_rows.add(row);
-                bool seen = false;
-                foreach (string existing in bing_markets_regions) if (existing == cols[2]) { seen = true; break; }
-                if (!seen) bing_markets_regions.add(cols[2]);
             }
         }
 
@@ -2740,108 +2761,25 @@ namespace Singularity {
             write_bing_markets_contents(string.joinv(" ", codes) + "\n");
         }
 
-        // Build (once) and present the preferred-region dialog. The
-        // checkboxes behave as a single-select group (checking one
-        // unchecks every other) rather than a genuine multi-select --
-        // there is exactly one preferred region, never a subset, so the
-        // dialog picks ONE market or none at all. The same dialog object
-        // is reused across opens; the checked state is re-synced against
-        // the current file state each time, so a user who picks "All
-        // Markets, No Preference", then "Choose Preferred Region..."
-        // sees nothing pre-checked, and a user who has a region set sees
-        // exactly that one checked on reopen.
-        private void open_bing_markets_dialog() {
-            if (bing_markets_dialog == null) {
-                var app = GLib.Application.get_default() as Gtk.Application;
-                bing_markets_dialog = new ConfirmDialog(app,
-                    _("Choose Preferred Region"), null,
-                    _("Bing always fetches and combines every region's photo of the day. Pick one region here to prefer its caption and credit whenever the same photo is shared across regions. Leave nothing checked for no preference."),
-                    _("Apply"), ConfirmDialog.ActionStyle.SUGGESTED);
-
-                // Build the picker body: one section per region with a
-                // header label and one Gtk.CheckButton per market.
-                // The regions array preserves the table order so the
-                // dialog matches the comment block in
-                // 45-wallpaper-rotator.sh.
-                var outer_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 12);
-                outer_box.margin_top = 8;
-                outer_box.margin_bottom = 8;
-                outer_box.margin_start = 4;
-                outer_box.margin_end = 4;
-                foreach (string region in bing_markets_regions) {
-                    var region_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 4);
-                    var header = new Gtk.Label(region);
-                    header.halign = Gtk.Align.START;
-                    header.xalign = 0.0f;
-                    header.add_css_class("heading");
-                    region_box.append(header);
-                    foreach (var row in bing_markets_rows) {
-                        if (row.region != region) continue;
-                        var check = new Gtk.CheckButton.with_label(row.label);
-                        check.set_data("bing-market-code", row.code);
-                        // Single-select: picking one clears every other
-                        // checkbox across all regions, so at most one
-                        // market is ever checked -- a preference is
-                        // singular, unlike the old multi-market subset.
-                        check.toggled.connect(() => {
-                            if (!check.active) return;
-                            foreach (var other in bing_markets_checkboxes) {
-                                if (other != check) other.active = false;
-                            }
-                        });
-                        region_box.append(check);
-                        bing_markets_checkboxes.add(check);
-                    }
-                    outer_box.append(region_box);
-                }
-                var scroll = new Gtk.ScrolledWindow();
-                scroll.hscrollbar_policy = Gtk.PolicyType.NEVER;
-                scroll.vscrollbar_policy = Gtk.PolicyType.AUTOMATIC;
-                scroll.min_content_height = 240;
-                scroll.max_content_height = 480;
-                scroll.propagate_natural_height = true;
-                scroll.child = outer_box;
-                bing_markets_dialog.custom_area.append(scroll);
-
-                bing_markets_dialog.response.connect(on_bing_markets_dialog_response);
-            }
-
-            // Re-sync checkbox state from the file every open. Only the
-            // FIRST configured code (if any) is checked -- a preference
-            // is singular now. "all" (or absent) means no preference, so
-            // nothing is pre-checked.
-            string[] configured = bing_markets_read_codes();
-            string? preferred = configured.length > 0 ? configured[0] : null;
-            foreach (var check in bing_markets_checkboxes) {
-                string? code = check.get_data<string>("bing-market-code");
-                check.active = (preferred != null && code == preferred);
-            }
-            bing_markets_dialog.present();
-        }
-
-        // Dialog "Apply" writes the checked region (at most one, thanks
-        // to the mutual-exclusion wiring above) to
-        // ~/.config/ncz-wallpaper/bing-markets, or "all" if none is
-        // checked. "Cancel" (or dismissing the dialog) leaves the file
-        // alone -- the SelectionRow state already reflects the user's
-        // last intent ("Choose Preferred Region..."), but no preference
-        // was changed on disk.
-        private void on_bing_markets_dialog_response(ConfirmDialog.Response response) {
-            if (response != ConfirmDialog.Response.PRIMARY) return;
-            string[] checked_codes = {};
-            foreach (var check in bing_markets_checkboxes) {
-                if (!check.active) continue;
-                string? code = check.get_data<string>("bing-market-code");
-                if (code != null && code != "") checked_codes += code;
-            }
-            write_bing_markets_codes(checked_codes);
-        }
+        // The preferred-region picker used to be a separate popup
+        // ConfirmDialog built here, with its own reused dialog object and
+        // one mutually-exclusive Gtk.CheckButton per market grouped under
+        // a region header (see git history before 2026-09-13 for the
+        // removed implementation). Operator 2026-09-13 rejected the
+        // popup in favor of expanding inline in the settings row itself
+        // -- bing_markets_row (constructed above) is a plain
+        // SelectionRow.with_options() whose option list already contains
+        // "All Markets, No Preference" plus all 13 markets, so picking a
+        // region is just clicking a row in the row's own expander; there
+        // is no dialog, no checkbox list, and no separate Apply step left
+        // to implement here.
 
         // Bing market row: 2-letter market code, UI display label, and
         // region bucket ("Americas" / "Europe" / "Asia-Pacific") used
-        // to group checkboxes in the picker dialog. Plain GLib.Object
-        // rather than a struct so it can be stored in a Gee.ArrayList
-        // (Vala disallows array types as generic type arguments).
+        // as the label prefix in the inline SelectionRow's option list
+        // above. Plain GLib.Object rather than a struct so it can be
+        // stored in a Gee.ArrayList (Vala disallows array types as
+        // generic type arguments).
         private class BingMarketEntry : GLib.Object {
             public string code { get; set; }
             public string label { get; set; }
