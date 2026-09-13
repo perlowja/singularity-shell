@@ -8,6 +8,7 @@ namespace Singularity {
     public class DesktopPage : SettingsPage {
         private GLib.Settings settings;
         private GLib.Settings? wm_settings;
+        private SettingsView view;
         private bool decorations_updating_ui = false;
         private bool decorations_ignore_change = false;
         private Box? decorations_start_box;
@@ -21,6 +22,9 @@ namespace Singularity {
         private SelectionRow? decorations_side_row;
         private WallpaperPreviewWidget preview_widget;
         private FlowBox wallpaper_grid;
+        private Gtk.Box wallpaper_source_container;
+        private string[] wallpaper_collection_roots;
+
         private Gee.ArrayList<WallpaperCollectionInfo> wallpaper_collections = new Gee.ArrayList<WallpaperCollectionInfo>();
         private WallpaperRotationState rotation_state = new WallpaperRotationState(
             WallpaperRotationState.default_config_dir());
@@ -42,6 +46,68 @@ namespace Singularity {
                 return ngettext("Every %d minute (custom)", "Every %d minutes (custom)", minutes).printf(minutes);
             }
             return ngettext("Every %d second (custom)", "Every %d seconds (custom)", seconds).printf(seconds);
+        }
+
+        // Bing preferred-region selector. The UI side of cix-installer's
+        // 45-wallpaper-rotator.sh's ncz-wallpaper-bing contract -- the
+        // rotator script always fetches and combines EVERY market now
+        // (operator 2026-09-12: "just have it be the preferred language,
+        // and have all the feeds be combined"). The file this writes,
+        // ~/.config/ncz-wallpaper/bing-markets, no longer restricts which
+        // markets are fetched; it only tells the rotator which region's
+        // copy of a photo to prefer when the SAME photograph is served to
+        // more than one market and has to be de-duplicated down to one
+        // (see cmd_consolidate()'s preferred_market() in the rotator
+        // script). The literal "all" (case-insensitive) sentinel, or an
+        // absent file, means "no preference" -- the rotator falls back to
+        // its original alphabetical dedup-winner order.
+        // id "all" = "All Markets, No Preference" (immediate write of
+        // "all"); id "pick" = "Choose Preferred Region..." opens a
+        // picker dialog. The same dialog object is reused across opens
+        // and its checkboxes are pre-checked from the file each time it's
+        // shown. Checking a region here does NOT narrow which markets are
+        // fetched or shown -- every market is always fetched -- it only
+        // sets which one wins ties.
+        private const string BING_MARKETS_ID_ALL = "all";
+        private const string BING_MARKETS_ID_PICK = "pick";
+        // 13 markets, grouped by region for the picker dialog. Order
+        // matches the comment block in
+        // cix-installer/post-install/45-wallpaper-rotator.sh's
+        // ncz-wallpaper-bing (Americas, Europe, Asia-Pacific).
+        // [0] = market code, [1] = display label, [2] = region header.
+        private const string BING_MARKETS_TABLE = "en-US\tUnited States\tAmericas"
+            + "|en-CA\tCanada English\tAmericas"
+            + "|fr-CA\tCanada French\tAmericas"
+            + "|pt-BR\tBrazil\tAmericas"
+            + "|en-GB\tUnited Kingdom\tEurope"
+            + "|fr-FR\tFrance\tEurope"
+            + "|de-DE\tGermany\tEurope"
+            + "|es-ES\tSpain\tEurope"
+            + "|it-IT\tItaly\tEurope"
+            + "|en-IN\tIndia\tAsia-Pacific"
+            + "|ja-JP\tJapan\tAsia-Pacific"
+            + "|zh-CN\tChina\tAsia-Pacific"
+            + "|ko-KR\tSouth Korea\tAsia-Pacific";
+        private Gee.ArrayList<BingMarketEntry> bing_markets_rows = new Gee.ArrayList<BingMarketEntry>();
+        private Gee.ArrayList<string> bing_markets_regions = new Gee.ArrayList<string>();
+        private SelectionRow? bing_markets_row = null;
+        private ConfirmDialog? bing_markets_dialog = null;
+        private Gee.ArrayList<Gtk.CheckButton> bing_markets_checkboxes = new Gee.ArrayList<Gtk.CheckButton>();
+        private bool bing_markets_updating = false;
+
+        // Lower-case an ASCII string. Vala's GLib string has no public
+        // lowercase() (only casefold(), which is Unicode-aware and
+        // therefore locale-sensitive -- the bing-market codes are all
+        // ISO 639-1 + ISO 3166-1 letters, so a literal ASCII fold is
+        // both correct and cheaper).
+        private static string ascii_lower(string s) {
+            string out = "";
+            for (int i = 0; i < s.length; i++) {
+                char c = s[i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+                out += c.to_string();
+            }
+            return out;
         }
 
         // Appends a rounded-rectangle sub-path to the Cairo context.
@@ -87,6 +153,7 @@ namespace Singularity {
             base(_("Desktop"));
             ensure_wallpaper_css();
             settings = new GLib.Settings("dev.sinty.desktop");
+            this.view = view;
             back_clicked.connect(() => {
                 view.go_home();
             });
@@ -129,56 +196,69 @@ namespace Singularity {
             reset_btn.tooltip_text = _("Reset to Default");
             reset_btn.add_css_class("navigation-button");
             reset_btn.clicked.connect(() => {
+                // Reset ALL three wallpaper keys so the desktop
+                // returns to a true default state. settings.reset()
+                // is per-key, so the attribution keys do not
+                // auto-reset when only background-picture-uri is
+                // reset -- without the explicit resets below, the
+                // overlay would keep showing stale attribution
+                // from the previous wallpaper even after the user
+                // clicked "Reset to Default".
+                // Stage all three writes as one atomic dconf transaction --
+                // committing them separately fired three independent
+                // "changed" signals in a row, and WallpaperManager.reload()
+                // (which listens to all three keys) ran once per signal,
+                // rendering a visibly flickering sequence of mismatched
+                // picture/attribution combinations before settling on the
+                // final, correct state.
+                settings.delay();
                 settings.reset("background-picture-uri");
+                SettingsSafety.set_string(settings, "background-attribution-title", "");
+                SettingsSafety.set_string(settings, "background-attribution-author", "");
+                settings.apply();
                 update_preview();
             });
             header.append(reset_btn);
             var preview_group = new PreferencesGroup(_("Current Wallpaper"));
             var preview_widget = new WallpaperPreviewWidget();
             preview_widget.select_clicked.connect(() => {
-                int64 ts = GLib.get_real_time();
-                // Hand the result back through the per-user runtime dir (0700)
-                // rather than a predictable name in world-writable /tmp.
-                string rdir = GLib.Path.build_filename(GLib.Environment.get_user_runtime_dir(), "singularity");
-                GLib.DirUtils.create_with_parents(rdir, 0700);
-                string result_path = GLib.Path.build_filename(rdir, "wallpaper-%lld.uris".printf(ts));
-                try {
-                    string exe = GLib.FileUtils.read_link("/proc/self/exe");
-                    string exe_dir = GLib.Path.get_dirname(exe);
-                    string files_bin = GLib.Path.build_filename(exe_dir, "singularity-files");
-                    if (!GLib.FileUtils.test(files_bin, GLib.FileTest.IS_EXECUTABLE)) {
-                        files_bin = "singularity-files";
+                var dialog = new Gtk.FileDialog();
+                dialog.title = _("Select Wallpaper");
+                var images = new Gtk.FileFilter();
+                images.name = _("Images");
+                images.add_pixbuf_formats();
+                var filters = new GLib.ListStore(typeof(Gtk.FileFilter));
+                filters.append(images);
+                dialog.filters = filters;
+                dialog.default_filter = images;
+                // Passing a parent window here makes GTK export this
+                // window's surface via the xdg-foreign-v2 protocol
+                // (zxdg_exporter_v2.export_toplevel) so the out-of-process
+                // portal file chooser can set itself transient-for it.
+                // Live-reproduced and root-caused on O6N (NCZ-OS, labwc
+                // compositor) via WAYLAND_DEBUG=1: labwc advertises
+                // zxdg_exporter_v2 but disconnects the client instead of
+                // replying with zxdg_exported_v2.handle to that exact
+                // request -- a fatal, unrecoverable Wayland protocol error
+                // (GTK's own internal handling calls exit(); confirmed via
+                // gdb backtrace, no application code anywhere in the
+                // crashing frames). Passing null skips the xdg-foreign
+                // export entirely: the chooser opens as an ordinary
+                // top-level instead of transient-for the main window,
+                // which is a real, supported GtkFileDialog usage pattern
+                // (not a hack), at the minor cost of losing that window
+                // stacking/transiency relationship on compositors where
+                // xdg-foreign actually works correctly.
+                dialog.open.begin(null, null, (obj, result) => {
+                    try {
+                        var file = dialog.open.end(result);
+                        set_wallpaper(file.get_uri());
+                    } catch (Gtk.DialogError.DISMISSED e) {
+                        // The user dismissed the portal chooser.
+                    } catch (Error e) {
+                        warning("Wallpaper picker failed: %s", e.message);
                     }
-                    var launcher = new GLib.SubprocessLauncher(
-                        GLib.SubprocessFlags.STDIN_INHERIT |
-                        GLib.SubprocessFlags.STDOUT_SILENCE |
-                        GLib.SubprocessFlags.STDERR_SILENCE
-                    );
-                    launcher.setenv("SINGULARITY_PORTAL_RESULT_FILE", result_path, true);
-                    string[] argv = { files_bin, "--portal-mode", "--title=Select Wallpaper" };
-                    var proc = launcher.spawnv(argv);
-                    proc.wait_async.begin(null, (obj, res) => {
-                        try { proc.wait_async.end(res); } catch (Error e) {}
-                        if (GLib.FileUtils.test(result_path, GLib.FileTest.EXISTS)) {
-                            try {
-                                string content;
-                                GLib.FileUtils.get_contents(result_path, out content);
-                                GLib.FileUtils.unlink(result_path);
-                                foreach (var line in content.strip().split("\n")) {
-                                    string uri = line.strip();
-                                    if (uri.length > 0) {
-                                        set_wallpaper(uri);
-                                        break;
-                                    }
-                                }
-                            } catch (Error e) {
-                                GLib.FileUtils.unlink(result_path);
-                            }
-                        }
-                    });
-                } catch (Error e) {
-                    warning("Wallpaper picker: could not launch singularity-files: %s", e.message);
-                }
+                });
             });
             this.preview_widget = preview_widget;
             var preview_row = new PreferencesRow();
@@ -187,31 +267,22 @@ namespace Singularity {
             add_group(preview_group);
             var grid_group = new PreferencesGroup(_("Wallpapers"));
 
-            wallpaper_collections = WallpaperCollections.parse(
-                WallpaperCollections.default_search_roots());
+            wallpaper_collection_roots = compute_collection_roots();
+            wallpaper_source_container = new Gtk.Box(Orientation.VERTICAL, 0);
+            var source_container_row = new PreferencesRow();
+            source_container_row.set_child(wallpaper_source_container);
+            grid_group.add_row(source_container_row);
+            refresh_wallpaper_sources();
 
-            var source_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-            foreach (var collection in wallpaper_collections) {
-                string label = (collection.artist != null && collection.artist != "" && collection.artist != collection.name)
-                    ? "%s - %s".printf(collection.name, collection.artist)
-                    : collection.name;
-                source_options.add(new Singularity.Core.AppSettingOption() {
-                    id = collection.id, label = label
-                });
-            }
-            string initial_collection_id = rotation_state.get_selected_collection("");
-            bool have_initial = false;
-            foreach (var opt in source_options) if (opt.id == initial_collection_id) have_initial = true;
-            if (!have_initial && source_options.size > 0) initial_collection_id = source_options[0].id;
-
-            var source_row = new SelectionRow.with_options(
-                _("Wallpaper Source"), source_options, initial_collection_id);
-            source_row.subtitle = _("Which installed collection the gallery below shows");
-            source_row.selected.connect((id) => {
-                rotation_state.set_selected_collection(id);
-                populate_grid();
+            var online_row = new PreferencesRow();
+            var online_button = new Button.with_label(_("Browse Online Wallpapers"));
+            online_button.margin_start = online_button.margin_end = 10;
+            online_button.margin_top = online_button.margin_bottom = 8;
+            online_button.clicked.connect(() => {
+                view.navigate_to("wallpaper-browser");
             });
-            grid_group.add_row(source_row);
+            online_row.set_child(online_button);
+            grid_group.add_row(online_row);
 
             wallpaper_grid = new FlowBox();
             wallpaper_grid.add_css_class("wallpaper-gallery");
@@ -235,6 +306,56 @@ namespace Singularity {
                 _("Automatically change the wallpaper on a timer"),
                 rotation_state.get_rotate_enabled());
             grid_group.add_row(rotate_row);
+
+            // Wallpaper attribution overlay toggle. Background.vala listens
+            // for settings.changed["show-wallpaper-attribution"] and hides
+            // the overlay live; the gsettings key also gates the live
+            // wallpaper-changed re-bind so flipping it from off to on redraws
+            // the overlay for the current wallpaper without waiting for the
+            // next rotation cycle.
+            var attribution_row = new SwitchRow(_("Show Wallpaper Info"),
+                _("Display title and photographer credit on the desktop background"),
+                settings.get_boolean("show-wallpaper-attribution"));
+            grid_group.add_row(attribution_row);
+            attribution_row.switch_btn.notify["active"].connect(() => {
+                settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
+            });
+
+            // Bing preferred-region selector. The two-entry SelectionRow
+            // matches ncz-wallpaper-bing's existing "all" sentinel in
+            // ~/.config/ncz-wallpaper/bing-markets (45-wallpaper-rotator.sh
+            // reads that file verbatim), but the MEANING changed: every
+            // market is always fetched and combined now, so this no
+            // longer restricts what's fetched. It only sets which
+            // region's copy of a duplicate photo the rotator prefers when
+            // de-duplicating -- "All Markets, No Preference" writes "all"
+            // immediately (today's alphabetical dedup-winner order, kept
+            // as the neutral default); "Choose Preferred Region..." opens
+            // a picker dialog with one checkbox per market grouped by
+            // region, pre-checked from the current file state. We don't
+            // gate the row on the active wallpaper provider -- the rest of
+            // this page (rotate_row, interval_row, attribution_row) is
+            // also unconditional, and there's no clean existing
+            // provider-detection hook to reuse.
+            init_bing_markets_table();
+            var bing_markets_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_ALL, label = _("All Markets, No Preference") });
+            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_PICK, label = _("Choose Preferred Region…") });
+            // Initial selection reflects the file: "all" or absent =
+            // All Markets, anything else = Choose Preferred Region... so
+            // the dialog opens pre-checked against the actual preference.
+            bing_markets_row = new SelectionRow.with_options(_("Bing Preferred Region"), bing_markets_options,
+                bing_markets_file_is_all() ? BING_MARKETS_ID_ALL : BING_MARKETS_ID_PICK);
+            bing_markets_row.subtitle = _("Bing always combines every region's photo of the day; this only picks whose caption and credit win when the same photo is shared");
+            bing_markets_row.selected.connect((id) => {
+                if (bing_markets_updating || bing_markets_row == null) return;
+                if (id == BING_MARKETS_ID_ALL) {
+                    write_bing_markets_all();
+                } else if (id == BING_MARKETS_ID_PICK) {
+                    open_bing_markets_dialog();
+                }
+            });
+            grid_group.add_row(bing_markets_row);
 
             var interval_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             interval_options.add(new Singularity.Core.AppSettingOption() { id = "600", label = _("Every 10 minutes") });
@@ -1803,7 +1924,33 @@ namespace Singularity {
         }
 
         private void set_wallpaper(string uri) {
-            settings.set_string("background-picture-uri", uri);
+            string local_path = "";
+            if (uri != null && uri.length > 0) {
+                var f = GLib.File.new_for_uri(uri);
+                local_path = f.get_path() ?? "";
+            }
+            string title = "";
+            string author = "";
+            if (local_path != "") {
+                var attr = Singularity.WallpaperSidecar.read(local_path);
+                if (attr.valid) {
+                    title = attr.title;
+                    author = attr.author;
+                }
+            }
+            // Stage all three writes as one atomic dconf transaction -- see
+            // the identical comment on the Reset-to-Default handler above.
+            // Committing background-picture-uri, then the two attribution
+            // keys, as three separate writes let WallpaperManager.reload()
+            // (which listens to all three) run three times in a row, each
+            // with a different partially-updated combination, producing a
+            // visibly flickering/incorrect attribution overlay before it
+            // settled on the right text a couple of dconf round-trips later.
+            settings.delay();
+            SettingsSafety.set_string(settings, "background-picture-uri", uri);
+            SettingsSafety.set_string(settings, "background-attribution-title", title);
+            SettingsSafety.set_string(settings, "background-attribution-author", author);
+            settings.apply();
             add_to_recent(uri);
             update_preview();
         }
@@ -1818,7 +1965,7 @@ namespace Singularity {
                     new_list += r;
                 }
             }
-            settings.set_strv("recent-wallpapers", new_list);
+            SettingsSafety.set_strv(settings, "recent-wallpapers", new_list);
         }
 
         private void remove_from_recent(string uri) {
@@ -1829,10 +1976,14 @@ namespace Singularity {
                     new_list += r;
                 }
             }
-            settings.set_strv("recent-wallpapers", new_list);
+            SettingsSafety.set_strv(settings, "recent-wallpapers", new_list);
         }
 
         private void update_preview_async() {
+            string current_uri = settings.get_string("background-picture-uri");
+            string? current_path = current_uri != "" ? File.new_for_uri(current_uri).get_path() : null;
+            if (preview_widget != null)
+                preview_widget.set_metadata(WallpaperSidecar.read(current_path ?? ""));
             var manager = WallpaperManager.get_default();
             if (manager.medium_texture != null && preview_widget != null) {
                 preview_widget.set_image(manager.medium_texture);
@@ -1917,6 +2068,136 @@ namespace Singularity {
             });
         }
 
+        public static string[] compute_collection_roots() {
+            var roots = new Gee.ArrayList<string>();
+            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
+                roots.add(GLib.Path.build_filename(d, "ncz-wallpapers", "collections"));
+            roots.add(GLib.Path.build_filename(
+                GLib.Environment.get_user_data_dir(), "ncz-wallpapers", "collections"));
+            return roots.to_array();
+        }
+
+        public void refresh_after_import() {
+            refresh_wallpaper_sources();
+            populate_grid();
+        }
+
+        private void refresh_wallpaper_sources() {
+            wallpaper_collections = WallpaperCollections.parse(wallpaper_collection_roots);
+            var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
+            foreach (var collection in wallpaper_collections) {
+                string label = (collection.artist != "" && collection.artist != collection.name)
+                    ? _("%s — by %s").printf(collection.name, collection.artist) : collection.name;
+                label = "%s — %s".printf(label, collection.theme_pack ? _("Theme pack") : _("Artist pack"));
+                options.add(new Singularity.Core.AppSettingOption() { id = collection.id, label = label });
+            }
+            string selected = rotation_state.get_selected_collection("ncz");
+            bool found = false;
+            foreach (var option in options) if (option.id == selected) found = true;
+            if (!found && options.size > 0) selected = options[0].id;
+            var row = new SelectionRow.with_options(_("Wallpaper Source"), options, selected);
+            row.subtitle = _("Which installed collection the gallery below shows");
+            row.selected.connect((id) => {
+                rotation_state.set_selected_collection(id);
+                refresh_wallpaper_sources();
+                populate_grid();
+                apply_selected_wallpaper.begin();
+            });
+            var old = wallpaper_source_container.get_first_child();
+            if (old != null) wallpaper_source_container.remove(old);
+            var source_box = new Gtk.Box(Orientation.HORIZONTAL, 6);
+            row.hexpand = true;
+            source_box.append(row);
+            var selected_collection = find_collection(selected);
+            if (selected_collection != null && selected_collection.deletable) {
+                var delete_button = new Button.from_icon_name("user-trash-symbolic");
+                delete_button.add_css_class("flat");
+                delete_button.add_css_class("destructive-action");
+                delete_button.tooltip_text = _("Delete wallpaper pack");
+                delete_button.clicked.connect(() => confirm_delete_pack(selected_collection));
+                source_box.append(delete_button);
+            }
+            wallpaper_source_container.append(source_box);
+        }
+
+        private async void apply_selected_wallpaper() {
+            try {
+                var process = new Subprocess.newv(
+                    { "/usr/local/bin/ncz-wallpaper-rotate" },
+                    SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_PIPE);
+                string? stderr_buf = null;
+                yield process.communicate_utf8_async(null, null, null, out stderr_buf);
+                if (!process.get_successful())
+                    warning("Could not apply selected wallpaper source: %s",
+                        stderr_buf != null ? stderr_buf.strip() : "wallpaper rotator failed");
+            } catch (Error e) {
+                warning("Could not apply selected wallpaper source: %s", e.message);
+            }
+        }
+
+        private WallpaperCollectionInfo? find_collection(string id) {
+            foreach (var collection in wallpaper_collections)
+                if (collection.id == id) return collection;
+            return null;
+        }
+
+        // The grid built by populate_grid() is NOT limited to the active
+        // rotation source's own directory -- WallpaperGallery.scan() is
+        // given every known collection's dir (collection_dirs) alongside
+        // scan_dir, so a card's uri can belong to a collection OTHER than
+        // whichever one is currently selected as the rotation source (e.g.
+        // a "recent" wallpaper carried over from a previously-active pack).
+        // add_wallpaper_card() used to resolve the delete target via
+        // find_collection(rotation_state.get_selected_collection("ncz")),
+        // which is always the ACTIVE source, not necessarily the collection
+        // that actually contains this specific uri. For any card whose
+        // image lives in a different collection, that mismatch made
+        // WallpaperCollections.delete_image()'s contains_uri() check fail,
+        // throwing IOError.PERMISSION_DENIED -- caught by confirm_delete_
+        // image()'s catch block, which only logs a warning(), so the click
+        // silently did nothing from the user's perspective. Resolve the
+        // REAL owning collection by uri instead of assuming it's whatever
+        // is currently selected.
+        private WallpaperCollectionInfo? find_owning_collection(string uri) {
+            foreach (var collection in wallpaper_collections)
+                if (collection.contains_uri(uri)) return collection;
+            return null;
+        }
+
+        private void confirm_delete_pack(WallpaperCollectionInfo collection) {
+            var app = GLib.Application.get_default() as Gtk.Application;
+            var dialog = new ConfirmDialog(app,
+                _("Delete “%s”?").printf(collection.name), "user-trash-symbolic",
+                _("This permanently deletes every photo in this wallpaper pack."),
+                _("Delete Pack"), ConfirmDialog.ActionStyle.DESTRUCTIVE);
+            dialog.response.connect((r) => {
+                if (r == ConfirmDialog.Response.PRIMARY) delete_pack(collection);
+            });
+            dialog.present();
+        }
+
+        private void reset_deleted_background(bool was_active) {
+            if (!was_active) return;
+            settings.delay();
+            settings.reset("background-picture-uri");
+            SettingsSafety.set_string(settings, "background-attribution-title", "");
+            SettingsSafety.set_string(settings, "background-attribution-author", "");
+            settings.apply();
+        }
+
+        private void delete_pack(WallpaperCollectionInfo collection) {
+            bool was_active = WallpaperCollections.needs_background_fallback(
+                collection, settings.get_string("background-picture-uri"));
+            try {
+                WallpaperCollections.delete_pack(collection);
+                reset_deleted_background(was_active);
+                refresh_wallpaper_sources();
+                populate_grid();
+            } catch (Error e) {
+                warning("Could not delete wallpaper pack %s: %s", collection.id, e.message);
+            }
+        }
+
         private void populate_grid() {
             int gen = ++wallpaper_grid_generation;
             wallpaper_grid.remove_all();
@@ -1978,13 +2259,42 @@ namespace Singularity {
         }
 
         private void add_wallpaper_card(string uri, bool is_recent) {
-            var card = new WallpaperCard(uri, is_recent);
+            var collection = find_owning_collection(uri);
+            bool can_delete = collection != null && collection.deletable;
+            var card = new WallpaperCard(uri, is_recent, can_delete);
             card.set_selected(uri == settings.get_string("background-picture-uri"));
             card.clicked.connect(() => set_wallpaper(uri));
-            if (is_recent) {
+            if (can_delete) {
+                card.delete_clicked.connect(() => confirm_delete_image(collection, uri));
+            } else if (is_recent) {
                 card.delete_clicked.connect(() => remove_from_recent(uri));
             }
             wallpaper_grid.append(card);
+        }
+
+        private void confirm_delete_image(WallpaperCollectionInfo collection, string uri) {
+            string name = File.new_for_uri(uri).get_basename() ?? _("this photo");
+            var app = GLib.Application.get_default() as Gtk.Application;
+            var dialog = new ConfirmDialog(app,
+                _("Delete “%s”?").printf(name), "user-trash-symbolic",
+                _("This photo will be permanently deleted."),
+                _("Delete Photo"), ConfirmDialog.ActionStyle.DESTRUCTIVE);
+            dialog.response.connect((r) => {
+                if (r != ConfirmDialog.Response.PRIMARY) return;
+                bool was_active = WallpaperCollections.needs_background_fallback(
+                    collection, settings.get_string("background-picture-uri")) &&
+                    uri == settings.get_string("background-picture-uri");
+                try {
+                    bool pack_deleted = WallpaperCollections.delete_image(collection, uri);
+                    remove_from_recent(uri);
+                    reset_deleted_background(was_active);
+                    if (pack_deleted) refresh_wallpaper_sources();
+                    populate_grid();
+                } catch (Error e) {
+                    warning("Could not delete wallpaper %s: %s", uri, e.message);
+                }
+            });
+            dialog.present();
         }
 
         // Color picker helpers
@@ -2303,10 +2613,247 @@ namespace Singularity {
                 warning("eyedropper failed: %s", e.message);
             }
         }
+
+        // -------------------------------------------------------------------------
+        // Bing markets selector. UI side of cix-installer's
+        // 45-wallpaper-rotator.sh's ncz-wallpaper-bing contract.
+        // -------------------------------------------------------------------------
+
+        // Parse BING_MARKETS_TABLE into bing_markets_rows ({code, label,
+        // region}) and bing_markets_regions (unique region order).
+        // Called once from the constructor before the ComboRow model is
+        // built.
+        private void init_bing_markets_table() {
+            foreach (string entry in BING_MARKETS_TABLE.split("|")) {
+                string[] cols = entry.split("\t");
+                if (cols.length != 3) continue;
+                var row = new BingMarketEntry() { code = cols[0], label = cols[1], region = cols[2] };
+                bing_markets_rows.add(row);
+                bool seen = false;
+                foreach (string existing in bing_markets_regions) if (existing == cols[2]) { seen = true; break; }
+                if (!seen) bing_markets_regions.add(cols[2]);
+            }
+        }
+
+        // Full path to the bing-markets file the cix-installer rotator
+        // already reads. Lives under XDG_CONFIG_HOME so it tracks the
+        // user even when $HOME is relocated for test sessions.
+        private string bing_markets_file_path() {
+            return GLib.Path.build_filename(
+                GLib.Environment.get_user_config_dir(),
+                "ncz-wallpaper",
+                "bing-markets");
+        }
+
+        // Read the bing-markets file and report whether its content
+        // (trimmed, lowercased) is the "all" sentinel -- i.e. "no
+        // preferred region". Absent file also returns true so the
+        // SelectionRow starts on "All Markets, No Preference" on a fresh
+        // install, matching the rotator's own default (preferred_market()
+        // in 45-wallpaper-rotator.sh returns None for an absent file too
+        // -- UI intent matches effective behaviour on both sides now).
+        private bool bing_markets_file_is_all() {
+            string path = bing_markets_file_path();
+            if (!FileUtils.test(path, FileTest.EXISTS)) return true;
+            string text;
+            try {
+                FileUtils.get_contents(path, out text);
+            } catch (Error e) {
+                return true;
+            }
+            return ascii_lower(text.strip()) == "all";
+        }
+
+        // Read the bing-markets file and return the configured codes as
+        // an array. "all" (any case) or absent -> empty list (i.e. the
+        // sentinel meaning "no preferred region"). Otherwise split on any
+        // of whitespace/comma and keep tokens matching the 2-letter-2-
+        // letter market pattern, preserving file order. The rotator only
+        // ever honours the FIRST entry as the preference (a preference is
+        // singular); this still returns every matched token so a legacy
+        // multi-market file written by an older build degrades to "the
+        // first one wins" rather than silently losing the whole value.
+        private string[] bing_markets_read_codes() {
+            string path = bing_markets_file_path();
+            if (!FileUtils.test(path, FileTest.EXISTS)) return {};
+            string text;
+            try {
+                FileUtils.get_contents(path, out text);
+            } catch (Error e) {
+                return {};
+            }
+            if (ascii_lower(text.strip()) == "all") return {};
+            string[] codes = {};
+            string[] seen = {};
+            foreach (string tok in text.strip().split_set(" \t\n,")) {
+                if (tok.length == 0) continue;
+                if (tok.length != 5 || tok[2] != '-') continue;
+                bool dup = false;
+                foreach (string existing in seen) if (existing == tok) { dup = true; break; }
+                if (dup) continue;
+                seen += tok;
+                codes += tok;
+            }
+            return codes;
+        }
+
+        // Atomic write of a single-line contents string to the
+        // bing-markets file. Same write-then-rename pattern as
+        // WallpaperRotationState so the daemon (which polls the file)
+        // never reads a half-flushed value. Creates the directory if
+        // absent. Silent on failure -- the daemon's default kicks in if
+        // the file is missing, so a failed write degrades gracefully.
+        private void write_bing_markets_contents(string contents) {
+            string path = bing_markets_file_path();
+            string dir = GLib.Path.get_dirname(path);
+            try {
+                GLib.DirUtils.create_with_parents(dir, 0700);
+                string tmp = path + ".tmp";
+                FileUtils.set_contents(tmp, contents);
+                if (FileUtils.rename(tmp, path) != 0) {
+                    warning("bing markets: could not rename %s into place", path);
+                }
+            } catch (Error e) {
+                warning("bing markets: could not write %s: %s", path, e.message);
+            }
+        }
+
+        private void write_bing_markets_all() {
+            write_bing_markets_contents("all\n");
+        }
+
+        // Write the chosen preferred market as a single line
+        // (newline-terminated, matching the format the rotator already
+        // expects -- it only ever honours the FIRST valid token in the
+        // file now; see preferred_market() in 45-wallpaper-rotator.sh).
+        // Empty list -> fall back to "all" rather than an empty file,
+        // because ncz-wallpaper-bing treats an empty value as "no
+        // preference" anyway, and an empty file would be picked up by
+        // the rotator's split() as a literal empty list with no
+        // behaviour change -- but writing "all" makes the user's "no
+        // preferred region" intent explicit on disk.
+        private void write_bing_markets_codes(string[] codes) {
+            if (codes.length == 0) {
+                write_bing_markets_all();
+                return;
+            }
+            write_bing_markets_contents(string.joinv(" ", codes) + "\n");
+        }
+
+        // Build (once) and present the preferred-region dialog. The
+        // checkboxes behave as a single-select group (checking one
+        // unchecks every other) rather than a genuine multi-select --
+        // there is exactly one preferred region, never a subset, so the
+        // dialog picks ONE market or none at all. The same dialog object
+        // is reused across opens; the checked state is re-synced against
+        // the current file state each time, so a user who picks "All
+        // Markets, No Preference", then "Choose Preferred Region..."
+        // sees nothing pre-checked, and a user who has a region set sees
+        // exactly that one checked on reopen.
+        private void open_bing_markets_dialog() {
+            if (bing_markets_dialog == null) {
+                var app = GLib.Application.get_default() as Gtk.Application;
+                bing_markets_dialog = new ConfirmDialog(app,
+                    _("Choose Preferred Region"), null,
+                    _("Bing always fetches and combines every region's photo of the day. Pick one region here to prefer its caption and credit whenever the same photo is shared across regions. Leave nothing checked for no preference."),
+                    _("Apply"), ConfirmDialog.ActionStyle.SUGGESTED);
+
+                // Build the picker body: one section per region with a
+                // header label and one Gtk.CheckButton per market.
+                // The regions array preserves the table order so the
+                // dialog matches the comment block in
+                // 45-wallpaper-rotator.sh.
+                var outer_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 12);
+                outer_box.margin_top = 8;
+                outer_box.margin_bottom = 8;
+                outer_box.margin_start = 4;
+                outer_box.margin_end = 4;
+                foreach (string region in bing_markets_regions) {
+                    var region_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 4);
+                    var header = new Gtk.Label(region);
+                    header.halign = Gtk.Align.START;
+                    header.xalign = 0.0f;
+                    header.add_css_class("heading");
+                    region_box.append(header);
+                    foreach (var row in bing_markets_rows) {
+                        if (row.region != region) continue;
+                        var check = new Gtk.CheckButton.with_label(row.label);
+                        check.set_data("bing-market-code", row.code);
+                        // Single-select: picking one clears every other
+                        // checkbox across all regions, so at most one
+                        // market is ever checked -- a preference is
+                        // singular, unlike the old multi-market subset.
+                        check.toggled.connect(() => {
+                            if (!check.active) return;
+                            foreach (var other in bing_markets_checkboxes) {
+                                if (other != check) other.active = false;
+                            }
+                        });
+                        region_box.append(check);
+                        bing_markets_checkboxes.add(check);
+                    }
+                    outer_box.append(region_box);
+                }
+                var scroll = new Gtk.ScrolledWindow();
+                scroll.hscrollbar_policy = Gtk.PolicyType.NEVER;
+                scroll.vscrollbar_policy = Gtk.PolicyType.AUTOMATIC;
+                scroll.min_content_height = 240;
+                scroll.max_content_height = 480;
+                scroll.propagate_natural_height = true;
+                scroll.child = outer_box;
+                bing_markets_dialog.custom_area.append(scroll);
+
+                bing_markets_dialog.response.connect(on_bing_markets_dialog_response);
+            }
+
+            // Re-sync checkbox state from the file every open. Only the
+            // FIRST configured code (if any) is checked -- a preference
+            // is singular now. "all" (or absent) means no preference, so
+            // nothing is pre-checked.
+            string[] configured = bing_markets_read_codes();
+            string? preferred = configured.length > 0 ? configured[0] : null;
+            foreach (var check in bing_markets_checkboxes) {
+                string? code = check.get_data<string>("bing-market-code");
+                check.active = (preferred != null && code == preferred);
+            }
+            bing_markets_dialog.present();
+        }
+
+        // Dialog "Apply" writes the checked region (at most one, thanks
+        // to the mutual-exclusion wiring above) to
+        // ~/.config/ncz-wallpaper/bing-markets, or "all" if none is
+        // checked. "Cancel" (or dismissing the dialog) leaves the file
+        // alone -- the SelectionRow state already reflects the user's
+        // last intent ("Choose Preferred Region..."), but no preference
+        // was changed on disk.
+        private void on_bing_markets_dialog_response(ConfirmDialog.Response response) {
+            if (response != ConfirmDialog.Response.PRIMARY) return;
+            string[] checked_codes = {};
+            foreach (var check in bing_markets_checkboxes) {
+                if (!check.active) continue;
+                string? code = check.get_data<string>("bing-market-code");
+                if (code != null && code != "") checked_codes += code;
+            }
+            write_bing_markets_codes(checked_codes);
+        }
+
+        // Bing market row: 2-letter market code, UI display label, and
+        // region bucket ("Americas" / "Europe" / "Asia-Pacific") used
+        // to group checkboxes in the picker dialog. Plain GLib.Object
+        // rather than a struct so it can be stored in a Gee.ArrayList
+        // (Vala disallows array types as generic type arguments).
+        private class BingMarketEntry : GLib.Object {
+            public string code { get; set; }
+            public string label { get; set; }
+            public string region { get; set; }
+        }
     }
     internal class WallpaperPreviewWidget : Box {
         public signal void select_clicked();
         private Picture preview_picture;
+        private Label metadata;
+        private LinkButton source_link;
+        private LinkButton license_link;
 
         public WallpaperPreviewWidget() {
             Object(orientation: Orientation.VERTICAL, spacing: 0);
@@ -2320,6 +2867,20 @@ namespace Singularity {
             preview_picture.can_shrink = true;
             image_area.append(preview_picture);
             append(image_area);
+            metadata = new Label("");
+            metadata.use_markup = false;
+            metadata.wrap = true;
+            metadata.selectable = true;
+            metadata.max_width_chars = 40;
+            metadata.margin_start = metadata.margin_end = 12;
+            metadata.margin_top = metadata.margin_bottom = 8;
+            metadata.visible = false;
+            append(metadata);
+            source_link = new LinkButton.with_label("", _("Original image / attribution"));
+            license_link = new LinkButton.with_label("", _("Image license"));
+            source_link.visible = license_link.visible = false;
+            append(source_link);
+            append(license_link);
             var sep = new Separator(Orientation.HORIZONTAL);
             append(sep);
             var btn = new Button.with_label(_("Select Picture..."));
@@ -2334,20 +2895,119 @@ namespace Singularity {
         public void set_image(Gdk.Paintable paintable) {
             preview_picture.set_paintable(paintable);
         }
+
+        public void set_metadata(WallpaperAttribution attribution) {
+            metadata.label = WallpaperSidecar.display_text(attribution);
+            metadata.visible = metadata.label != "";
+            source_link.uri = attribution.page_url;
+            license_link.uri = attribution.license_url;
+            source_link.visible = attribution.page_url.has_prefix("https://") || attribution.page_url.has_prefix("http://");
+            license_link.visible = attribution.license_url.has_prefix("https://") || attribution.license_url.has_prefix("http://");
+        }
     }
+    // Visual parity with the main Desktop wallpaper picker. Both the local
+    // wallpaper picker (desktop_page) and the OCS/Bing browser reuse this
+    // widget so the thumbnail grid LOOKs identical regardless of source.
+    // Two construction paths exist:
+    //   * WallpaperCard(uri, is_recent)            -- local-file thumbnail,
+    //                                               title from basename.
+    //   * WallpaperCard.for_remote(uri, title,
+    //                              is_recent, loader)
+    //                                             -- caller-supplied async
+    //                                               thumbnail loader (used
+    //                                               by OCS Soup and Bing
+    //                                               local-file loads); an
+    //                                               explicit title string
+    //                                               (not basename).
+    // Both paths produce the same chrome: 172x104 clipped rounded frame,
+    // Picture with ContentFit.COVER, title overlay with object-select check,
+    // and the same wallpaper-card / workspace-preview CSS classes.
     internal class WallpaperCard : Box {
         public signal void clicked();
         public signal void delete_clicked();
         public string uri { get; private set; }
         private Picture picture;
+        // The overlay that hosts the picture, title, badges, and recents action.
+        private Overlay card_overlay;
         private string thumb_path;
+        // Optional remote-thumbnail loader set by WallpaperCard.for_remote().
+        // If non-null, replaces the local-file path; runs on a worker thread
+        // bounded by thumb_mutex (same cap as the local loader).
+        // Public so for_remote()'s parameter list is well-typed -- a public
+        // method cannot take a private delegate parameter without an
+        // accessibility error from valac.
+        public delegate Gdk.Pixbuf? RemoteThumbnailLoader() throws Error;
+        private RemoteThumbnailLoader? remote_loader;
         private static Mutex thumb_mutex = Mutex();
         private static Cond thumb_cond = Cond();
         private static int active_thumb_loads = 0;
 
-        public WallpaperCard(string uri, bool is_recent) {
+        public WallpaperCard(string uri, bool is_recent, bool can_delete = false) {
             Object(orientation: Orientation.VERTICAL, spacing: 0);
             this.uri = uri;
+            var file = File.new_for_uri(uri);
+            string title = file.get_basename() ?? _("Wallpaper");
+            // If the URI is a local path, the existing loader handles it.
+            // For remote URIs (no path), the local loader would just no-op
+            // since thumb_path is "" -- call sites that need a remote
+            // thumbnail MUST use WallpaperCard.for_remote() instead.
+            thumb_path = file.get_path() ?? "";
+            // The recents-only trash button lives in this constructor only;
+            // for_remote() / placeholder_only() never carry a delete
+            // affordance.
+            Button? del_btn = null;
+            if (is_recent || can_delete) {
+                del_btn = new Button.from_icon_name("user-trash-symbolic");
+                // flat+osd keeps the recents action legible over the image.
+                del_btn.add_css_class("flat");
+                del_btn.add_css_class("osd");
+                del_btn.valign = Align.START;
+                del_btn.halign = Align.END;
+                del_btn.margin_top = 4;
+                del_btn.margin_end = 4;
+                del_btn.clicked.connect(() => delete_clicked());
+            }
+            build_card(title, del_btn);
+            if (thumb_path != "") load_thumbnail_async();
+        }
+
+        // Remote-thumbnail variant. `loader` runs on a worker thread (same
+        // concurrency cap as the local file loader) and must return a
+        // decoded Pixbuf or throw; throws are swallowed silently the same
+        // way local-file failures are, leaving the placeholder visible.
+        // `is_recent` is accepted for signature symmetry with the local
+        // constructor but is unused (remote sources never carry the
+        // recents-trash affordance).
+        public WallpaperCard.for_remote(string uri, string title, bool is_recent, owned RemoteThumbnailLoader loader) {
+            Object(orientation: Orientation.VERTICAL, spacing: 0);
+            this.uri = uri;
+            thumb_path = "";
+            remote_loader = (owned) loader;
+            build_card(title, null);
+            if (remote_loader != null) load_remote_thumbnail_async();
+        }
+
+        // Placeholder-only variant. Builds the same chrome as for_remote
+        // but does NOT start any worker thread for thumbnail loading --
+        // the caller takes full responsibility for calling set_paintable()
+        // when the thumbnail is ready. Used by the OCS/Bing browser, which
+        // needs generation-aware / cancellable thumbnail loads that the
+        // built-in loader does not provide.
+        public WallpaperCard.placeholder_only(string uri, string title) {
+            Object(orientation: Orientation.VERTICAL, spacing: 0);
+            this.uri = uri;
+            thumb_path = "";
+            build_card(title, null);
+        }
+
+        // Shared chrome assembly. Both constructors funnel through here so
+        // visual parity is guaranteed (same ScrolledWindow clipper, same
+        // Picture, same title overlay, same checkmark, same CSS classes).
+        // The chain-init Object() call happens in each constructor -- not
+        // here -- because Vala only allows Object() in a constructor
+        // context. `del_btn` is the recents-only trash button, built by
+        // the caller; pass null otherwise.
+        private void build_card(string title, Button? del_btn) {
             add_css_class("wallpaper-card");
             add_css_class("workspace-preview");
             halign = Align.CENTER;
@@ -2362,29 +3022,14 @@ namespace Singularity {
             clipper.hscrollbar_policy = PolicyType.NEVER;
             clipper.vscrollbar_policy = PolicyType.NEVER;
             clipper.has_frame = false;
-            var overlay = new Overlay();
-            clipper.set_child(overlay);
+            card_overlay = new Overlay();
+            clipper.set_child(card_overlay);
             picture = new Picture();
             picture.add_css_class("wallpaper-card-picture");
             picture.content_fit = ContentFit.COVER;
             picture.can_shrink = true;
-            overlay.set_child(picture);
-            var file = File.new_for_uri(uri);
-            thumb_path = file.get_path() ?? "";
-            if (thumb_path != "") {
-                load_thumbnail_async();
-            }
-            if (is_recent) {
-                var del_btn = new Button.from_icon_name("user-trash-symbolic");
-                del_btn.add_css_class("flat");
-                del_btn.add_css_class("osd");
-                del_btn.valign = Align.START;
-                del_btn.halign = Align.END;
-                del_btn.margin_top = 4;
-                del_btn.margin_end = 4;
-                del_btn.clicked.connect(() => delete_clicked());
-                overlay.add_overlay(del_btn);
-            }
+            card_overlay.set_child(picture);
+            if (del_btn != null) card_overlay.add_overlay(del_btn);
             var title_box = new Box(Orientation.HORIZONTAL, 6);
             title_box.add_css_class("wallpaper-card-title");
             title_box.valign = Align.END;
@@ -2393,25 +3038,79 @@ namespace Singularity {
             title_box.margin_start = 8;
             title_box.margin_end = 8;
             title_box.margin_bottom = 8;
-            var title = new Label(file.get_basename() ?? _("Wallpaper"));
-            title.ellipsize = Pango.EllipsizeMode.END;
-            title.xalign = 0;
-            title.hexpand = true;
-            title_box.append(title);
+            var title_label = new Label(title);
+            title_label.ellipsize = Pango.EllipsizeMode.END;
+            title_label.xalign = 0;
+            title_label.hexpand = true;
+            title_box.append(title_label);
             var check = new Image.from_icon_name("object-select-symbolic");
             check.add_css_class("wallpaper-card-check");
             check.pixel_size = 14;
             title_box.append(check);
-            overlay.add_overlay(title_box);
+            card_overlay.add_overlay(title_box);
             append(clipper);
             var click_ctrl = new GestureClick();
             click_ctrl.pressed.connect(() => clicked());
             add_controller(click_ctrl);
         }
 
+        // Place a full-width action below the thumbnail, matching the
+        // wallpaper preview's image/separator/button convention.
+        public void append_action_button(Button btn) {
+            var sep = new Separator(Orientation.HORIZONTAL);
+            btn.add_css_class("flat");
+            btn.hexpand = true;
+            btn.height_request = 36;
+            append(sep);
+            append(btn);
+        }
+
+        // Adds a small attribution/licence label above the title bar so
+        // OCS/Bing items can show uploader + licence without inflating
+        // the card height. Null/empty clears any previous badge. Reuses
+        // the wallpaper-card-title styling so it reads as part of the
+        // existing title overlay rather than a new ad-hoc element.
+        public void set_badge(string? text) {
+            // Strip any previous badge: tracked by the data key so we
+            // never collide with user code that happens to set the same
+            // key for something else.
+            Widget? prev = get_data<Widget>("singularity-wallpaper-badge");
+            if (prev != null) {
+                card_overlay.remove_overlay(prev);
+                set_data<Widget>("singularity-wallpaper-badge", null);
+            }
+            if (text == null || text == "") return;
+            var badge = new Label(text);
+            badge.add_css_class("wallpaper-card-title");
+            badge.ellipsize = Pango.EllipsizeMode.END;
+            badge.xalign = 0;
+            badge.max_width_chars = 22;
+            badge.halign = Align.START;
+            badge.valign = Align.START;
+            badge.margin_start = 8;
+            badge.margin_top = 6;
+            card_overlay.add_overlay(badge);
+            set_data<Widget>("singularity-wallpaper-badge", badge);
+        }
+
         public void set_selected(bool selected) {
             if (selected) add_css_class("selected");
             else remove_css_class("selected");
+        }
+
+        // Public so call sites (e.g. OCS/Bing browser) can paint a thumbnail
+        // they fetched themselves, bypassing the local-file or remote-loader
+        // path entirely. Safe to call multiple times; replaces any prior
+        // paintable on the picture.
+        public void set_paintable(Gdk.Paintable? paintable) {
+            picture.set_paintable(paintable);
+        }
+
+        // Exposed for tests/diagnostics; lets a caller ask whether a
+        // thumbnail is currently displayed (true once set_paintable has
+        // received a non-null value, regardless of source).
+        public bool has_thumbnail {
+            get { return picture.get_paintable() != null; }
         }
 
         private void load_thumbnail_async() {
@@ -2427,6 +3126,39 @@ namespace Singularity {
                 try {
                     pb = new Gdk.Pixbuf.from_file_at_scale(thumb_path, 344, 208, true);
                 } catch (Error e) {}
+
+                thumb_mutex.lock();
+                active_thumb_loads--;
+                thumb_cond.signal();
+                thumb_mutex.unlock();
+
+                GLib.Idle.add(() => {
+                    if (pb != null)
+                        picture.set_paintable(Gdk.Texture.for_pixbuf(pb));
+                    return GLib.Source.REMOVE;
+                });
+            });
+        }
+
+        // Remote-thumbnail worker. Same concurrency cap as the local-file
+        // loader so a flood of remote loads does not starve other paths.
+        // Loader exceptions are swallowed silently (matching the local-file
+        // loader's behaviour) and the placeholder stays visible.
+        private void load_remote_thumbnail_async() {
+            new GLib.Thread<void>("wallpaper-thumb-remote", () => {
+                Gdk.Pixbuf? pb = null;
+                thumb_mutex.lock();
+                while (active_thumb_loads >= 3) {
+                    thumb_cond.wait(thumb_mutex);
+                }
+                active_thumb_loads++;
+                thumb_mutex.unlock();
+
+                if (remote_loader != null) {
+                    try {
+                        pb = remote_loader();
+                    } catch (Error e) {}
+                }
 
                 thumb_mutex.lock();
                 active_thumb_loads--;
