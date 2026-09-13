@@ -180,7 +180,9 @@ namespace Singularity.Shell {
 
             var search_group = new PreferencesGroup();
             search_row = new EntryRow(_("Filter loaded wallpapers"));
-            search_row.entry_changed.connect(filter_cards);
+            search_row.entry_changed.connect(() => {
+                if (!updating) filter_cards();
+            });
             refresh = new Button.from_icon_name("view-refresh-symbolic");
             // force_refresh does two things: it bypasses the on-disk crawl
             // cache in browse_all(), and it sets NCZ_WALLPAPER_REFRESH for the
@@ -202,7 +204,12 @@ namespace Singularity.Shell {
             category_group.add_row(category_row);
             add_group(category_group);
 
-            filter_group = new PreferencesGroup();
+            filter_group = new PreferencesGroup(_("Filters"));
+            var clear_filters_button = new Button.with_label(_("Clear Filters"));
+            clear_filters_button.has_frame = false;
+            clear_filters_button.valign = Align.CENTER;
+            clear_filters_button.clicked.connect(clear_filters);
+            filter_group.add_header_suffix(clear_filters_button);
             tag_row = new SelectionRow.with_options(_("Tag"),
                 new Gee.ArrayList<Singularity.Core.AppSettingOption>());
             filter_group.add_row(tag_row);
@@ -547,9 +554,21 @@ namespace Singularity.Shell {
             // category / Combined (All Markets)" dropdown next to a grid that
             // is already exactly that is just noise.
             category_row.visible = categories.size > 1;
+            bool was_updating = updating;
             updating = true;
             set_choices(category_row, options, active_category_id);
+            updating = was_updating;
+        }
+
+        private void clear_filters() {
+            updating = true;
+            active_category_id = "";
+            active_tag_ids.clear();
+            rebuild_category_row();
+            rebuild_tag_row();
+            if (search_row != null) search_row.text = "";
             updating = false;
+            filter_cards();
         }
 
         private void on_category_row_selected(string id) {
@@ -935,9 +954,10 @@ namespace Singularity.Shell {
                 options.add(new Singularity.Core.AppSettingOption() { id = id, label = id });
             }
             string current_id = active_tag_ids.size > 0 ? active_tag_ids.to_array()[0] : "";
+            bool was_updating = updating;
             updating = true;
             set_choices(tag_row, options, current_id);
-            updating = false;
+            updating = was_updating;
         }
 
         private void filter_cards() {
