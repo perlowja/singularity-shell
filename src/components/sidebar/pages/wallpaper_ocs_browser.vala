@@ -47,6 +47,7 @@ namespace Singularity.Shell {
         // today's feed. Do NOT assume the helper's own page default matches:
         // OCS serves 10 per page unless asked otherwise.
         private const int CRAWL_ITEM_CAP = 4000;
+        private const int THUMBNAIL_FETCH_LANES = 8;
         // Per-category subprocess timeout, matches the previous single-call
         // bound so a slow category can't drag a worker beyond the overall
         // window the user is willing to wait.
@@ -71,6 +72,7 @@ namespace Singularity.Shell {
         private Label status;
         private FlowBox grid;
         private Soup.Session session = new Soup.Session();
+        private WallpaperThumbnailCache thumbnail_cache = new WallpaperThumbnailCache();
         private Cancellable request = new Cancellable();
         private int generation = 0;
         private bool loading = false;
@@ -435,7 +437,7 @@ namespace Singularity.Shell {
             filter_cards();
             status.label = result_status;
             if (cards.size > 0)
-                for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
+                for (int i = 0; i < THUMBNAIL_FETCH_LANES; i++) thumbnails.begin(i, gen, cancel);
             update_controls();
         }
 
@@ -658,8 +660,8 @@ namespace Singularity.Shell {
             // it a much shorter TTL than a clean one.
             if (!cancel.is_cancelled() && cards.size > 0)
                 store_cache(provider, state.errors.size > 0);
-            // Three bounded streaming requests, never one worker per tile.
-            for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
+            // Bounded streaming requests, never one worker per tile.
+            for (int i = 0; i < THUMBNAIL_FETCH_LANES; i++) thumbnails.begin(i, gen, cancel);
         }
 
         // Repaint the grid from the on-disk crawl cache. False means "no
@@ -682,7 +684,7 @@ namespace Singularity.Shell {
             status.label = _("%d wallpapers · %s · Refresh for new uploads").printf(
                 cards.size, cache_age(cached.age(at)));
             update_controls();
-            for (int i = 0; i < 3; i++) thumbnails.begin(i, gen, cancel);
+            for (int i = 0; i < THUMBNAIL_FETCH_LANES; i++) thumbnails.begin(i, gen, cancel);
             return true;
         }
 
@@ -967,7 +969,7 @@ namespace Singularity.Shell {
             cards.add(card);
         }
 
-        // Async thumbnail loader, fanned out 3-at-a-time from browse_all().
+        // Async thumbnail loader, fanned out from browse_all().
         // Two source paths:
         //   * Bing items: thumbnail_path is a local file (helper pre-
         //     downloaded the 400x240 JPEG before the `list` response was
@@ -985,7 +987,7 @@ namespace Singularity.Shell {
         // called from the UI thread (GTK4 widget APIs are not safe to
         // call from arbitrary worker contexts).
         private async void thumbnails(int start, int gen, Cancellable cancel) {
-            for (int i = start; i < cards.size && gen == generation && !cancel.is_cancelled(); i += 3) {
+            for (int i = start; i < cards.size && gen == generation && !cancel.is_cancelled(); i += THUMBNAIL_FETCH_LANES) {
                 var card = cards[i];
                 Gdk.Pixbuf? pixbuf = null;
                 if (card.item.thumbnail_path != "") {
@@ -1028,39 +1030,53 @@ namespace Singularity.Shell {
                     // OCS Soup path.
                     string url = card.item.preview;
                     if (!url.has_prefix("https://") && !url.has_prefix("http://")) continue;
-                    var message = new Soup.Message("GET", url);
-                    if (message == null) continue;
-                    InputStream? stream = null;
-                    bool skip_card = false;
-                    try {
-                        stream = yield session.send_async(message, Priority.DEFAULT, cancel);
-                        if (cancel.is_cancelled()) { skip_card = true; }
-                        else if (message.status_code != 200) { skip_card = true; }
-                        else {
-                            var bytes = new ByteArray();
-                            while (true) {
-                                var part = yield stream.read_bytes_async(65536, Priority.DEFAULT, cancel);
-                                if (part.get_size() == 0) break;
-                                if (bytes.len + part.get_size() > 4 * 1024 * 1024) {
-                                    throw new IOError.FAILED("Thumbnail exceeds size limit");
-                                }
-                                bytes.append(part.get_data());
-                            }
-                            var input = new MemoryInputStream.from_bytes(ByteArray.free_to_bytes((owned) bytes));
+                    var cached = thumbnail_cache.get(url);
+                    if (cached != null) {
+                        try {
+                            var input = new MemoryInputStream.from_bytes(cached);
                             pixbuf = yield new Gdk.Pixbuf.from_stream_at_scale_async(input, 344, 208, true, cancel);
+                        } catch (Error e) {
+                            if (!(e is GLib.IOError.CANCELLED)) show_thumb_unavailable(card);
+                            continue;
                         }
-                    } catch (Error e) {
-                        if (!(e is GLib.IOError.CANCELLED)) show_thumb_unavailable(card);
-                        skip_card = true;
-                    } finally {
-                        // Synchronous close() (not close_async()) because
-                        // Vala forbids yield inside finally. Soup response
-                        // streams are safe to close synchronously.
-                        if (stream != null) {
-                            try { stream.close(); } catch (Error e) {}
+                        if (cancel.is_cancelled()) continue;
+                    } else {
+                        var message = new Soup.Message("GET", url);
+                        if (message == null) continue;
+                        InputStream? stream = null;
+                        bool skip_card = false;
+                        try {
+                            stream = yield session.send_async(message, Priority.DEFAULT, cancel);
+                            if (cancel.is_cancelled()) { skip_card = true; }
+                            else if (message.status_code != 200) { skip_card = true; }
+                            else {
+                                var bytes = new ByteArray();
+                                while (true) {
+                                    var part = yield stream.read_bytes_async(65536, Priority.DEFAULT, cancel);
+                                    if (part.get_size() == 0) break;
+                                    if (bytes.len + part.get_size() > 4 * 1024 * 1024) {
+                                        throw new IOError.FAILED("Thumbnail exceeds size limit");
+                                    }
+                                    bytes.append(part.get_data());
+                                }
+                                var fetched = ByteArray.free_to_bytes((owned) bytes);
+                                thumbnail_cache.put(url, fetched);
+                                var input = new MemoryInputStream.from_bytes(fetched);
+                                pixbuf = yield new Gdk.Pixbuf.from_stream_at_scale_async(input, 344, 208, true, cancel);
+                            }
+                        } catch (Error e) {
+                            if (!(e is GLib.IOError.CANCELLED)) show_thumb_unavailable(card);
+                            skip_card = true;
+                        } finally {
+                            // Synchronous close() (not close_async()) because
+                            // Vala forbids yield inside finally. Soup response
+                            // streams are safe to close synchronously.
+                            if (stream != null) {
+                                try { stream.close(); } catch (Error e) {}
+                            }
                         }
+                        if (skip_card) continue;
                     }
-                    if (skip_card) continue;
                 }
                 if (pixbuf == null) continue;
                 if (gen != generation || cancel.is_cancelled()) continue;
