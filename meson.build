@@ -480,6 +480,7 @@ wallpaper_test_schema = custom_target('wallpaper-test-schema',
 )
 wallpaper_test_env = environment()
 wallpaper_test_env.set('GSETTINGS_SCHEMA_DIR', meson.current_build_dir())
+wallpaper_test_env.set('GSETTINGS_BACKEND', 'memory')
 
 wallpaper_history_test = executable('wallpaper-history-test',
   sources: ['src/core/wallpaper_history.vala', 'tests/wallpaper_history_test.vala'],
@@ -523,8 +524,11 @@ test('settings-safety', settings_safety_test)
 
 wallpaper_rotator_test = executable('wallpaper-rotator-test',
   sources: ['src/core/wallpaper_collections.vala', 'src/core/wallpaper_gallery.vala',
+            'src/core/wallpaper_favorites.vala',
             'src/core/wallpaper_rotation_state.vala', 'src/core/wallpaper_rotator.vala',
             'tests/wallpaper_rotator_test.vala'],
-  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep],
+  dependencies: core_deps + [gee_dep, json_dep],
 )
-test('wallpaper-rotator', wallpaper_rotator_test)
+test('wallpaper-rotator', wallpaper_rotator_test,
+  depends: wallpaper_test_schema,
+  env: wallpaper_test_env)
