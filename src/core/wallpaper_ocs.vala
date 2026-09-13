@@ -219,12 +219,31 @@ namespace Singularity {
         // exposes it to a browser as one row per unique photograph.
         //
         // `ncz-wallpaper-bing markets` advertises this id as an extra first
-        // line ONLY when the user's configured markets are the "all"
-        // sentinel. That is deliberately the helper's judgement, not ours:
-        // the shell's Bing Markets picker treats an absent config file as
-        // "all" while the helper treats it as en-US only, so re-deriving the
-        // mode on this side would disagree with what is actually cached.
-        // Presence of this id in the helper's own answer is the contract.
+        // line when the helper is serving the combined, de-duplicated view.
+        //
+        // Before 2026-09-13 the bing-markets config file was a FETCH
+        // filter, and the helper advertised this id only when that file
+        // held the "all" sentinel. As of 2026-09-13 (desktop_page.vala's
+        // BING_MARKETS_ID_ALL / Bing Preferred Region picker) the file's
+        // MEANING changed: the rotator now always fetches and combines
+        // every market regardless of file content, and the file only
+        // names a dedup tie-break preference -- so the matching
+        // cix-installer change is for the helper to advertise this id
+        // UNCONDITIONALLY, not gated on the file's content at all.
+        //
+        // Presence of this id in the helper's own answer is still the
+        // contract (this side never re-derives the mode from the file),
+        // but that means BingWallpaperProvider.choices() in
+        // wallpaper_provider.vala is only ever correct once the deployed
+        // `ncz-wallpaper-bing` binary matches this new contract. A shell
+        // build that ships the "Preferred Region" picker (which now
+        // freely writes a single specific market code -- see
+        // write_bing_markets_codes() in desktop_page.vala) against an
+        // OLDER helper that still treats a non-"all" file as a fetch
+        // restriction will silently narrow both the rotator AND this
+        // provider's OCS browsing results down to one market. Verify the
+        // helper's contract on the target host before assuming a Bing
+        // browsing regression is a bug in this file.
         public const string CONSOLIDATED_ID = "consolidated";
         // `ncz-wallpaper-bing markets` prints TSV, NOT JSON: one
         // "<market-code>\t<Human Name>" per line. The category chip row
