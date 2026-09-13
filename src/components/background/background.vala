@@ -108,11 +108,12 @@ namespace Singularity {
             // the toggle in Settings immediately hides or re-shows the
             // overlay for the wallpaper that's currently displayed.
             settings = new GLib.Settings("dev.sinty.desktop");
-            settings.changed["show-wallpaper-attribution"].connect(() => {
-                update_attribution(WallpaperManager.get_default());
-            });
-            settings.changed["wallpaper-attribution-position"].connect(() => {
-                update_attribution_position();
+            settings.changed.connect((key) => {
+                if (key == "show-wallpaper-attribution") {
+                    update_attribution(WallpaperManager.get_default());
+                } else if (key == "wallpaper-attribution-position") {
+                    update_attribution_position();
+                }
             });
             update_attribution_position();
             // First load: set both pictures to avoid flash, no animation needed
