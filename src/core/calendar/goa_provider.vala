@@ -48,7 +48,7 @@ namespace Singularity.Goa {
             string caldav_uri = cal_iface.uri;
             if (caldav_uri == null || caldav_uri == "") return list;
 
-            string? auth_header = get_auth_header();
+            string? auth_header = yield get_auth_header();
             if (auth_header == null) return list;
 
             // RFC 4791 calendar-query REPORT to fetch events in the date range
@@ -87,13 +87,30 @@ namespace Singularity.Goa {
             return list;
         }
 
-        private string? get_auth_header() {
+        // Fetching a token can mean GOA doing a real network round trip (an
+        // OAuth2 refresh against the provider) or a synchronous keyring
+        // unlock, not just a local D-Bus call -- neither belongs on the
+        // GTK main thread. `get_events()` is already async and every caller
+        // already yields on it, so route this through the async GOA/keyring
+        // calls too instead of the _sync variants, and bound each attempt
+        // the same way the optional-service wrappers in libsingularity do: a
+        // slow or hung provider/keyring degrades this calendar's events to
+        // empty rather than stalling whoever is awaiting get_events().
+        //
+        // Each attempt gets its OWN deadline rather than sharing one: a
+        // GLib Cancellable stays cancelled once fired, so reusing a single
+        // instance across both calls would mean a slow OAuth2 attempt
+        // permanently poisons the HTTP Basic fallback that follows it,
+        // failing it instantly even when it would otherwise have succeeded
+        // in milliseconds (caught in review).
+        private async string? get_auth_header() {
             // Try OAuth2 first (Google, Nextcloud with OAuth)
             var oauth2 = object.get_oauth2_based();
             if (oauth2 != null) {
                 try {
                     string access_token; int expires_in;
-                    oauth2.call_get_access_token_sync(out access_token, out expires_in, null);
+                    yield oauth2.call_get_access_token(
+                        Singularity.DBusOptionalService.deadline(5), out access_token, out expires_in);
                     if (access_token != null && access_token.length > 0)
                         return "Bearer " + access_token;
                 } catch (Error e) {
@@ -106,7 +123,8 @@ namespace Singularity.Goa {
                 try {
                     string password;
                     var account = object.get_account();
-                    password_based.call_get_password_sync(account.id, out password, null);
+                    yield password_based.call_get_password(
+                        account.id, Singularity.DBusOptionalService.deadline(5), out password);
                     if (password != null && password.length > 0) {
                         string creds = GLib.Base64.encode((account.presentation_identity + ":" + password).data);
                         return "Basic " + creds;
