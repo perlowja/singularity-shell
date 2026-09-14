@@ -314,6 +314,10 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             // connection is established at login, not on the first search.
             Singularity.SearchManager.get_default();
             Singularity.NowPlayingCache.get_default();
+            // Do not change persisted wallpaper state during safe-mode recovery.
+            if (Singularity.SafeMode.get_default().allows(
+                    Singularity.SafeFeature.AUTOSTART))
+                Singularity.WallpaperManager.get_default().start_rotation();
             // Once the startup allocation storm (GL shader compile, icon and
             // theme loading) has settled, hand the freed pages back to the OS.
             GLib.Timeout.add_seconds(10, () => {

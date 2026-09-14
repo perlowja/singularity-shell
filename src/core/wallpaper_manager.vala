@@ -15,6 +15,7 @@ namespace Singularity {
         private string? _cached_path = null;
         private int _load_serial = 0;
         private Mutex _mutex = Mutex ();
+        private WallpaperRotator? rotator = null;
 
         public signal void wallpaper_changed();
 
@@ -31,6 +32,20 @@ namespace Singularity {
                 reload();
             });
             reload();
+        }
+
+        public void start_rotation() {
+            if (rotator != null) return;
+            rotator = WallpaperRotator.get_default();
+            rotator.current_uri = settings.get_string("background-picture-uri");
+            rotator.wallpaper_selected.connect((uri) => {
+                settings.set_string("background-picture-uri", uri);
+            });
+            // Track external changes so rotation does not reselect the current image.
+            settings.changed["background-picture-uri"].connect(() => {
+                rotator.current_uri = settings.get_string("background-picture-uri");
+            });
+            rotator.start();
         }
 
         public void reload() {
