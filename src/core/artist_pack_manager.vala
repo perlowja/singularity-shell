@@ -65,8 +65,8 @@ namespace Singularity {
          * ~/.local/bin) shadow it and get elevated - a local privilege
          * escalation.
          */
-        private const string INVENTORY_HELPER = "/usr/local/bin/ncz-wallpaper-pack-inventory";
-        private const string INSTALL_HELPER = "/usr/local/bin/ncz-wallpaper-pack-install";
+        private const string INVENTORY_HELPER = "/usr/local/bin/singularity-artist-pack-inventory";
+        private const string INSTALL_HELPER = "/usr/local/bin/singularity-artist-pack-install";
         private const string INSTALL_POLICY = "/usr/share/polkit-1/actions/dev.sinty.desktop.artist-pack-install.policy";
 
         public static ArtistPackManager get_default() {

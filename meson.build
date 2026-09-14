@@ -483,6 +483,19 @@ install_data('data/fan-control/dev.sinty.FanControl.conf',
 install_data('data/fan-control/dev.sinty.fan-control.policy',
   install_dir: get_option('datadir') / 'polkit-1' / 'actions')
 
+# Reference Artist Pack backend (apt-based). ArtistPackManager resolves its
+# two helpers at FIXED /usr/local/bin paths, never via PATH (privilege-
+# escalation reasons documented in artist_pack_manager.vala), so this
+# installs there directly rather than through get_option('bindir') -- a
+# distro on a different package manager supplies its own pair of binaries
+# satisfying the same contract at the same two paths instead of using these.
+install_data('data/artist-packs/singularity-artist-pack-inventory',
+  install_dir: '/usr/local/bin', install_mode: 'rwxr-xr-x')
+install_data('data/artist-packs/singularity-artist-pack-install',
+  install_dir: '/usr/local/bin', install_mode: 'rwxr-xr-x')
+install_data('data/artist-packs/dev.sinty.desktop.artist-pack-install.policy',
+  install_dir: get_option('datadir') / 'polkit-1' / 'actions')
+
 wallpaper_collections_test = executable('wallpaper-collections-test',
   sources: ['src/core/wallpaper_collections.vala', 'tests/wallpaper_collections_test.vala'],
   dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep],
