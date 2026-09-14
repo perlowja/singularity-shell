@@ -1,0 +1,21 @@
+[Unit]
+Description=Singularity fan control
+
+[Service]
+Type=dbus
+BusName=dev.sinty.FanControl
+ExecStart=@bindir@/singularity-fan-control
+ExecStopPost=@bindir@/singularity-fan-control --restore
+Environment=LD_LIBRARY_PATH=@libdir@
+WatchdogSec=10
+NotifyAccess=main
+Restart=on-failure
+StateDirectory=singularity-fan-control
+RuntimeDirectory=singularity-fan-control
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

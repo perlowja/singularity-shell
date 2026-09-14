@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=dev.sinty.FanControl
+Exec=/bin/false
+User=root
+SystemdService=singularity-fan-control.service

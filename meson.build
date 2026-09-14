@@ -296,6 +296,7 @@ singularity_core_sources = files(
     'src/components/sidebar/sidebar.vala',
     'src/components/sidebar/settings_window.vala',
     'src/components/sidebar/widgets/settings_widgets.vala',
+    'src/components/sidebar/widgets/fan_widgets.vala',
     'src/components/sidebar/widgets/developer_page.vala',
     'src/components/preview/preview_dialog.vala',
     'src/core/preview_manager.vala',
@@ -442,3 +443,37 @@ safe_mode_test = executable('safe-mode-test',
   dependencies: [dependency('gobject-2.0')],
 )
 test('safe-mode', safe_mode_test)
+
+fan_control_deps = [dependency('gio-2.0'), dependency('gio-unix-2.0'), gee_dep, system_dep]
+
+executable('singularity-fan-control',
+  sources: ['src/services/fan-control/fan_controller.vala', 'src/services/fan-control/main.vala'],
+  dependencies: fan_control_deps + [dependency('polkit-gobject-1'), cc.find_library('m')],
+  install: true
+)
+
+fan_controller_test = executable('fan-controller-test',
+  sources: ['src/services/fan-control/fan_controller.vala', 'tests/fan_controller_test.vala'],
+  dependencies: fan_control_deps + [cc.find_library('m')],
+)
+test('fan-controller', fan_controller_test)
+
+fan_control_conf = configuration_data()
+fan_control_conf.set('bindir', get_option('prefix') / get_option('bindir'))
+fan_control_conf.set('libdir', get_option('prefix') / get_option('libdir'))
+configure_file(
+  input: 'data/fan-control/singularity-fan-control.service.in',
+  output: 'singularity-fan-control.service',
+  configuration: fan_control_conf,
+  install_dir: get_option('prefix') / 'lib' / 'systemd' / 'system',
+)
+configure_file(
+  input: 'data/fan-control/dev.sinty.FanControl.service.in',
+  output: 'dev.sinty.FanControl.service',
+  configuration: fan_control_conf,
+  install_dir: get_option('datadir') / 'dbus-1' / 'system-services',
+)
+install_data('data/fan-control/dev.sinty.FanControl.conf',
+  install_dir: get_option('datadir') / 'dbus-1' / 'system.d')
+install_data('data/fan-control/dev.sinty.fan-control.policy',
+  install_dir: get_option('datadir') / 'polkit-1' / 'actions')
