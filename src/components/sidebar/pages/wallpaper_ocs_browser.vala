@@ -48,6 +48,19 @@ namespace Singularity.Shell {
         // OCS serves 10 per page unless asked otherwise.
         private const int CRAWL_ITEM_CAP = 4000;
         private const int THUMBNAIL_FETCH_LANES = 8;
+        // Building one WallpaperCard hierarchy (badge, action button, FlowBox
+        // append) measured ~0.6ms/card on CIX Sky1 target hardware. A cache
+        // repaint of the full aggregate builds every one of those synchronously
+        // in load_cached()/revalidate_cached(); at the current real feed size
+        // (3358 items, see CRAWL_ITEM_CAP) that is over two seconds of
+        // unbroken main-thread work -- the whole shell freezes for the
+        // duration. Measured 2026-09-13 on cixmini: read=1.5ms parse=96.6ms
+        // add_card-loop=2139.6ms for 3358 cached items, i.e. the card
+        // construction, not the JSON parse, is the bottleneck. Building the
+        // same list in bounded batches one main-loop turn apart keeps every
+        // batch under a perceptible-freeze threshold and lets the grid
+        // visibly fill in instead of the shell appearing to hang.
+        private const int CARD_BUILD_BATCH_SIZE = 150;
         // One extra screenful keeps the next rows ready without decoding the
         // thousands of FlowBox children that have never approached view.
         private const int VIEWPORT_PREFETCH_MARGIN_PX = 400;
@@ -628,7 +641,7 @@ namespace Singularity.Shell {
             // one cache entry per provider serves every filter combination --
             // changing a filter is a different VIEW, never a different crawl.
             if (!force_refresh) {
-                var cache_result = load_cached(provider, gen, cancel);
+                var cache_result = yield load_cached(provider, gen, cancel);
                 if (cache_result == CacheLoadResult.FRESH) return;
                 if (cache_result == CacheLoadResult.STALE) {
                     revalidate_cached.begin(selected_provider, provider, todo, gen, cancel);
@@ -706,7 +719,7 @@ namespace Singularity.Shell {
         // Repaint from any valid on-disk snapshot. Freshness controls whether
         // browse_all() is finished or starts a silent background revalidate;
         // it never controls whether already persisted metadata can be shown.
-        private CacheLoadResult load_cached(string provider, int gen, Cancellable cancel) {
+        private async CacheLoadResult load_cached(string provider, int gen, Cancellable cancel) {
             int64 at = WallpaperBrowseCache.now();
             WallpaperBrowseCache? cached = null;
             string path = WallpaperBrowseCache.path_for(provider);
@@ -720,10 +733,11 @@ namespace Singularity.Shell {
                 }
             }
             if (cached == null || cached.entries.size == 0) return CacheLoadResult.NONE;
-            foreach (var entry in cached.entries) {
-                bool card_new_tag;
-                add_card(entry.item, entry.category, out card_new_tag);
-            }
+            yield populate_cards_batched(cached.entries, gen, cancel);
+            // Superseded while this repaint was still batching in (provider
+            // switch, Refresh): that newer call owns the page now, and
+            // touching status/controls here would fight it.
+            if (gen != generation || cancel.is_cancelled()) return CacheLoadResult.FRESH;
             loading = false;
             rebuild_tag_row();
             filter_cards();
@@ -735,6 +749,34 @@ namespace Singularity.Shell {
             update_controls();
             queue_viewport_thumbnails();
             return cached.fresh(at) ? CacheLoadResult.FRESH : CacheLoadResult.STALE;
+        }
+
+        // Build one WallpaperCard per entry in bounded batches, yielding to
+        // the main loop between batches so a large aggregate (see
+        // CARD_BUILD_BATCH_SIZE) cannot hold the compositor unresponsive for
+        // seconds at a time. Thumbnails are queued after every batch too, so
+        // the initially visible rows start decoding as soon as they exist
+        // instead of waiting for the whole list to finish building.
+        private async void populate_cards_batched(ArrayList<WallpaperBrowseCacheEntry> entries,
+                int gen, Cancellable cancel) {
+            int processed = 0;
+            foreach (var entry in entries) {
+                if (gen != generation || cancel.is_cancelled()) return;
+                bool card_new_tag;
+                add_card(entry.item, entry.category, out card_new_tag);
+                if (++processed % CARD_BUILD_BATCH_SIZE != 0) continue;
+                queue_viewport_thumbnails();
+                SourceFunc resume = populate_cards_batched.callback;
+                Idle.add(() => {
+                    if (resume != null) {
+                        SourceFunc cb = (owned) resume;
+                        resume = null;
+                        cb();
+                    }
+                    return Source.REMOVE;
+                });
+                yield;
+            }
         }
 
         // Crawl into a detached metadata list while the stale card hierarchy
@@ -777,10 +819,13 @@ namespace Singularity.Shell {
             grid.remove_all();
             item_category.clear();
             known_tag_ids.clear();
-            foreach (var entry in state.results) {
-                bool card_new_tag;
-                add_card(entry.item, entry.category, out card_new_tag);
-            }
+            // The first batch lands in this same synchronous continuation
+            // (populate_cards_batched only yields after CARD_BUILD_BATCH_SIZE
+            // cards), so the grid goes straight from the stale list to real
+            // new content with no empty frame in between; only the remaining
+            // batches spread across further main-loop turns.
+            yield populate_cards_batched(state.results, gen, cancel);
+            if (gen != generation || cancel.is_cancelled()) return;
             rebuild_tag_row();
             filter_cards();
             if (state.errors.size > 0)
