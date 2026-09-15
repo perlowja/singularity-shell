@@ -31,35 +31,27 @@ namespace Singularity.Shell {
         // in core/ -- duplicated here so the browser can branch on it
         // without pulling in a core class field reference at the call site.
         private const string BING_PROVIDER_ID = "bing";
-        // Bounded crawl: enough parallelism that a provider with many usable
-        // categories fills the grid quickly, but small enough that a single
-        // provider cannot fork dozens of OCS processes against the helper at
-        // once. Empirically a provider exposes on the order of one to a few
-        // dozen usable categories; 4 leaves headroom on each without spiking
-        // the helper or the UI thread.
+        // Bounded crawl: enough parallelism that a category with many pages
+        // fills the grid quickly, but small enough it cannot fork dozens of
+        // OCS processes against the helper at once. A crawl now covers a
+        // single, user-picked category (see browse_category()), not every
+        // category a provider exposes, so CRAWL_WORKERS is a ceiling on
+        // in-flight requests for that one category rather than a fan-out
+        // across many categories.
         private const int CRAWL_WORKERS = 4;
-        // Safety cap on the total wallpapers merged across every usable
-        // category for one provider. One page per category at the server's
-        // maximum 100 items/page (see OcsWallpaperProvider) across pling's
-        // 45 usable categories measured 2026-09-13 yields 3485 results and
-        // 3352 unique importable items. Keep the cap above that real total so
-        // it guards against unexpected provider growth instead of truncating
-        // today's feed. Do NOT assume the helper's own page default matches:
-        // OCS serves 10 per page unless asked otherwise.
+        // Safety cap on wallpapers merged for one category. A single OCS
+        // category page tops out at the server's maximum 100 items/page (see
+        // OcsWallpaperProvider); this cap guards against an unexpectedly
+        // large category rather than truncating a normal one.
         private const int CRAWL_ITEM_CAP = 4000;
         private const int THUMBNAIL_FETCH_LANES = 8;
         // Building one WallpaperCard hierarchy (badge, action button, FlowBox
-        // append) measured ~0.6ms/card on CIX Sky1 target hardware. A cache
-        // repaint of the full aggregate builds every one of those synchronously
-        // in load_cached()/revalidate_cached(); at the current real feed size
-        // (3358 items, see CRAWL_ITEM_CAP) that is over two seconds of
-        // unbroken main-thread work -- the whole shell freezes for the
-        // duration. Measured 2026-09-13 on cixmini: read=1.5ms parse=96.6ms
-        // add_card-loop=2139.6ms for 3358 cached items, i.e. the card
-        // construction, not the JSON parse, is the bottleneck. Building the
-        // same list in bounded batches one main-loop turn apart keeps every
-        // batch under a perceptible-freeze threshold and lets the grid
-        // visibly fill in instead of the shell appearing to hang.
+        // append) measured ~0.6ms/card on CIX Sky1 target hardware. Building
+        // a full batch synchronously in load_cached()/revalidate_cached()
+        // would block the main thread for its whole duration, so cards are
+        // built in bounded batches one main-loop turn apart -- each batch
+        // stays under a perceptible-freeze threshold and the grid visibly
+        // fills in instead of the shell appearing to hang.
         private const int CARD_BUILD_BATCH_SIZE = 150;
         // One extra screenful keeps the next rows ready without decoding the
         // thousands of FlowBox children that have never approached view.
@@ -78,15 +70,14 @@ namespace Singularity.Shell {
         private ArrayList<OcsCard> cards = new ArrayList<OcsCard>();
         private HashSet<int> thumbnail_requested = new HashSet<int>();
         private HashSet<int> thumbnail_pending = new HashSet<int>();
-        // Filters use stable provider/tag IDs; display labels are separate.
+        // Category is now the only filter axis (tag filtering removed), and
+        // it drives WHAT gets loaded rather than filtering an already-loaded
+        // aggregate -- see browse_category(). An empty id means "nothing
+        // picked yet", not "show everything".
         private string active_category_id = "";
-        private HashSet<string> active_tag_ids = new HashSet<string>();
-        private HashSet<string> known_tag_ids = new HashSet<string>();
         private PreferencesGroup provider_group;
-        private PreferencesGroup filter_group;
         private SelectionRow provider_row;
         private SelectionRow category_row;
-        private SelectionRow tag_row;
         private EntryRow? search_row;
         private Button refresh;
         private Spinner spinner;
@@ -132,11 +123,13 @@ namespace Singularity.Shell {
         //
         // That re-browse is cache-aware: a crawl younger than
         // WallpaperBrowseCache.TTL_SECONDS repaints the grid from disk instead
-        // of re-crawling every category over the network, which is what makes
+        // of re-crawling the category over the network, which is what makes
         // a repeat visit instant. It deliberately does NOT set force_refresh:
         // returning to a page the user has already seen is not a request for
-        // fresher data, it is a request to see the page again. The Refresh
-        // button is the explicit way to bypass the cache.
+        // fresher data, it is a request to see the page again -- and, if a
+        // category is already selected, a request to see it refreshed (see
+        // browse_all()'s dispatch). The Refresh button is the explicit way
+        // to bypass the cache.
         private bool mapped_once = false;
 
         public WallpaperOcsBrowserPage(SettingsView view, string[] roots) {
@@ -198,9 +191,9 @@ namespace Singularity.Shell {
             });
             refresh = new Button.from_icon_name("view-refresh-symbolic");
             // force_refresh does two things: it bypasses the on-disk crawl
-            // cache in browse_all(), and it sets NCZ_WALLPAPER_REFRESH for the
-            // helper so its own cache is bypassed too. Refresh is therefore
-            // the one path that is guaranteed to hit the network.
+            // cache in browse_category(), and it sets NCZ_WALLPAPER_REFRESH
+            // for the helper so its own cache is bypassed too. Refresh is
+            // therefore the one path that is guaranteed to hit the network.
             refresh.tooltip_text = _("Refresh now (ignore cached results)");
             refresh.valign = Align.CENTER;
             refresh.clicked.connect(() => {
@@ -216,17 +209,6 @@ namespace Singularity.Shell {
                 new Gee.ArrayList<Singularity.Core.AppSettingOption>());
             category_group.add_row(category_row);
             add_group(category_group);
-
-            filter_group = new PreferencesGroup(_("Filters"));
-            var clear_filters_button = new Button.with_label(_("Clear Filters"));
-            clear_filters_button.has_frame = false;
-            clear_filters_button.valign = Align.CENTER;
-            clear_filters_button.clicked.connect(clear_filters);
-            filter_group.add_header_suffix(clear_filters_button);
-            tag_row = new SelectionRow.with_options(_("Tag"),
-                new Gee.ArrayList<Singularity.Core.AppSettingOption>());
-            filter_group.add_row(tag_row);
-            add_group(filter_group);
 
             var results_group = new PreferencesGroup();
             var progress_row = new PreferencesRow();
@@ -273,9 +255,6 @@ namespace Singularity.Shell {
             category_row.selected.connect((id) => {
                 if (!updating) on_category_row_selected(id);
             });
-            tag_row.selected.connect((id) => {
-                if (!updating) on_tag_row_selected(id);
-            });
             initialize.begin();
         }
 
@@ -294,9 +273,8 @@ namespace Singularity.Shell {
                 card.button.sensitive = !imports.busy && !imports.is_added(card.item.key);
             // Filter UI is filter UI, not destructive: a busy import does
             // not warrant disabling it, but a still-loading grid would
-            // mean picking a category or tag changes nothing visible, so
-            // the category dropdown disables while loading. The tag dropdown
-            // stays enabled while loading because it has no tags yet.
+            // mean picking a category changes nothing visible yet, so the
+            // category dropdown disables while loading.
             category_row.sensitive = !loading;
             previous_page.sensitive = !loading && !imports.busy && photo_page > 1;
             next_page.sensitive = !loading && !imports.busy && photo_page < photo_page_count;
@@ -441,9 +419,6 @@ namespace Singularity.Shell {
             cards.clear();
             reset_thumbnail_loading();
             grid.remove_all();
-            item_category.clear();
-            known_tag_ids.clear();
-            rebuild_tag_row();
             status.label = _("Searching Stock Photos…");
             update_controls();
             bool refresh_now = force_refresh;
@@ -454,17 +429,13 @@ namespace Singularity.Shell {
                 var result = yield provider.browse("", online_search.text, photo_page, refresh_now, cancel);
                 if (gen != generation) return;
                 photo_page_count = result.page_count;
-                foreach (var item in result.items) {
-                    bool tag;
-                    add_card(item, "", out tag);
-                }
+                foreach (var item in result.items) add_card(item);
                 result_status = result.stale ? _("Showing cached %s results; refresh failed.").printf(provider.display_name)
                     : _("%s · page %d of %d · %d images").printf(provider.display_name, photo_page, photo_page_count, cards.size);
             } catch (Error e) {
                 result_status = _("%s search failed: %s").printf(provider.display_name, e.message);
             }
             if (gen != generation) return;
-            rebuild_tag_row();
             loading = false;
             filter_cards();
             status.label = result_status;
@@ -472,11 +443,15 @@ namespace Singularity.Shell {
             update_controls();
         }
 
-        // Provider selected -> rebuild the category dropdown, then kick off
-        // the aggregate crawl for every usable category under that provider.
-        // For Bing the "categories" are actually markets fetched from a
-        // different helper; the dropdown is the same widget, but the
-        // underlying command and parser branch.
+        // Provider selected -> rebuild the category dropdown. Unlike the
+        // previous aggregate-crawl behaviour, selecting a provider no longer
+        // starts loading anything by itself: the category list is cheap
+        // metadata, but the wallpapers inside a category are not, so the
+        // grid stays empty until the user actually picks one (see
+        // on_category_row_selected() / browse_category()). The one
+        // exception is a provider whose dropdown collapses to a single
+        // choice (Bing's de-duplicated combined view) -- there is nothing
+        // to pick, so that one choice loads immediately, same as before.
         private void select_provider(string provider_id) {
             if (provider_id == "") return;
             force_refresh = false;
@@ -488,7 +463,6 @@ namespace Singularity.Shell {
             online_search_group.visible = photos;
             category_row.visible = !photos;
             active_category_id = "";
-            active_tag_ids.clear();
             if (photos) {
                 photo_page = 1;
                 categories.clear();
@@ -538,16 +512,21 @@ namespace Singularity.Shell {
                 rebuild_provider_row(provider.id);
                 categories = loaded;
                 active_category_id = "";
-                active_tag_ids.clear();
-                known_tag_ids.clear();
                 rebuild_category_row();
-                rebuild_tag_row();
                 cards.clear();
                 reset_thumbnail_loading();
                 grid.remove_all();
                 loading = false;
                 update_controls();
-                browse_all.begin();
+                if (!category_row.visible && categories.size == 1) {
+                    // Nothing to pick (Bing's single combined choice, or any
+                    // provider that happens to expose exactly one usable
+                    // category) -- load it directly, same as before.
+                    active_category_id = categories[0].id;
+                    browse_category.begin(active_category_id);
+                } else {
+                    status.label = _("Select a category to browse.");
+                }
             } catch (Error e) {
                 if (gen != generation) return;
                 loading = false;
@@ -558,14 +537,13 @@ namespace Singularity.Shell {
 
         private void rebuild_category_row() {
             var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-            options.add(new Singularity.Core.AppSettingOption() { id = "", label = _("Any category") });
+            options.add(new Singularity.Core.AppSettingOption() { id = "", label = _("Select a category…") });
             foreach (var choice in categories) {
                 options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
             }
-            // A filter with one option filters nothing. Bing's de-duplicated
-            // combined view is a single choice by construction, and an "Any
-            // category / Combined (All Markets)" dropdown next to a grid that
-            // is already exactly that is just noise.
+            // A dropdown with one real choice offers nothing to pick. Bing's
+            // de-duplicated combined view is a single choice by
+            // construction and loads directly (see select_provider_choices).
             category_row.visible = categories.size > 1;
             bool was_updating = updating;
             updating = true;
@@ -573,41 +551,57 @@ namespace Singularity.Shell {
             updating = was_updating;
         }
 
-        private void clear_filters() {
-            updating = true;
-            active_category_id = "";
-            active_tag_ids.clear();
-            rebuild_category_row();
-            rebuild_tag_row();
-            if (search_row != null) search_row.text = "";
-            updating = false;
-            filter_cards();
-        }
-
         private void on_category_row_selected(string id) {
             active_category_id = id;
-            filter_cards();
+            if (id == "") {
+                generation++;
+                request.cancel();
+                cards.clear();
+                reset_thumbnail_loading();
+                grid.remove_all();
+                loading = false;
+                status.label = _("Select a category to browse.");
+                update_controls();
+                return;
+            }
+            browse_category.begin(id);
         }
 
-        private void on_tag_row_selected(string id) {
-            active_tag_ids.clear();
-            if (id != "") active_tag_ids.add(id);
-            filter_cards();
-        }
-
-        // The aggregate crawl. Pulls a single page from every usable category
-        // for the selected provider, in parallel bounded by CRAWL_WORKERS,
-        // then merges results into the grid. Live progress ("Loaded K of N
-        // categories · M wallpapers so far") is reported through `status`
-        // each time a category finishes. The Cancellable cuts the rest of
-        // the crawl off cleanly when the user starts a
-        // fresh crawl.
+        // Top-level dispatcher: re-runs whichever view is currently active
+        // (a stock-photo search, or the selected category), used by Refresh,
+        // by re-entering the page (see the `map` handler in the
+        // constructor), and by pagination. If nothing is selected yet there
+        // is nothing to refresh, so this is a no-op -- the "load only when a
+        // category is picked" behaviour lives in on_category_row_selected().
         private async void browse_all() {
             var selected_provider = provider_registry.lookup(provider_row.current_value);
             if (selected_provider != null && selected_provider.supports_search) {
                 yield browse_stock(selected_provider);
                 return;
             }
+            if (provider_row.current_value == "") {
+                loading = false;
+                status.label = _("No usable wallpaper providers.");
+                update_controls();
+                return;
+            }
+            if (active_category_id == "") return;
+            yield browse_category(active_category_id);
+        }
+
+        // Load (or refresh) exactly one category: the aggregate, load-every-
+        // category-up-front crawl this used to run on every provider select
+        // is gone. A crawl now touches only the category the user picked,
+        // which is what keeps a provider with dozens of categories and
+        // thousands of combined items from ever pulling more than one
+        // category's worth of results at a time. Re-entering this method
+        // for the SAME category (Refresh, or re-visiting the page) is the
+        // "refresh the index" half of that -- it reuses the exact same
+        // cache-then-revalidate-if-stale flow load_cached()/
+        // revalidate_cached() already provided, just re-scoped from
+        // "one file per provider" to "one file per provider+category" (see
+        // WallpaperBrowseCache.path_for()).
+        private async void browse_category(string category) {
             int gen = ++generation;
             request.cancel();
             request = new Cancellable();
@@ -619,47 +613,30 @@ namespace Singularity.Shell {
                 return;
             }
             string provider = provider_row.current_value;
-            // Snapshot the category list under the current generation so a
-            // provider change mid-crawl cannot mutate the work queue.
+            var selected_provider = provider_registry.lookup(provider);
             var todo = new ArrayList<string>();
-            foreach (var c in categories) todo.add(c.id);
-            int total = todo.size;
+            todo.add(category);
+            int total = 1;
             cards.clear();
             reset_thumbnail_loading();
             grid.remove_all();
-            // The category side-map is keyed by item, not by provider, so it
-            // has to be dropped with the cards it described -- otherwise a
-            // cache load or a provider switch repopulates cards while stale
-            // entries from the previous crawl still answer card_matches().
-            item_category.clear();
-            known_tag_ids.clear();
-            rebuild_tag_row();
+            string category_name = category;
+            foreach (var c in categories) if (c.id == category) { category_name = c.name; break; }
             // A crawl younger than its TTL is repainted from disk; the network
             // crawl below only runs when that cache is stale, absent, corrupt,
-            // or explicitly bypassed by Refresh. Every filter (category, tag,
-            // free text) is applied client-side to this same merged list, so
-            // one cache entry per provider serves every filter combination --
-            // changing a filter is a different VIEW, never a different crawl.
+            // or explicitly bypassed by Refresh. The free-text filter is
+            // applied client-side to this same loaded list, so a filter
+            // change is a different VIEW, never a different crawl.
             if (!force_refresh) {
-                var cache_result = yield load_cached(provider, gen, cancel);
+                var cache_result = yield load_cached(provider, category, gen, cancel);
                 if (cache_result == CacheLoadResult.FRESH) return;
                 if (cache_result == CacheLoadResult.STALE) {
-                    revalidate_cached.begin(selected_provider, provider, todo, gen, cancel);
+                    revalidate_cached.begin(selected_provider, provider, category, todo, gen, cancel);
                     return;
                 }
             }
-            if (total == 0) {
-                loading = false;
-                status.label = _("No usable wallpaper categories for this provider.");
-                update_controls();
-                return;
-            }
             loading = true;
-            // Bing's combined view is a one-entry crawl, so the plural form
-            // would read "Loading 1 categories…" for every user who has all
-            // markets enabled.
-            status.label = total == 1 ? _("Loading 1 category…")
-                                      : _("Loading %d categories…").printf(total);
+            status.label = _("Loading %s…").printf(category_name);
             update_controls();
             // Shared crawl state -- heap-allocated so the workers can read
             // it; counters + queue are protected by the mutexes inside it.
@@ -670,9 +647,9 @@ namespace Singularity.Shell {
             state.todo = todo;
             state.total = total;
             state.cancel = cancel;
-            // Pool of workers. Each worker pulls one id off the shared
-            // queue at a time until it is drained; an outer fan-out starts
-            // up to CRAWL_WORKERS at once.
+            // Pool of workers. With a single category queued there is only
+            // ever one unit of real work; the pool degrades to one active
+            // worker automatically (the loop below still polls correctly).
             worker.begin(state);
             for (int i = 1; i < CRAWL_WORKERS && i < total; i++)
                 worker.begin(state);
@@ -688,7 +665,7 @@ namespace Singularity.Shell {
                     // thumbnails; closing/restarting still cancels both.
                     break;
                 }
-                SourceFunc resume = browse_all.callback;
+                SourceFunc resume = browse_category.callback;
                 Timeout.add(100, () => {
                     if (resume != null) {
                         SourceFunc cb = (owned) resume;
@@ -712,17 +689,18 @@ namespace Singularity.Shell {
             // categories to errors is written but marked partial, which gives
             // it a much shorter TTL than a clean one.
             if (!cancel.is_cancelled() && cards.size > 0)
-                store_cache(provider, state.errors.size > 0);
+                store_cache(provider, category, state.errors.size > 0);
             queue_viewport_thumbnails();
         }
 
         // Repaint from any valid on-disk snapshot. Freshness controls whether
-        // browse_all() is finished or starts a silent background revalidate;
-        // it never controls whether already persisted metadata can be shown.
-        private async CacheLoadResult load_cached(string provider, int gen, Cancellable cancel) {
+        // browse_category() is finished or starts a silent background
+        // revalidate; it never controls whether already persisted metadata
+        // can be shown.
+        private async CacheLoadResult load_cached(string provider, string category, int gen, Cancellable cancel) {
             int64 at = WallpaperBrowseCache.now();
             WallpaperBrowseCache? cached = null;
-            string path = WallpaperBrowseCache.path_for(provider);
+            string path = WallpaperBrowseCache.path_for(provider, category);
             if (FileUtils.test(path, FileTest.IS_REGULAR)) {
                 try {
                     string data;
@@ -739,7 +717,6 @@ namespace Singularity.Shell {
             // touching status/controls here would fight it.
             if (gen != generation || cancel.is_cancelled()) return CacheLoadResult.FRESH;
             loading = false;
-            rebuild_tag_row();
             filter_cards();
             // filter_cards() has just written the shown/loaded counts; append
             // the provenance so a cached grid never silently poses as a fresh
@@ -752,7 +729,7 @@ namespace Singularity.Shell {
         }
 
         // Build one WallpaperCard per entry in bounded batches, yielding to
-        // the main loop between batches so a large aggregate (see
+        // the main loop between batches so a large category (see
         // CARD_BUILD_BATCH_SIZE) cannot hold the compositor unresponsive for
         // seconds at a time. Thumbnails are queued after every batch too, so
         // the initially visible rows start decoding as soon as they exist
@@ -762,8 +739,7 @@ namespace Singularity.Shell {
             int processed = 0;
             foreach (var entry in entries) {
                 if (gen != generation || cancel.is_cancelled()) return;
-                bool card_new_tag;
-                add_card(entry.item, entry.category, out card_new_tag);
+                add_card(entry.item);
                 if (++processed % CARD_BUILD_BATCH_SIZE != 0) continue;
                 queue_viewport_thumbnails();
                 SourceFunc resume = populate_cards_batched.callback;
@@ -782,7 +758,7 @@ namespace Singularity.Shell {
         // Crawl into a detached metadata list while the stale card hierarchy
         // remains mounted. Rebuilding the live grid happens synchronously in
         // one main-loop turn, so GTK cannot paint an empty intermediate view.
-        private async void revalidate_cached(WallpaperProvider backend, string provider,
+        private async void revalidate_cached(WallpaperProvider backend, string provider, string category,
                 ArrayList<string> todo, int gen, Cancellable cancel) {
             if (todo.size == 0) return;
             var state = new CrawlState();
@@ -809,16 +785,14 @@ namespace Singularity.Shell {
             }
             if (gen != generation || cancel.is_cancelled()) return;
             if (state.results.size == 0) {
-                warning("Background wallpaper cache revalidation for %s produced no usable results", provider);
+                warning("Background wallpaper cache revalidation for %s/%s produced no usable results", provider, category);
                 return;
             }
-            WallpaperBrowseCache.save(provider, state.results,
+            WallpaperBrowseCache.save(provider, category, state.results,
                 state.errors.size > 0, WallpaperBrowseCache.now());
             cards.clear();
             reset_thumbnail_loading();
             grid.remove_all();
-            item_category.clear();
-            known_tag_ids.clear();
             // The first batch lands in this same synchronous continuation
             // (populate_cards_batched only yields after CARD_BUILD_BATCH_SIZE
             // cards), so the grid goes straight from the stale list to real
@@ -826,7 +800,6 @@ namespace Singularity.Shell {
             // batches spread across further main-loop turns.
             yield populate_cards_batched(state.results, gen, cancel);
             if (gen != generation || cancel.is_cancelled()) return;
-            rebuild_tag_row();
             filter_cards();
             if (state.errors.size > 0)
                 status.label = _("%d wallpapers loaded · %s").printf(
@@ -835,12 +808,11 @@ namespace Singularity.Shell {
             queue_viewport_thumbnails();
         }
 
-        private void store_cache(string provider, bool partial) {
+        private void store_cache(string provider, string category, bool partial) {
             var snapshot = new ArrayList<WallpaperBrowseCacheEntry>();
             foreach (var card in cards)
-                snapshot.add(new WallpaperBrowseCacheEntry(card.item,
-                    item_category.has_key(card.item.key) ? item_category[card.item.key] : ""));
-            WallpaperBrowseCache.save(provider, snapshot, partial, WallpaperBrowseCache.now());
+                snapshot.add(new WallpaperBrowseCacheEntry(card.item, category));
+            WallpaperBrowseCache.save(provider, category, snapshot, partial, WallpaperBrowseCache.now());
         }
 
         private static string cache_age(int64 seconds) {
@@ -906,14 +878,13 @@ namespace Singularity.Shell {
                     try { d = ++state.done_count; } finally { state.count_lock.unlock(); }
                     Idle.add(() => {
                         if (!state.background && state.generation == generation)
-                            status.label = _("Loaded %d/%d categories · %d wallpapers (cap reached)").printf(d, state.total, state.item_count);
+                            status.label = _("Loaded %d/%d · %d wallpapers (cap reached)").printf(d, state.total, state.item_count);
                         return Source.REMOVE;
                     });
                     return;
                 }
                 string category = state.todo[my_index];
                 string? error = null;
-                bool any_new_tag = false;
                 try {
                     var result = yield state.backend.browse(category, "", 1, force_refresh, state.cancel);
                     if (state.generation != generation || state.cancel.is_cancelled()) return;
@@ -944,9 +915,7 @@ namespace Singularity.Shell {
                             if (WallpaperOcs.provider_id(item.provider_id)) state.seen_ocs_ids.add(item.id);
                             state.results.add(new WallpaperBrowseCacheEntry(item, category));
                         } else {
-                            bool card_new_tag;
-                            add_card(item, category, out card_new_tag);
-                            any_new_tag = any_new_tag || card_new_tag;
+                            add_card(item);
                         }
                     }
                 } catch (Error e) {
@@ -958,21 +927,20 @@ namespace Singularity.Shell {
                 int snap;
                 if (error != null && !state.errors.contains(error)) state.errors.add(error);
                 try { d = ++state.done_count; snap = state.item_count; } finally { state.count_lock.unlock(); }
-                // Status + tag chip updates live on the main thread. The
-                // captured `d`/`snap`/`category`/`error`/`any_new_tag` are
-                // local-scope value captures -- safe to use in the Idle
-                // callback that fires after this async function yields.
+                // Status updates live on the main thread. The captured
+                // `d`/`snap`/`category`/`error` are local-scope value
+                // captures -- safe to use in the Idle callback that fires
+                // after this async function yields.
                 Idle.add(() => {
                     if (state.generation != generation) return Source.REMOVE;
                     if (state.background) return Source.REMOVE;
                     if (error != null) {
                         // One bad category must not block the others; just
                         // surface it in the status line alongside the count.
-                        status.label = _("Loaded %d/%d categories · %d wallpapers · %s failed: %s").printf(d, state.total, snap, category, error);
+                        status.label = _("Loaded %d/%d · %d wallpapers · %s failed: %s").printf(d, state.total, snap, category, error);
                     } else {
-                        status.label = _("Loaded %d/%d categories · %d wallpapers so far").printf(d, state.total, snap);
+                        status.label = _("Loaded %d/%d · %d wallpapers so far").printf(d, state.total, snap);
                     }
-                    if (any_new_tag) rebuild_tag_row();
                     return Source.REMOVE;
                 });
             }
@@ -989,33 +957,17 @@ namespace Singularity.Shell {
             row.current_value = current;
         }
 
-        private void rebuild_tag_row() {
-            var sorted = new ArrayList<string>();
-            foreach (var id in known_tag_ids) sorted.add(id);
-            sorted.sort((a, b) => a.collate(b));
-            var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-            options.add(new Singularity.Core.AppSettingOption() { id = "", label = _("Any tag") });
-            foreach (var id in sorted) {
-                options.add(new Singularity.Core.AppSettingOption() { id = id, label = id });
-            }
-            string current_id = active_tag_ids.size > 0 ? active_tag_ids.to_array()[0] : "";
-            bool was_updating = updating;
-            updating = true;
-            set_choices(tag_row, options, current_id);
-            updating = was_updating;
-        }
-
         private void filter_cards() {
             string query = (search_row != null ? search_row.text : "").strip().casefold();
             int count = 0;
             foreach (var card in cards) {
-                card.matches = card_matches(card.item, query, active_category_id, active_tag_ids);
+                card.matches = card_matches(card.item, query);
                 if (card.matches) count++;
             }
             grid.invalidate_filter();
             queue_viewport_thumbnails();
             if (!loading && !imports.busy) {
-                if (cards.size == 0) status.label = _("No importable wallpapers for this provider.");
+                if (cards.size == 0) status.label = _("No importable wallpapers for this category.");
                 else if (count == 0) status.label = _("No matches among loaded wallpapers. Clear the filter or refresh.");
                 else status.label = _("%d wallpapers shown · %d loaded").printf(count, cards.size);
             }
@@ -1027,25 +979,11 @@ namespace Singularity.Shell {
                    cards[index].card == child.child && cards[index].matches;
         }
 
-        // AND across all three filter axes: text contains-match against
-        // name + author, the card's provider-mapped category equals the
-        // active category (or no active filter), and the card has every
-        // active tag. The card's own category lives on the item; we look
-        // it up via the items' positions in the per-category crawl by
-        // stashing it on the item at add_card time. (Provider+id is the
-        // existing key; we add a `category_id` side-channel via a
-        // separate map so the model stays clean.)
-        // Stash the source category alongside each card so the chip-row
-        // category filter can match it. Gee.HashMap has no try_get; the
-        // contains-then-index idiom is the standard substitute.
-        private HashMap<string, string> item_category = new HashMap<string, string>();
-        private bool card_matches(WallpaperItem item, string query, string active_category, HashSet<string> active_tags) {
-            if (active_category != "") {
-                if (!item_category.has_key(item.key)) return false;
-                string cat = item_category[item.key];
-                if (cat == null || cat != active_category) return false;
-            }
-            foreach (var t in active_tags) if (!(t in item.tags)) return false;
+        // Free-text match against name + author only. Category is no longer
+        // a client-side filter over an aggregate list -- a crawl now covers
+        // exactly one category, so every card already in `cards` belongs to
+        // the one the user picked (see browse_category()).
+        private bool card_matches(WallpaperItem item, string query) {
             if (query != "")
                 return (item.name + " " + item.author).casefold().contains(query);
             return true;
@@ -1069,16 +1007,13 @@ namespace Singularity.Shell {
             return false;
         }
 
-        private void add_card(WallpaperItem item, string source_category, out bool new_tag_added) {
-            new_tag_added = false;
+        private void add_card(WallpaperItem item) {
             if (has_card(item)) return;
             if (item.provider_id != "openverse" && item.provider_id != "unsplash") {
                 item.name = WallpaperSidecar.plain_text(item.name);
                 item.author = WallpaperSidecar.plain_text(item.author);
                 item.license = WallpaperSidecar.plain_text(item.license);
             }
-            item_category.set(item.key, source_category);
-            foreach (var t in item.tags) if (known_tag_ids.add(t)) new_tag_added = true;
             var card = new OcsCard();
             card.item = item;
             // Use placeholder_only: the OCS browser drives its own async
