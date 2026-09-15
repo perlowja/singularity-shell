@@ -16,16 +16,22 @@ namespace Singularity {
         }
     }
 
-    // On-disk cache of an aggregate browse crawl, one file per provider.
+    // On-disk cache of one category's browse crawl, one file per
+    // provider+category.
     //
-    // The browser crawls every usable category of a provider and merges the
-    // results into one deduplicated list, then filters that list in the UI by
-    // category, tag and free text. Because every filter is applied client-side
-    // to the same merged list, the cache key is the PROVIDER alone: changing a
-    // filter selects a different view of the same cached crawl, never a
-    // different crawl. Providers that search server-side (Openverse, Unsplash)
-    // are query- and page-addressed, are not part of the aggregate crawl, and
-    // already have their own helper-side caching, so they are not cached here.
+    // The browser crawls a single, user-picked category at a time and
+    // caches that category's result on its own (see
+    // WallpaperOcsBrowserPage.browse_category()) -- it no longer pulls
+    // every category into one aggregate before the user has chosen
+    // anything. The cache key is therefore PROVIDER + CATEGORY: picking a
+    // different category is a different crawl, and the only client-side
+    // filter left (free text) is applied within one category's cached
+    // list. Providers that search server-side (Openverse, Unsplash) are
+    // query- and page-addressed, are not part of this crawl, and already
+    // have their own helper-side caching, so they are not cached here.
+    // A provider whose dropdown collapses to a single choice (Bing's
+    // combined view) is cached under that one category id, same as any
+    // other category.
     //
     // The file is written by this shell and read back by it, but it is still
     // parsed defensively: a truncated write, a half-full disk or a hand-edited
@@ -64,6 +70,19 @@ namespace Singularity {
             return true;
         }
 
+        // Category ids come from the same OCS/Bing helper responses that
+        // feed the category dropdown, not from the user directly, but they
+        // also become part of a filename -- checked the same way as
+        // valid_provider(), with underscores allowed since real OCS
+        // category slugs use them.
+        public static bool valid_category(string category) {
+            if (category == "" || category.length > 64) return false;
+            foreach (char c in category.to_utf8())
+                if (!(c >= 'a' && c <= 'z') && !(c >= 'A' && c <= 'Z') &&
+                    !(c >= '0' && c <= '9') && c != '-' && c != '_') return false;
+            return true;
+        }
+
         // XDG cache, namespaced under "singularity" the same way the shell's
         // config and data live under get_user_config_dir()/"singularity" and
         // get_user_data_dir()/"singularity". This is per-user browse state, not
@@ -73,8 +92,13 @@ namespace Singularity {
             return Path.build_filename(Environment.get_user_cache_dir(), "singularity", "wallpaper-browse");
         }
 
-        public static string path_for(string provider) {
-            return Path.build_filename(directory(), provider + ".json");
+        // `category` is optional (defaults to "") to keep this callable the
+        // same way it always was; passing one namespaces the cache file
+        // under provider+category instead of provider alone -- see the
+        // class comment above for why a crawl is scoped that way now.
+        public static string path_for(string provider, string category = "") {
+            string name = category != "" ? provider + "_" + category : provider;
+            return Path.build_filename(directory(), name + ".json");
         }
 
         public bool fresh(int64 at) {
@@ -231,15 +255,15 @@ namespace Singularity {
             }
         }
 
-        public static WallpaperBrowseCache? load(string provider, int64 at) {
-            if (!valid_provider(provider)) return null;
-            return read(path_for(provider), provider, at);
+        public static WallpaperBrowseCache? load(string provider, string category, int64 at) {
+            if (!valid_provider(provider) || !valid_category(category)) return null;
+            return read(path_for(provider, category), provider, at);
         }
 
-        public static bool save(string provider, Gee.List<WallpaperBrowseCacheEntry> entries,
+        public static bool save(string provider, string category, Gee.List<WallpaperBrowseCacheEntry> entries,
                 bool partial, int64 created) {
-            if (!valid_provider(provider)) return false;
-            return write(path_for(provider), provider, entries, partial, created);
+            if (!valid_provider(provider) || !valid_category(category)) return false;
+            return write(path_for(provider, category), provider, entries, partial, created);
         }
     }
 }
