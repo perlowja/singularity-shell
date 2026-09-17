@@ -32,6 +32,10 @@ namespace Singularity {
         private int wallpaper_accent_generation = 0;
         private string cached_wallpaper_accent = "#3584e4";
         private static bool wallpaper_css_loaded = false;
+        private PreferencesGroup? artist_pack_group = null;
+        private int artist_pack_refresh_generation = 0;
+        // In-flight installs; survives the row teardown a refresh performs.
+        private HashSet<string> artist_packs_installing = new HashSet<string>();
 
         // Label for a stored rotate-interval that doesn't match a fixed
         // preset. Hours when it divides evenly, else minutes, else seconds
@@ -432,6 +436,19 @@ namespace Singularity {
 
             add_group(grid_group);
             GLib.Idle.add(() => { populate_grid(); return GLib.Source.REMOVE; });
+
+            if (ArtistPackManager.get_default().is_available()) {
+                artist_pack_group = new PreferencesGroup(
+                    _("Artist Packs"),
+                    _("Curated wallpaper packs, installed through the system package manager."));
+                var artist_pack_refresh_btn = new Button.from_icon_name("view-refresh-symbolic");
+                artist_pack_refresh_btn.has_frame = false;
+                artist_pack_refresh_btn.tooltip_text = _("Refresh");
+                artist_pack_refresh_btn.clicked.connect(() => { populate_artist_packs_async.begin(); });
+                artist_pack_group.add_header_suffix(artist_pack_refresh_btn);
+                add_group(artist_pack_group);
+                populate_artist_packs_async.begin();
+            }
             refresh_wallpaper_accent_async();
             update_preview_async();
             var wm = WallpaperManager.get_default();
@@ -2221,6 +2238,92 @@ namespace Singularity {
             } catch (Error e) {
                 warning("Could not delete wallpaper pack %s: %s", collection.id, e.message);
             }
+        }
+
+        private async void populate_artist_packs_async() {
+            if (artist_pack_group == null) return;
+            int gen = ++artist_pack_refresh_generation;
+
+            artist_pack_group.clear();
+            var loading_row = new ActionRow(_("Loading..."));
+            loading_row.activatable = false;
+            artist_pack_group.add_row(loading_row);
+
+            Gee.ArrayList<ArtistPackInfo> packs;
+            try {
+                packs = yield ArtistPackManager.get_default().fetch_inventory_async();
+            } catch (Error e) {
+                if (gen != artist_pack_refresh_generation) return;
+                artist_pack_group.clear();
+                var error_row = new ActionRow(_("Could not list Artist Packs"), e.message, "dialog-error-symbolic");
+                error_row.activatable = false;
+                artist_pack_group.add_row(error_row);
+                return;
+            }
+            if (gen != artist_pack_refresh_generation) return;
+
+            artist_pack_group.clear();
+            if (packs.size == 0) {
+                var empty_row = new ActionRow(
+                    _("No Artist Packs available"),
+                    _("None of the configured apt sources currently offer one, or none are configured."));
+                empty_row.activatable = false;
+                artist_pack_group.add_row(empty_row);
+                return;
+            }
+
+            foreach (var pack in packs) {
+                var row = new ActionRow(pack.title, pack.summary);
+                row.activatable = false;
+                // A transaction started before this refresh is not yet in pack.installed.
+                bool installing = artist_packs_installing.contains(pack.package);
+                var install_btn = new Button.with_label(
+                    installing ? _("Installing...") : (pack.installed ? _("Installed") : _("Install")));
+                install_btn.sensitive = !installing && !pack.installed;
+                string captured_package = pack.package;
+                string captured_source = pack.source;
+                Button captured_btn = install_btn;
+                install_btn.clicked.connect(() => {
+                    start_artist_pack_install(captured_package, captured_source, captured_btn);
+                });
+                row.add_suffix(install_btn);
+                artist_pack_group.add_row(row);
+            }
+        }
+
+        private void start_artist_pack_install(string package, string source, Button btn) {
+            if (!artist_packs_installing.add(package)) return;
+            // A refresh mid-install detaches btn's row, so relabel only if gen holds.
+            int gen = artist_pack_refresh_generation;
+            btn.sensitive = false;
+            btn.label = _("Installing...");
+            ArtistPackManager.get_default().install_async.begin(package, source, null, (obj, res) => {
+                artist_packs_installing.remove(package);
+                bool row_alive = (gen == artist_pack_refresh_generation);
+                try {
+                    ArtistPackManager.get_default().install_async.end(res);
+                    if (row_alive) {
+                        btn.label = _("Installed");
+                    } else {
+                        populate_artist_packs_async.begin();
+                    }
+                    // The new pack's .collection file is only re-read here.
+                    populate_grid();
+                } catch (Error e) {
+                    warning("Artist Pack install of %s failed: %s", package, e.message);
+                    if (!row_alive) {
+                        populate_artist_packs_async.begin();
+                        return;
+                    }
+                    btn.label = _("Install Failed");
+                    GLib.Timeout.add_seconds(4, () => {
+                        if (gen != artist_pack_refresh_generation) return GLib.Source.REMOVE;
+                        btn.label = _("Install");
+                        btn.sensitive = true;
+                        return GLib.Source.REMOVE;
+                    });
+                }
+            });
         }
 
         private void populate_grid() {

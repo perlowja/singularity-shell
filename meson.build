@@ -286,6 +286,7 @@ singularity_core_sources = files(
     'src/core/wallpaper_gallery.vala',
     'src/core/wallpaper_rotation_state.vala',
     'src/core/wallpaper_rotator.vala',
+    'src/core/artist_pack_manager.vala',
     'src/core/wallpaper_sidecar.vala',
     'src/core/wallpaper_ocs.vala',
     'src/core/wallpaper_browse_cache.vala',
@@ -488,6 +489,15 @@ configure_file(
 install_data('data/fan-control/dev.sinty.FanControl.conf',
   install_dir: get_option('datadir') / 'dbus-1' / 'system.d')
 install_data('data/fan-control/dev.sinty.fan-control.policy',
+  install_dir: get_option('datadir') / 'polkit-1' / 'actions')
+
+# Reference apt-based Artist Pack backend. ArtistPackManager resolves these
+# at fixed /usr/local/bin paths, never via PATH, so install there directly.
+install_data('data/artist-packs/singularity-artist-pack-inventory',
+  install_dir: '/usr/local/bin', install_mode: 'rwxr-xr-x')
+install_data('data/artist-packs/singularity-artist-pack-install',
+  install_dir: '/usr/local/bin', install_mode: 'rwxr-xr-x')
+install_data('data/artist-packs/dev.sinty.desktop.artist-pack-install.policy',
   install_dir: get_option('datadir') / 'polkit-1' / 'actions')
 
 wallpaper_collections_test = executable('wallpaper-collections-test',
