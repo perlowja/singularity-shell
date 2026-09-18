@@ -428,9 +428,8 @@ namespace Singularity {
                 case "performance": page = new Singularity.SidebarPages.PerformancePage(this); break;
                 case "system": page = new Singularity.SidebarPages.SystemPage(this); break;
                 case "wallpaper-browser":
-                    string[] roots = DesktopPage.compute_collection_roots();
-                    page = new Singularity.Shell.WallpaperOcsBrowserPage(this, roots);
-                    var browser = page as Singularity.Shell.WallpaperOcsBrowserPage;
+                    page = new Singularity.Shell.WallpaperProviderBrowserPage(this);
+                    var browser = page as Singularity.Shell.WallpaperProviderBrowserPage;
                     if (browser != null)
                         browser.imported.connect(notify_wallpaper_imported);
                     break;

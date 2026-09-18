@@ -61,9 +61,45 @@ namespace Singularity {
             return roots;
         }
 
+        private static string? builtin_directory() {
+            string[] candidates = {};
+            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
+                candidates += GLib.Path.build_filename(d, "backgrounds", "singularity");
+            candidates += GLib.Path.build_filename(
+                GLib.Environment.get_user_data_dir(), "backgrounds", "singularity");
+
+            // Keep development builds usable when the wallpaper subproject has
+            // not been installed yet. These paths are only accepted when they
+            // exist, so an installed desktop never depends on the checkout.
+            string cwd = GLib.Environment.get_current_dir();
+            candidates += GLib.Path.build_filename(cwd, "subprojects", "singularity-wallpapers");
+            candidates += GLib.Path.build_filename(cwd, "..", "subprojects", "singularity-wallpapers");
+            try {
+                string exe = GLib.FileUtils.read_link("/proc/self/exe");
+                string exe_dir = GLib.Path.get_dirname(exe);
+                candidates += GLib.Path.build_filename(exe_dir, "..", "share", "backgrounds", "singularity");
+                candidates += GLib.Path.build_filename(exe_dir, "..", "..", "subprojects", "singularity-wallpapers");
+            } catch (Error e) {}
+
+            foreach (string candidate in candidates) {
+                if (FileUtils.test(candidate, FileTest.IS_DIR)) return candidate;
+            }
+            return null;
+        }
+
         public static Gee.ArrayList<WallpaperCollectionInfo> parse(string[] search_roots) {
             var results = new Gee.ArrayList<WallpaperCollectionInfo>();
             var seen_ids = new Gee.HashSet<string>();
+            bool use_builtin_fallback = false;
+            foreach (string default_root in default_search_roots()) {
+                foreach (string root in search_roots) {
+                    if (root == default_root) {
+                        use_builtin_fallback = true;
+                        break;
+                    }
+                }
+                if (use_builtin_fallback) break;
+            }
 
             foreach (string root in search_roots) {
                 try {
@@ -125,6 +161,22 @@ namespace Singularity {
                 } catch (Error e) {
                     continue;
                 }
+            }
+            if (!use_builtin_fallback) return results;
+
+            string? builtin_dir = builtin_directory();
+            int builtin_index = -1;
+            for (int i = 0; i < results.size; i++) {
+                if (results[i].id == "singularity") {
+                    builtin_index = i;
+                    break;
+                }
+            }
+            if (builtin_dir != null) {
+                var builtin = new WallpaperCollectionInfo(
+                    "singularity", "Singularity", "Singularity", builtin_dir, "static");
+                if (builtin_index >= 0) results[builtin_index] = builtin;
+                else results.insert(0, builtin);
             }
             return results;
         }

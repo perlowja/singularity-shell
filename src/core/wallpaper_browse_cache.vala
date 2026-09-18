@@ -29,9 +29,8 @@ namespace Singularity {
     // list. Providers that search server-side (Openverse, Unsplash) are
     // query- and page-addressed, are not part of this crawl, and already
     // have their own helper-side caching, so they are not cached here.
-    // A provider whose dropdown collapses to a single choice (Bing's
-    // combined view) is cached under that one category id, same as any
-    // other category.
+    // A provider whose dropdown collapses to a single choice is cached under
+    // that one category id, same as any other category.
     //
     // The file is written by this shell and read back by it, but it is still
     // parsed defensively: a truncated write, a half-full disk or a hand-edited
@@ -86,8 +85,7 @@ namespace Singularity {
         // XDG cache, namespaced under "singularity" the same way the shell's
         // config and data live under get_user_config_dir()/"singularity" and
         // get_user_data_dir()/"singularity". This is per-user browse state, not
-        // the system-wide image archives the helpers own in
-        // /var/cache/ncz-wallpapers.
+        // provider-owned system archives.
         public static string directory() {
             return Path.build_filename(Environment.get_user_cache_dir(), "singularity", "wallpaper-browse");
         }
@@ -123,6 +121,7 @@ namespace Singularity {
             foreach (var entry in entries) {
                 var item = entry.item;
                 builder.begin_object();
+                builder.set_member_name("owner"); builder.add_string_value(item.owner_id);
                 builder.set_member_name("provider"); builder.add_string_value(item.provider_id);
                 builder.set_member_name("id"); builder.add_string_value(item.id);
                 builder.set_member_name("category"); builder.add_string_value(entry.category);
@@ -187,6 +186,7 @@ namespace Singularity {
             foreach (var node in WallpaperOcs.array(obj, "items").get_elements()) {
                 var record = WallpaperOcs.object_node(node);
                 var item = new WallpaperItem();
+                item.owner_id = WallpaperOcs.text(record, "owner", false);
                 item.provider_id = WallpaperOcs.text(record, "provider");
                 item.id = WallpaperOcs.text(record, "id");
                 item.name = WallpaperOcs.text(record, "name", false);

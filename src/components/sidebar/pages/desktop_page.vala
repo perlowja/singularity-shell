@@ -52,67 +52,6 @@ namespace Singularity {
             return ngettext("Every %d second (custom)", "Every %d seconds (custom)", seconds).printf(seconds);
         }
 
-        // Bing preferred-region selector. The UI side of cix-installer's
-        // 45-wallpaper-rotator.sh's ncz-wallpaper-bing contract -- the
-        // rotator script always fetches and combines EVERY market now
-        // (operator 2026-09-12: "just have it be the preferred language,
-        // and have all the feeds be combined"). The file this writes,
-        // ~/.config/ncz-wallpaper/bing-markets, no longer restricts which
-        // markets are fetched; it only tells the rotator which region's
-        // copy of a photo to prefer when the SAME photograph is served to
-        // more than one market and has to be de-duplicated down to one
-        // (see cmd_consolidate()'s preferred_market() in the rotator
-        // script). The literal "all" (case-insensitive) sentinel, or an
-        // absent file, means "no preference" -- the rotator falls back to
-        // its original alphabetical dedup-winner order.
-        //
-        // The picker is one SelectionRow whose expanded list is "All
-        // Markets, No Preference" followed by all 13 individual markets
-        // (operator 2026-09-13: a popup ConfirmDialog was rejected in
-        // favor of the row expanding INLINE in place, matching every
-        // other single-choice setting on this page). Picking any row
-        // collapses the expander and writes that choice immediately --
-        // there is no separate "Apply" step and no dialog object.
-        private const string BING_MARKETS_ID_ALL = "all";
-        // 13 markets, grouped by region. Order matches the comment block
-        // in cix-installer/post-install/45-wallpaper-rotator.sh's
-        // ncz-wallpaper-bing (Americas, Europe, Asia-Pacific); the group
-        // order is preserved in the flat picker list below so markets
-        // from the same region still sit together even without a
-        // section header.
-        // [0] = market code, [1] = display label, [2] = region header.
-        private const string BING_MARKETS_TABLE = "en-US\tUnited States\tAmericas"
-            + "|en-CA\tCanada English\tAmericas"
-            + "|fr-CA\tCanada French\tAmericas"
-            + "|pt-BR\tBrazil\tAmericas"
-            + "|en-GB\tUnited Kingdom\tEurope"
-            + "|fr-FR\tFrance\tEurope"
-            + "|de-DE\tGermany\tEurope"
-            + "|es-ES\tSpain\tEurope"
-            + "|it-IT\tItaly\tEurope"
-            + "|en-IN\tIndia\tAsia-Pacific"
-            + "|ja-JP\tJapan\tAsia-Pacific"
-            + "|zh-CN\tChina\tAsia-Pacific"
-            + "|ko-KR\tSouth Korea\tAsia-Pacific";
-        private Gee.ArrayList<BingMarketEntry> bing_markets_rows = new Gee.ArrayList<BingMarketEntry>();
-        private SelectionRow? bing_markets_row = null;
-        private bool bing_markets_updating = false;
-
-        // Lower-case an ASCII string. Vala's GLib string has no public
-        // lowercase() (only casefold(), which is Unicode-aware and
-        // therefore locale-sensitive -- the bing-market codes are all
-        // ISO 639-1 + ISO 3166-1 letters, so a literal ASCII fold is
-        // both correct and cheaper).
-        private static string ascii_lower(string s) {
-            string out = "";
-            for (int i = 0; i < s.length; i++) {
-                char c = s[i];
-                if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
-                out += c.to_string();
-            }
-            return out;
-        }
-
         // Appends a rounded-rectangle sub-path to the Cairo context.
         private static void round_rect(Cairo.Context ctx, double x, double y, double w, double h, double r) {
             double PI = Math.PI;
@@ -277,14 +216,17 @@ namespace Singularity {
             grid_group.add_row(source_container_row);
             refresh_wallpaper_sources();
 
-            var online_row = new PreferencesRow();
-            var online_button = new Button.with_label(_("Browse Online Wallpapers"));
-            online_button.margin_start = online_button.margin_end = 10;
-            online_button.margin_top = online_button.margin_bottom = 8;
-            online_button.clicked.connect(() => {
+            var online_row = new ActionRow(_("Explore Wallpaper Sources"),
+                _("Browse sources enabled from Plugins"), "image-x-generic-symbolic");
+            online_row.activated.connect(() => {
                 view.navigate_to("wallpaper-browser");
             });
-            online_row.set_child(online_button);
+            // A plain installation is entirely local. This entry point only
+            // appears after a wallpaper provider plugin is enabled.
+            online_row.visible = Singularity.WallpaperProviderRegistry.get_default().list().size > 1;
+            Singularity.WallpaperProviderRegistry.get_default().changed.connect(() => {
+                online_row.visible = Singularity.WallpaperProviderRegistry.get_default().list().size > 1;
+            });
             grid_group.add_row(online_row);
 
             wallpaper_grid = new FlowBox();
@@ -323,68 +265,6 @@ namespace Singularity {
             attribution_row.switch_btn.notify["active"].connect(() => {
                 settings.set_boolean("show-wallpaper-attribution", attribution_row.switch_btn.active);
             });
-
-            // Bing preferred-region selector. The SelectionRow's expanded
-            // list matches ncz-wallpaper-bing's existing "all" sentinel in
-            // ~/.config/ncz-wallpaper/bing-markets (45-wallpaper-rotator.sh
-            // reads that file verbatim), but the MEANING changed: every
-            // market is always fetched and combined now, so this no
-            // longer restricts what's fetched. It only sets which
-            // region's copy of a duplicate photo the rotator prefers when
-            // de-duplicating.
-            //
-            // Operator 2026-09-13: the previous popup ConfirmDialog picker
-            // was rejected -- the row now expands INLINE, in place, the
-            // same way every other single-choice SelectionRow on this page
-            // works (see e.g. interval_row below). "All Markets, No
-            // Preference" is the first entry and writes "all" immediately
-            // (today's alphabetical dedup-winner order, kept as the
-            // neutral default); every one of the 13 markets from
-            // BING_MARKETS_TABLE follows as its own row, labelled
-            // "<Region> — <Market>" so the region grouping the old dialog
-            // expressed with section headers survives as label text (and
-            // SelectionRow's own search entry, which kicks in past 5
-            // items, lets a region name filter the list). Picking any row
-            // is a single click: SelectionRow always collapses and fires
-            // `selected` with exactly the one id chosen, so there is no
-            // separate multi-select/Apply step to reproduce. We don't
-            // gate the row on the active wallpaper provider -- the rest of
-            // this page (rotate_row, interval_row, attribution_row) is
-            // also unconditional, and there's no clean existing
-            // provider-detection hook to reuse.
-            init_bing_markets_table();
-            var bing_markets_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-            bing_markets_options.add(new Singularity.Core.AppSettingOption() { id = BING_MARKETS_ID_ALL, label = _("All Markets, No Preference") });
-            foreach (var market in bing_markets_rows) {
-                bing_markets_options.add(new Singularity.Core.AppSettingOption() {
-                    id = market.code, label = "%s — %s".printf(market.region, market.label) });
-            }
-            // Initial selection reflects the file: "all" or absent = All
-            // Markets; otherwise the first configured market code (a
-            // preference is singular -- see bing_markets_read_codes()).
-            // Falls back to "all" if the file names a code that isn't in
-            // the current table, so the row always opens on a real entry.
-            string bing_markets_current = BING_MARKETS_ID_ALL;
-            if (!bing_markets_file_is_all()) {
-                string[] configured = bing_markets_read_codes();
-                if (configured.length > 0) {
-                    foreach (var opt in bing_markets_options) {
-                        if (opt.id == configured[0]) { bing_markets_current = configured[0]; break; }
-                    }
-                }
-            }
-            bing_markets_row = new SelectionRow.with_options(_("Bing Preferred Region"), bing_markets_options,
-                bing_markets_current);
-            bing_markets_row.subtitle = _("Bing always combines every region's photo of the day; this only picks whose caption and credit win when the same photo is shared");
-            bing_markets_row.selected.connect((id) => {
-                if (bing_markets_updating || bing_markets_row == null) return;
-                if (id == BING_MARKETS_ID_ALL) {
-                    write_bing_markets_all();
-                } else {
-                    write_bing_markets_codes({id});
-                }
-            });
-            grid_group.add_row(bing_markets_row);
 
             var interval_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             interval_options.add(new Singularity.Core.AppSettingOption() { id = "600", label = _("Every 10 minutes") });
@@ -2111,12 +1991,7 @@ namespace Singularity {
         }
 
         public static string[] compute_collection_roots() {
-            var roots = new Gee.ArrayList<string>();
-            foreach (unowned string d in GLib.Environment.get_system_data_dirs())
-                roots.add(GLib.Path.build_filename(d, "ncz-wallpapers", "collections"));
-            roots.add(GLib.Path.build_filename(
-                GLib.Environment.get_user_data_dir(), "ncz-wallpapers", "collections"));
-            return roots.to_array();
+            return WallpaperCollections.default_search_roots();
         }
 
         public void refresh_after_import() {
@@ -2129,16 +2004,18 @@ namespace Singularity {
             var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             foreach (var collection in wallpaper_collections) {
                 string label = (collection.artist != "" && collection.artist != collection.name)
-                    ? _("%s — by %s").printf(collection.name, collection.artist) : collection.name;
-                label = "%s — %s".printf(label, collection.theme_pack ? _("Theme pack") : _("Artist pack"));
+                    ? _("%s - by %s").printf(collection.name, collection.artist) : collection.name;
+                string kind = collection.id == "singularity" ? _("Built-in")
+                    : (collection.theme_pack ? _("Theme pack") : _("Wallpaper pack"));
+                label = "%s - %s".printf(label, kind);
                 options.add(new Singularity.Core.AppSettingOption() { id = collection.id, label = label });
             }
-            string selected = rotation_state.get_selected_collection("ncz");
+            string selected = rotation_state.get_selected_collection("singularity");
             bool found = false;
             foreach (var option in options) if (option.id == selected) found = true;
             if (!found && options.size > 0) selected = options[0].id;
             var row = new SelectionRow.with_options(_("Wallpaper Source"), options, selected);
-            row.subtitle = _("Which installed collection the gallery below shows");
+            row.subtitle = _("Choose the collection shown below");
             row.selected.connect((id) => {
                 rotation_state.set_selected_collection(id);
                 refresh_wallpaper_sources();
@@ -2163,18 +2040,8 @@ namespace Singularity {
         }
 
         private async void apply_selected_wallpaper() {
-            try {
-                var process = new Subprocess.newv(
-                    { "/usr/local/bin/ncz-wallpaper-rotate" },
-                    SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_PIPE);
-                string? stderr_buf = null;
-                yield process.communicate_utf8_async(null, null, null, out stderr_buf);
-                if (!process.get_successful())
-                    warning("Could not apply selected wallpaper source: %s",
-                        stderr_buf != null ? stderr_buf.strip() : "wallpaper rotator failed");
-            } catch (Error e) {
-                warning("Could not apply selected wallpaper source: %s", e.message);
-            }
+            // Native, in-process rotation -- no external helper binary.
+            Singularity.WallpaperRotator.get_default().rotate_now();
         }
 
         private WallpaperCollectionInfo? find_collection(string id) {
@@ -2189,9 +2056,8 @@ namespace Singularity {
         // scan_dir, so a card's uri can belong to a collection OTHER than
         // whichever one is currently selected as the rotation source (e.g.
         // a "recent" wallpaper carried over from a previously-active pack).
-        // add_wallpaper_card() used to resolve the delete target via
-        // find_collection(rotation_state.get_selected_collection("ncz")),
-        // which is always the ACTIVE source, not necessarily the collection
+        // add_wallpaper_card() used to resolve the delete target via the
+        // active source, not necessarily the collection
         // that actually contains this specific uri. For any card whose
         // image lives in a different collection, that mismatch made
         // WallpaperCollections.delete_image()'s contains_uri() check fail,
@@ -2742,152 +2608,6 @@ namespace Singularity {
             }
         }
 
-        // -------------------------------------------------------------------------
-        // Bing markets selector. UI side of cix-installer's
-        // 45-wallpaper-rotator.sh's ncz-wallpaper-bing contract.
-        // -------------------------------------------------------------------------
-
-        // Parse BING_MARKETS_TABLE into bing_markets_rows ({code, label,
-        // region}), in table order. Called once from the constructor,
-        // before the flat SelectionRow option list is built from it.
-        private void init_bing_markets_table() {
-            foreach (string entry in BING_MARKETS_TABLE.split("|")) {
-                string[] cols = entry.split("\t");
-                if (cols.length != 3) continue;
-                var row = new BingMarketEntry() { code = cols[0], label = cols[1], region = cols[2] };
-                bing_markets_rows.add(row);
-            }
-        }
-
-        // Full path to the bing-markets file the cix-installer rotator
-        // already reads. Lives under XDG_CONFIG_HOME so it tracks the
-        // user even when $HOME is relocated for test sessions.
-        private string bing_markets_file_path() {
-            return GLib.Path.build_filename(
-                GLib.Environment.get_user_config_dir(),
-                "ncz-wallpaper",
-                "bing-markets");
-        }
-
-        // Read the bing-markets file and report whether its content
-        // (trimmed, lowercased) is the "all" sentinel -- i.e. "no
-        // preferred region". Absent file also returns true so the
-        // SelectionRow starts on "All Markets, No Preference" on a fresh
-        // install, matching the rotator's own default (preferred_market()
-        // in 45-wallpaper-rotator.sh returns None for an absent file too
-        // -- UI intent matches effective behaviour on both sides now).
-        private bool bing_markets_file_is_all() {
-            string path = bing_markets_file_path();
-            if (!FileUtils.test(path, FileTest.EXISTS)) return true;
-            string text;
-            try {
-                FileUtils.get_contents(path, out text);
-            } catch (Error e) {
-                return true;
-            }
-            return ascii_lower(text.strip()) == "all";
-        }
-
-        // Read the bing-markets file and return the configured codes as
-        // an array. "all" (any case) or absent -> empty list (i.e. the
-        // sentinel meaning "no preferred region"). Otherwise split on any
-        // of whitespace/comma and keep tokens matching the 2-letter-2-
-        // letter market pattern, preserving file order. The rotator only
-        // ever honours the FIRST entry as the preference (a preference is
-        // singular); this still returns every matched token so a legacy
-        // multi-market file written by an older build degrades to "the
-        // first one wins" rather than silently losing the whole value.
-        private string[] bing_markets_read_codes() {
-            string path = bing_markets_file_path();
-            if (!FileUtils.test(path, FileTest.EXISTS)) return {};
-            string text;
-            try {
-                FileUtils.get_contents(path, out text);
-            } catch (Error e) {
-                return {};
-            }
-            if (ascii_lower(text.strip()) == "all") return {};
-            string[] codes = {};
-            string[] seen = {};
-            foreach (string tok in text.strip().split_set(" \t\n,")) {
-                if (tok.length == 0) continue;
-                if (tok.length != 5 || tok[2] != '-') continue;
-                bool dup = false;
-                foreach (string existing in seen) if (existing == tok) { dup = true; break; }
-                if (dup) continue;
-                seen += tok;
-                codes += tok;
-            }
-            return codes;
-        }
-
-        // Atomic write of a single-line contents string to the
-        // bing-markets file. Same write-then-rename pattern as
-        // WallpaperRotationState so the daemon (which polls the file)
-        // never reads a half-flushed value. Creates the directory if
-        // absent. Silent on failure -- the daemon's default kicks in if
-        // the file is missing, so a failed write degrades gracefully.
-        private void write_bing_markets_contents(string contents) {
-            string path = bing_markets_file_path();
-            string dir = GLib.Path.get_dirname(path);
-            try {
-                GLib.DirUtils.create_with_parents(dir, 0700);
-                string tmp = path + ".tmp";
-                FileUtils.set_contents(tmp, contents);
-                if (FileUtils.rename(tmp, path) != 0) {
-                    warning("bing markets: could not rename %s into place", path);
-                }
-            } catch (Error e) {
-                warning("bing markets: could not write %s: %s", path, e.message);
-            }
-        }
-
-        private void write_bing_markets_all() {
-            write_bing_markets_contents("all\n");
-        }
-
-        // Write the chosen preferred market as a single line
-        // (newline-terminated, matching the format the rotator already
-        // expects -- it only ever honours the FIRST valid token in the
-        // file now; see preferred_market() in 45-wallpaper-rotator.sh).
-        // Empty list -> fall back to "all" rather than an empty file,
-        // because ncz-wallpaper-bing treats an empty value as "no
-        // preference" anyway, and an empty file would be picked up by
-        // the rotator's split() as a literal empty list with no
-        // behaviour change -- but writing "all" makes the user's "no
-        // preferred region" intent explicit on disk.
-        private void write_bing_markets_codes(string[] codes) {
-            if (codes.length == 0) {
-                write_bing_markets_all();
-                return;
-            }
-            write_bing_markets_contents(string.joinv(" ", codes) + "\n");
-        }
-
-        // The preferred-region picker used to be a separate popup
-        // ConfirmDialog built here, with its own reused dialog object and
-        // one mutually-exclusive Gtk.CheckButton per market grouped under
-        // a region header (see git history before 2026-09-13 for the
-        // removed implementation). Operator 2026-09-13 rejected the
-        // popup in favor of expanding inline in the settings row itself
-        // -- bing_markets_row (constructed above) is a plain
-        // SelectionRow.with_options() whose option list already contains
-        // "All Markets, No Preference" plus all 13 markets, so picking a
-        // region is just clicking a row in the row's own expander; there
-        // is no dialog, no checkbox list, and no separate Apply step left
-        // to implement here.
-
-        // Bing market row: 2-letter market code, UI display label, and
-        // region bucket ("Americas" / "Europe" / "Asia-Pacific") used
-        // as the label prefix in the inline SelectionRow's option list
-        // above. Plain GLib.Object rather than a struct so it can be
-        // stored in a Gee.ArrayList (Vala disallows array types as
-        // generic type arguments).
-        private class BingMarketEntry : GLib.Object {
-            public string code { get; set; }
-            public string label { get; set; }
-            public string region { get; set; }
-        }
     }
     internal class WallpaperPreviewWidget : Box {
         public signal void select_clicked();

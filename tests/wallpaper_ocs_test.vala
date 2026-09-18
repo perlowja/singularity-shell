@@ -1,4 +1,5 @@
 using GLib;
+using Gee;
 using Singularity;
 
 private const string PROVIDERS = "{\"schema\":1,\"providers\":{\"pling\":{\"base\":\"https://api.pling.com/ocs/v1/\"},\"opendesktop\":{\"base\":\"https://api.opendesktop.org/ocs/v1/\"},\"kde-look\":{\"base\":\"https://api.kde-look.org/ocs/v1/\"}}}";
@@ -586,21 +587,46 @@ private void test_cache_read_write() {
     remove_tree(root);
 }
 
+private class StubWallpaperProvider : Object, WallpaperProvider {
+    private string _id;
+    public StubWallpaperProvider(string id) { _id = id; }
+    public string id { get { return _id; } }
+    public string display_name { owned get { return _id; } }
+    public bool requires_credentials { get { return false; } }
+    public bool supports_search { get { return false; } }
+    public async ArrayList<WallpaperProviderChoice> choices(string category_index,
+            Cancellable? cancel) throws Error {
+        return new ArrayList<WallpaperProviderChoice>();
+    }
+    public async WallpaperProviderResult browse(string choice_id, string query, int page,
+            bool force_refresh, Cancellable? cancel) throws Error {
+        return new WallpaperProviderResult();
+    }
+    public async string import_item(WallpaperItem item, Cancellable? cancel) throws Error {
+        throw new IOError.NOT_SUPPORTED("stub");
+    }
+}
+
 public int main(string[] args) {
     Test.init(ref args);
-    Test.add_func("/providers/release-registry", () => {
-        var registry = new WallpaperProviderRegistry();
-        var active = registry.get_active();
-        var available = registry.get_available();
-        assert(active.size == 2);
-        assert(active[0].id == "ocs");
-        assert(active[1].id == "bing");
-        assert(!active[0].requires_credentials && !active[1].requires_credentials);
-        assert(available.size == 4);
-        assert(available[2].id == "openverse" && available[2].supports_search);
-        assert(available[3].id == "unsplash" && available[3].supports_search);
-        assert(registry.lookup("openverse") == null);
-        assert(registry.lookup("unsplash") == null);
+    Test.add_func("/providers/registry-add-remove-lookup", () => {
+        var registry = WallpaperProviderRegistry.get_default();
+        var a = new StubWallpaperProvider("test-provider-a");
+        var b = new StubWallpaperProvider("test-provider-b");
+        registry.add(a);
+        registry.add(b);
+        registry.add(a); // dedup by id, no-op
+        assert(registry.lookup("test-provider-a") == a);
+        assert(registry.lookup("test-provider-b") == b);
+        assert(registry.lookup("test-provider-missing") == null);
+        int seen = 0;
+        foreach (var p in registry.list())
+            if (p.id == "test-provider-a" || p.id == "test-provider-b") seen++;
+        assert(seen == 2);
+        registry.remove(a);
+        registry.remove(b);
+        assert(registry.lookup("test-provider-a") == null);
+        assert(registry.lookup("test-provider-b") == null);
     });
     Test.add_func("/ocs/unified-categories", () => {
         try {

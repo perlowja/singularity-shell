@@ -3,22 +3,10 @@ using Gee;
 using Singularity.Widgets;
 
 namespace Singularity.Shell {
-    // Presentation only: the installed helper owns all OCS and import policy.
-    public class WallpaperOcsBrowserPage : SettingsPage {
+    // Presentation only: provider plugins own network and import policy.
+    public class WallpaperProviderBrowserPage : SettingsPage {
         public signal void imported();
-        private const string HELPER = "/usr/local/bin/ncz-wallpaper-ocs";
-        // Bing lives behind its own helper because its commands and JSON
-        // shapes are different (markets -> TSV, list -> bare array, no
-        // schema/items wrapper). Calling it is the same SubprocessLauncher
-        // shape as HELPER; only the argv and the parsers in WallpaperBing
-        // differ. The helper's daily timer permanently accumulates unseen
-        // images in bing.collection; browsing only reads that local archive.
-        private const string BING_HELPER = "/usr/local/bin/ncz-wallpaper-bing";
-        private const string OPENVERSE_HELPER = "/usr/local/bin/ncz-wallpaper-openverse";
-        private const string UNSPLASH_HELPER = "/usr/local/bin/ncz-wallpaper-unsplash";
-        private WallpaperProviderRegistry provider_registry = new WallpaperProviderRegistry();
-        private ProviderCredentialGroup openverse_credentials;
-        private ProviderCredentialGroup unsplash_credentials;
+        private WallpaperProviderRegistry provider_registry = WallpaperProviderRegistry.get_default();
         private PreferencesGroup online_search_group;
         private EntryRow online_search;
         private Button previous_page;
@@ -26,23 +14,16 @@ namespace Singularity.Shell {
         private int photo_page = 1;
         private int photo_page_count = 1;
         private bool force_refresh = false;
-        // The synthetic provider id used by the provider dropdown, the worker
-        // branching, and the card layout. Same value as WallpaperBing.PROVIDER_ID
-        // in core/ -- duplicated here so the browser can branch on it
-        // without pulling in a core class field reference at the call site.
-        private const string BING_PROVIDER_ID = "bing";
         // Bounded crawl: enough parallelism that a category with many pages
         // fills the grid quickly, but small enough it cannot fork dozens of
-        // OCS processes against the helper at once. A crawl now covers a
+        // Provider requests are bounded so a crawl stays responsive.
         // single, user-picked category (see browse_category()), not every
         // category a provider exposes, so CRAWL_WORKERS is a ceiling on
         // in-flight requests for that one category rather than a fan-out
         // across many categories.
         private const int CRAWL_WORKERS = 4;
-        // Safety cap on wallpapers merged for one category. A single OCS
-        // category page tops out at the server's maximum 100 items/page (see
-        // OcsWallpaperProvider); this cap guards against an unexpectedly
-        // large category rather than truncating a normal one.
+        // Safety cap on wallpapers merged for one category. This guards
+        // against an unexpectedly large provider response.
         private const int CRAWL_ITEM_CAP = 4000;
         private const int THUMBNAIL_FETCH_LANES = 8;
         // Building one WallpaperCard hierarchy (badge, action button, FlowBox
@@ -63,11 +44,11 @@ namespace Singularity.Shell {
         // bound so a slow category can't drag a worker beyond the overall
         // window the user is willing to wait.
         private const int CRAWL_CATEGORY_TIMEOUT = 60;
-        private string[] collection_roots;
-        private WallpaperOcsImports imports = new WallpaperOcsImports();
-        private ArrayList<WallpaperOcsChoice> providers = new ArrayList<WallpaperOcsChoice>();
-        private ArrayList<WallpaperOcsChoice> categories = new ArrayList<WallpaperOcsChoice>();
-        private ArrayList<OcsCard> cards = new ArrayList<OcsCard>();
+        private HashSet<string> imported_keys = new HashSet<string>();
+        private string active_import_key = "";
+        private ArrayList<WallpaperProviderChoice> providers = new ArrayList<WallpaperProviderChoice>();
+        private ArrayList<WallpaperProviderChoice> categories = new ArrayList<WallpaperProviderChoice>();
+        private ArrayList<ProviderCard> cards = new ArrayList<ProviderCard>();
         private HashSet<int> thumbnail_requested = new HashSet<int>();
         private HashSet<int> thumbnail_pending = new HashSet<int>();
         // Category is now the only filter axis (tag filtering removed), and
@@ -88,79 +69,47 @@ namespace Singularity.Shell {
         private Cancellable request = new Cancellable();
         private int generation = 0;
         private bool loading = false;
-        private string category_index = "";
 
         private enum CacheLoadResult { NONE, FRESH, STALE }
 
         // One card per wallpapers item in the grid. The visible widget is
-        // a WallpaperCard (reused from desktop_page.vala so the OCS/Bing
+        // a WallpaperCard (reused from desktop_page.vala so provider cards
         // grid LOOKS identical to the main wallpaper picker). The action button
         // sits below the thumbnail; attribution and licence text use the card
         // badge. Status text
         // for long-running ops (Import / Pin) goes to the global status
         // label rather than a per-card inline message, since WallpaperCard
         // has no room for one.
-        private class OcsCard : Object {
+        private class ProviderCard : Object {
             public WallpaperItem item;
             public WallpaperCard card;
             public Button button;
             public bool matches = true;
         }
 
-        // SettingsView caches pages and reuses this instance across every
-        // visit (settings_view.vala: "Reuse cached pages - they self-update
-        // via GSettings listeners"). imports.discover() only scans sidecars
-        // that exist on disk AT THE TIME IT RUNS, so a one-time call in the
-        // constructor goes stale the moment a collection is deleted+
-        // re-imported from elsewhere (e.g. the Desktop settings page) while
-        // this page sits cached: the in-memory "added" set still claims the
-        // re-imported keys are present, so their cards render greyed out
-        // ("Added", disabled) even though the files backing that claim are
-        // long gone. Re-run discover() (and re-browse so the grid's cards are
-        // rebuilt with fresh is_added() state baked into both their label and
-        // sensitivity) every time this page becomes visible again, not just
-        // once at construction.
-        //
-        // That re-browse is cache-aware: a crawl younger than
-        // WallpaperBrowseCache.TTL_SECONDS repaints the grid from disk instead
-        // of re-crawling the category over the network, which is what makes
-        // a repeat visit instant. It deliberately does NOT set force_refresh:
-        // returning to a page the user has already seen is not a request for
-        // fresher data, it is a request to see the page again -- and, if a
-        // category is already selected, a request to see it refreshed (see
-        // browse_all()'s dispatch). The Refresh button is the explicit way
-        // to bypass the cache.
+        // SettingsView caches pages and reuses this instance across visits.
+        // The browse cache keeps revisiting a source inexpensive; Refresh is
+        // the explicit way to request fresh provider data.
         private bool mapped_once = false;
 
-        public WallpaperOcsBrowserPage(SettingsView view, string[] roots) {
-            base(_("Online Wallpapers"));
-            collection_roots = roots;
-            imports.discover(WallpaperCollections.parse(roots));
+        public WallpaperProviderBrowserPage(SettingsView view) {
+            base(_("Wallpaper Sources"));
             session.timeout = 25;
             session.user_agent = "Singularity-Wallpaper-Browser/1";
             this.map.connect(() => {
                 if (!mapped_once) { mapped_once = true; return; }
-                imports.discover(WallpaperCollections.parse(collection_roots));
                 browse_all.begin();
             });
             back_clicked.connect(() => view.navigate_to("desktop"));
 
             provider_group = new PreferencesGroup();
-            provider_row = new SelectionRow.with_options(_("Online source"),
+            provider_row = new SelectionRow.with_options(_("Wallpaper source"),
                 new Gee.ArrayList<Singularity.Core.AppSettingOption>());
             provider_group.add_row(provider_row);
             add_group(provider_group);
 
-            openverse_credentials = new ProviderCredentialGroup(_("Openverse account"), _("Your email address"), false,
-                _("Optional per-user registration. Openverse sends a verification email; until verified, anonymous-tier limits apply. Credentials stay on this computer."));
-            openverse_credentials.submitted.connect((value) => register_openverse.begin(value));
-            add_group(openverse_credentials);
-            unsplash_credentials = new ProviderCredentialGroup(_("Unsplash account"), _("Your Unsplash Access Key"), true,
-                _("Optional personal key. Without one, Stock Photos still searches Openverse. The key stays on this computer."));
-            unsplash_credentials.submitted.connect((value) => configure_unsplash.begin(value));
-            add_group(unsplash_credentials);
             online_search_group = new PreferencesGroup();
-            online_search = new EntryRow(_("Search Stock Photos"));
+            online_search = new EntryRow(_("Search wallpapers"));
             online_search.text = "nature";
             // EntryRow has no built-in show_apply_button/apply pair; an
             // explicit suffix button plus Enter-to-search covers the same
@@ -190,10 +139,8 @@ namespace Singularity.Shell {
                 if (!updating) filter_cards();
             });
             refresh = new Button.from_icon_name("view-refresh-symbolic");
-            // force_refresh does two things: it bypasses the on-disk crawl
-            // cache in browse_category(), and it sets NCZ_WALLPAPER_REFRESH
-            // for the helper so its own cache is bypassed too. Refresh is
-            // therefore the one path that is guaranteed to hit the network.
+            // Refresh bypasses the shell-side browse cache. The active
+            // provider decides how a fresh request is performed.
             refresh.tooltip_text = _("Refresh now (ignore cached results)");
             refresh.valign = Align.CENTER;
             refresh.clicked.connect(() => {
@@ -267,147 +214,45 @@ namespace Singularity.Shell {
         private bool updating = false;
 
         private void update_controls() {
-            if (search_row != null) search_row.sensitive = !imports.busy;
-            refresh.sensitive = !imports.busy && !loading;
+            if (search_row != null) search_row.sensitive = active_import_key == "";
+            refresh.sensitive = active_import_key == "" && !loading;
             foreach (var card in cards)
-                card.button.sensitive = !imports.busy && !imports.is_added(card.item.key);
+                card.button.sensitive = active_import_key == "" && !imported_keys.contains(card.item.key);
             // Filter UI is filter UI, not destructive: a busy import does
             // not warrant disabling it, but a still-loading grid would
             // mean picking a category changes nothing visible yet, so the
             // category dropdown disables while loading.
             category_row.sensitive = !loading;
-            previous_page.sensitive = !loading && !imports.busy && photo_page > 1;
-            next_page.sensitive = !loading && !imports.busy && photo_page < photo_page_count;
-            online_search.sensitive = !imports.busy && !loading;
-            if (loading || imports.busy) spinner.start(); else spinner.stop();
-        }
-
-        private static void stop_helper(Subprocess process) {
-            // Import invokes ImageMagick children. Stop the whole private process
-            // group so a timeout cannot leave a writer running after Retry.
-            string? identifier = process.get_identifier();
-            int pid = 0;
-            if (identifier != null && int.try_parse(identifier, out pid) && pid > 1)
-                Posix.kill((Posix.pid_t) (-pid), Posix.Signal.KILL);
-            process.force_exit();
-        }
-
-        private async string command(string[] argv, Cancellable? cancel, uint timeout, string? input = null) throws Error {
-            var launcher = new SubprocessLauncher(SubprocessFlags.STDIN_PIPE | SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
-            if (force_refresh) launcher.setenv("NCZ_WALLPAPER_REFRESH", "1", true);
-            launcher.set_child_setup(() => { Posix.setsid(); });
-            var process = launcher.spawnv(argv);
-            bool timed_out = false;
-            uint timer = Timeout.add_seconds(timeout, () => {
-                timed_out = true;
-                stop_helper(process);
-                return Source.REMOVE;
-            });
-            ulong cancel_handler = 0;
-            if (cancel != null) {
-                cancel_handler = cancel.cancelled.connect(() => stop_helper(process));
-                if (cancel.is_cancelled()) stop_helper(process);
-            }
-            string output;
-            string errors;
-            try {
-                // Drain and reap even after cancellation, then discard the result.
-                yield process.communicate_utf8_async(input, null, out output, out errors);
-            } catch (Error e) {
-                stop_helper(process);
-                yield process.wait_async(null);
-                throw e;
-            } finally {
-                if (!timed_out) Source.remove(timer);
-                if (cancel_handler != 0) cancel.disconnect(cancel_handler);
-            }
-            if (cancel != null) cancel.set_error_if_cancelled();
-            if (timed_out) throw new IOError.TIMED_OUT(_("Wallpaper request timed out. Try again."));
-            if (!process.get_successful()) {
-                string detail = errors.strip();
-                if (detail.length > 300) detail = detail.substring(0, 300).make_valid();
-                throw new IOError.FAILED(detail != "" ? detail : _("Wallpaper helper failed."));
-            }
-            return output;
+            previous_page.sensitive = !loading && active_import_key == "" && photo_page > 1;
+            next_page.sensitive = !loading && active_import_key == "" && photo_page < photo_page_count;
+            online_search.sensitive = active_import_key == "" && !loading;
+            if (loading || active_import_key != "") spinner.start(); else spinner.stop();
         }
 
         private async void initialize() {
-            try {
-                uint8[] contents;
-                yield File.new_for_path("/usr/share/ncz-wallpapers/ocs-category-index.json").load_contents_async(null, out contents, null);
-                category_index = (string) contents;
-                WallpaperOcs.categories(category_index, "ocs");
-            } catch (Error e) {
-                category_index = "";
+            string first_provider = "";
+            foreach (var provider in provider_registry.list()) {
+                if (provider.id == "singularity") continue;
+                first_provider = provider.id;
+                break;
             }
-            rebuild_provider_row("ocs");
-            select_provider("ocs");
+            rebuild_provider_row(first_provider);
+            if (first_provider != "") select_provider(first_provider);
+            else status.label = _("Enable a wallpaper source plugin to browse additional wallpapers.");
         }
 
-        // A provider's display name is not always known at construction: Bing
-        // only learns whether it is serving the de-duplicated combined view
-        // once its helper has answered `markets`, and renames itself to
-        // "Bing (Combined, All Markets)" when it is. So the row is rebuilt
-        // from the registry's live names rather than snapshotted once, and
-        // select_provider_choices() calls this again after a load.
         private void rebuild_provider_row(string current) {
             providers.clear();
             var options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
-            foreach (var provider in provider_registry.get_active()) {
-                providers.add(new WallpaperOcsChoice(provider.id, _(provider.display_name)));
+            foreach (var provider in provider_registry.list()) {
+                if (provider.id == "singularity") continue;
+                providers.add(new WallpaperProviderChoice(provider.id, _(provider.display_name)));
                 options.add(new Singularity.Core.AppSettingOption() {
                     id = provider.id, label = _(provider.display_name) });
             }
             updating = true;
             set_choices(provider_row, options, current);
             updating = false;
-        }
-
-        private async void credential_status() {
-            try {
-                string data = yield command({OPENVERSE_HELPER, "status"}, null, 15);
-                var obj = WallpaperOcs.document(data, false);
-                var registered = obj.get_member("registered");
-                bool saved = registered != null && registered.get_value_type() == typeof(bool) && registered.get_boolean();
-                openverse_credentials.set_state(saved ? _("Credentials saved. Verify your email using the Openverse link.")
-                                            : _("Anonymous access is available without registration."), !saved);
-            } catch (Error e) {
-                openverse_credentials.set_state(e.message, true);
-            }
-            try {
-                string data = yield command({UNSPLASH_HELPER, "status"}, null, 15);
-                var obj = WallpaperOcs.document(data, false);
-                var configured = obj.get_member("configured");
-                bool saved = configured != null && configured.get_value_type() == typeof(bool) && configured.get_boolean();
-                unsplash_credentials.set_state(saved ? _("Unsplash Access Key saved.")
-                                                      : _("Add your Access Key to include Unsplash results."), !saved);
-            } catch (Error e) {
-                unsplash_credentials.set_state(_("Unsplash helper unavailable: %s").printf(e.message), true);
-            }
-        }
-
-        private async void register_openverse(string email) {
-            openverse_credentials.set_state(_("Registering with Openverse…"), false);
-            try {
-                string data = yield command({OPENVERSE_HELPER, "register"}, null, 90, email);
-                var obj = WallpaperOcs.document(data, false);
-                openverse_credentials.set_state(WallpaperOcs.text(obj, "message"), false);
-            } catch (Error e) {
-                openverse_credentials.set_state(e.message, true);
-            }
-        }
-
-        private async void configure_unsplash(string key) {
-            unsplash_credentials.set_state(_("Saving Unsplash Access Key…"), false);
-            try {
-                string data = yield command({UNSPLASH_HELPER, "configure"}, null, 30, key);
-                var obj = WallpaperOcs.document(data, false);
-                unsplash_credentials.set_state(WallpaperOcs.text(obj, "message"), false);
-                photo_page = 1;
-                browse_all.begin();
-            } catch (Error e) {
-                unsplash_credentials.set_state(e.message, true);
-            }
         }
 
         private async void browse_stock(WallpaperProvider provider) {
@@ -450,49 +295,25 @@ namespace Singularity.Shell {
         // grid stays empty until the user actually picks one (see
         // on_category_row_selected() / browse_category()). The one
         // exception is a provider whose dropdown collapses to a single
-        // choice (Bing's de-duplicated combined view) -- there is nothing
-        // to pick, so that one choice loads immediately, same as before.
+        // choice -- there is nothing to pick, so it loads immediately.
         private void select_provider(string provider_id) {
             if (provider_id == "") return;
             force_refresh = false;
             var provider = provider_registry.lookup(provider_id);
             if (provider == null) return;
             bool photos = provider.supports_search;
-            openverse_credentials.visible = provider_id == "openverse";
-            unsplash_credentials.visible = provider_id == "unsplash";
             online_search_group.visible = photos;
             category_row.visible = !photos;
             active_category_id = "";
             if (photos) {
                 photo_page = 1;
                 categories.clear();
-                if (provider.requires_credentials || provider_id == "openverse") credential_status.begin();
                 browse_all.begin();
-                return;
-            }
-            if (provider_id == BING_PROVIDER_ID) {
-                select_provider_choices.begin(provider);
-                return;
-            }
-            if (category_index == "") {
-                generation++;
-                request.cancel();
-                cards.clear();
-                reset_thumbnail_loading();
-                grid.remove_all();
-                loading = false;
-                status.label = _("OCS category index is missing. Install the wallpaper helpers, then reopen this page.");
-                update_controls();
                 return;
             }
             select_provider_choices.begin(provider);
         }
 
-        // Bing equivalent of the OCS provider/category-index load: one
-        // synchronous `ncz-wallpaper-bing markets` call, TSV-parsed into the
-        // same WallpaperOcsChoice list the category dropdown already knows how to
-        // render. Errors are surfaced through `status` exactly like an OCS
-        // category-index parse failure.
         private async void select_provider_choices(WallpaperProvider provider) {
             int gen = ++generation;
             request.cancel();
@@ -502,13 +323,8 @@ namespace Singularity.Shell {
             status.label = _("Loading %s choices…").printf(provider.display_name);
             update_controls();
             try {
-                var loaded = yield provider.choices(category_index, cancel);
+                var loaded = yield provider.choices("", cancel);
                 if (gen != generation) return;
-                // The provider may have renamed itself off the back of that
-                // answer (Bing -> "Bing (Combined, All Markets)"), so the
-                // "Online source" row is re-labelled before the grid fills.
-                // Keeping the current selection is what makes this safe to do
-                // mid-flight -- it rebuilds labels, never the selection.
                 rebuild_provider_row(provider.id);
                 categories = loaded;
                 active_category_id = "";
@@ -519,9 +335,8 @@ namespace Singularity.Shell {
                 loading = false;
                 update_controls();
                 if (!category_row.visible && categories.size == 1) {
-                    // Nothing to pick (Bing's single combined choice, or any
-                    // provider that happens to expose exactly one usable
-                    // category) -- load it directly, same as before.
+                    // Nothing to pick when a provider exposes exactly one
+                    // usable category, so load it directly.
                     active_category_id = categories[0].id;
                     browse_category.begin(active_category_id);
                 } else {
@@ -541,9 +356,8 @@ namespace Singularity.Shell {
             foreach (var choice in categories) {
                 options.add(new Singularity.Core.AppSettingOption() { id = choice.id, label = choice.name });
             }
-            // A dropdown with one real choice offers nothing to pick. Bing's
-            // de-duplicated combined view is a single choice by
-            // construction and loads directly (see select_provider_choices).
+            // A dropdown with one real choice offers nothing to pick and
+            // loads directly (see select_provider_choices).
             category_row.visible = categories.size > 1;
             bool was_updating = updating;
             updating = true;
@@ -830,7 +644,6 @@ namespace Singularity.Shell {
             public ArrayList<string> errors = new ArrayList<string>();
             public ArrayList<WallpaperBrowseCacheEntry> results = new ArrayList<WallpaperBrowseCacheEntry>();
             public HashSet<string> seen_keys = new HashSet<string>();
-            public HashSet<string> seen_ocs_ids = new HashSet<string>();
             public bool background;
             public int generation;
             public string provider;
@@ -892,8 +705,7 @@ namespace Singularity.Shell {
                     if (result.warning != "") error = _(result.warning);
                     foreach (var item in items) {
                         if (state.background) {
-                            bool duplicate = state.seen_keys.contains(item.key) ||
-                                (WallpaperOcs.provider_id(item.provider_id) && state.seen_ocs_ids.contains(item.id));
+                            bool duplicate = state.seen_keys.contains(item.key);
                             if (duplicate) continue;
                         } else if (has_card(item)) continue;
                         // Re-check the cap under the lock so two workers
@@ -912,7 +724,6 @@ namespace Singularity.Shell {
                         if (overflow) break;
                         if (state.background) {
                             state.seen_keys.add(item.key);
-                            if (WallpaperOcs.provider_id(item.provider_id)) state.seen_ocs_ids.add(item.id);
                             state.results.add(new WallpaperBrowseCacheEntry(item, category));
                         } else {
                             add_card(item);
@@ -966,7 +777,7 @@ namespace Singularity.Shell {
             }
             grid.invalidate_filter();
             queue_viewport_thumbnails();
-            if (!loading && !imports.busy) {
+            if (!loading && active_import_key == "") {
                 if (cards.size == 0) status.label = _("No importable wallpapers for this category.");
                 else if (count == 0) status.label = _("No matches among loaded wallpapers. Clear the filter or refresh.");
                 else status.label = _("%d wallpapers shown · %d loaded").printf(count, cards.size);
@@ -1002,7 +813,7 @@ namespace Singularity.Shell {
         private bool has_card(WallpaperItem item) {
             foreach (var existing in cards) {
                 if (existing.item.key == item.key ||
-                    (WallpaperOcs.provider_id(existing.item.provider_id) && WallpaperOcs.provider_id(item.provider_id) && existing.item.id == item.id)) return true;
+                    existing.item.provider_id == item.provider_id && existing.item.id == item.id) return true;
             }
             return false;
         }
@@ -1014,28 +825,21 @@ namespace Singularity.Shell {
                 item.author = WallpaperSidecar.plain_text(item.author);
                 item.license = WallpaperSidecar.plain_text(item.license);
             }
-            var card = new OcsCard();
+            var card = new ProviderCard();
             card.item = item;
-            // Use placeholder_only: the OCS browser drives its own async
+            // Use placeholder_only: the provider browser drives its own async
             // thumbnail load (with generation/close guards) via load_one_
             // thumbnail() rather than letting WallpaperCard's built-in
             // worker handle it (which has no generation awareness).
-            string card_title = item.name != "" ? item.name : (item.provider_id == BING_PROVIDER_ID ? _("Bing wallpaper") : _("Wallpaper"));
+            string card_title = item.name != "" ? item.name : _("Wallpaper");
             card.card = new WallpaperCard.placeholder_only(item.key, card_title);
-            // Attribution / licence badge. OCS shows uploader · provider;
-            // Bing shows market · "Bing". Honour dim-label style so the
-            // badge reads as supporting text, not primary title.
-            string attribution;
-            if (item.provider_id == BING_PROVIDER_ID)
-                attribution = "%s · %s".printf(_("Bing"), item.market != "" ? item.market : item.provider_id);
-            else
-                attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown uploader"),
-                    item.provider_id == "openverse" ? _("Openverse") : item.provider_id == "unsplash" ? _("Unsplash") : _("OCS Network"));
+            string attribution = "%s · %s".printf(item.author != "" ? item.author : _("Unknown author"),
+                item.provider_id);
             string license_text = item.license != "" ? item.license : _("No license stated");
             card.card.set_badge(attribution + "  ·  " + license_text);
-            if (item.provider_id == "openverse" || item.provider_id == "unsplash") {
+            if (item.attribution != "" || item.page_url != "" || item.license_url != "") {
                 var metadata = WallpaperAttribution() { title = "", author = item.attribution != "" ? item.attribution : item.author,
-                    source = (item.provider_id == "unsplash" ? "Unsplash · " : "Openverse · ") + item.license,
+                    source = item.provider_id + " · " + item.license,
                     page_url = item.page_url, license_url = item.license_url, valid = true };
                 var credit = new Label(WallpaperSidecar.display_text(metadata));
                 credit.use_markup = false;
@@ -1043,27 +847,16 @@ namespace Singularity.Shell {
                 credit.selectable = true;
                 credit.max_width_chars = 28;
                 card.card.append(credit);
-                if (item.provider_id == "unsplash" && (item.creator_url.has_prefix("https://") || item.creator_url.has_prefix("http://")))
-                    card.card.append(new LinkButton.with_label(item.creator_url, _("Photographer on Unsplash")));
+                if (item.creator_url.has_prefix("https://") || item.creator_url.has_prefix("http://"))
+                    card.card.append(new LinkButton.with_label(item.creator_url, _("Creator page")));
                 if (item.page_url.has_prefix("https://") || item.page_url.has_prefix("http://"))
                     card.card.append(new LinkButton.with_label(item.page_url, _("Original image / attribution")));
                 if (item.license_url.has_prefix("https://") || item.license_url.has_prefix("http://"))
                     card.card.append(new LinkButton.with_label(item.license_url, item.license));
             }
-            // Card click: WallpaperCard emits clicked() on the GestureClick
-            // wired in build_card(); for OCS/Bing this is purely a visual
-            // affordance; importing is the meaningful action for searchable
-            // providers. Bing entries are already local. The checkmark stays
-            // decorative.
-            // Action button (Import / Added). Bing entries were added by the
-            // scheduled accumulator already, so there is no per-card action.
-            if (item.provider_id == BING_PROVIDER_ID) {
-                card.button = new Button.with_label(_("Added"));
-                card.button.sensitive = false;
-            } else {
-                card.button = new Button.with_label(imports.is_added(item.key) ? _("Added") : _("Import"));
-                card.button.clicked.connect(() => { import_card.begin(card); });
-            }
+            card.button = new Button.with_label(imported_keys.contains(item.key) ? _("Added") : _("Import"));
+            card.button.sensitive = !imported_keys.contains(item.key);
+            card.button.clicked.connect(() => { import_card.begin(card); });
             card.card.append_action_button(card.button);
             grid.append(card.card);
             cards.add(card);
@@ -1118,14 +911,8 @@ namespace Singularity.Shell {
 
         // Async thumbnail loader, fanned out for newly visible cards.
         // Two source paths:
-        //   * Bing items: thumbnail_path is a local file (helper pre-
-        //     downloaded the 400x240 JPEG before the `list` response was
-        //     built). Read the bytes, then decode via MemoryInputStream so
-        //     the loader does not block on the open InputStream (passing
-        //     an already-open stream to from_stream_at_scale_async can
-        //     deadlock on the read loop -- the loader assumes it owns the
-        //     stream and reads it synchronously until EOF).
-        //   * OCS items: item.preview is a remote URL, fetched via Soup.
+        //   * Local items use thumbnail_path.
+        //   * Remote items use item.preview and are fetched via Soup.
         //   * Either path failure just leaves the placeholder visible;
         //     a missing preview must not prevent browsing or importing.
         //
@@ -1139,7 +926,7 @@ namespace Singularity.Shell {
                 var card = cards[i];
                 Gdk.Pixbuf? pixbuf = null;
                 if (card.item.thumbnail_path != "") {
-                    // Bing local-file path.
+                    // Local file path supplied by the provider.
                     try {
                         var file = File.new_for_path(card.item.thumbnail_path);
                         if (!file.query_exists()) {
@@ -1175,7 +962,7 @@ namespace Singularity.Shell {
                         continue;
                     }
                 } else {
-                    // OCS Soup path.
+                    // Remote preview path.
                     string url = card.item.preview;
                     if (!url.has_prefix("https://") && !url.has_prefix("http://")) continue;
                     var cached = thumbnail_cache.get(url);
@@ -1233,7 +1020,7 @@ namespace Singularity.Shell {
                 // The local var capture is safe: pixbuf is a fresh heap
                 // object and `card` is a strong ref into the cards[] list.
                 Gdk.Pixbuf captured_pb = pixbuf;
-                OcsCard captured_card = card;
+                ProviderCard captured_card = card;
                 int captured_index = i;
                 Idle.add(() => {
                     if (gen == generation && thumbnail_requested.contains(captured_index) && captured_card.card != null)
@@ -1247,7 +1034,7 @@ namespace Singularity.Shell {
         // touching the picture's paintable (the placeholder stays
         // visible). Marshalled to the main thread so it can run from any
         // async context safely.
-        private void show_thumb_unavailable(OcsCard card) {
+        private void show_thumb_unavailable(ProviderCard card) {
             Idle.add(() => {
                 if (generation >= 0 && card.card != null) {
                     // Tooltip on the WallpaperCard itself rather than on
@@ -1258,24 +1045,26 @@ namespace Singularity.Shell {
             });
         }
 
-        private async void import_card(OcsCard card) {
-            if (!imports.begin(card.item.key)) return;
+        private async void import_card(ProviderCard card) {
+            if (active_import_key != "" || imported_keys.contains(card.item.key)) return;
+            active_import_key = card.item.key;
             card.button.label = _("Importing…");
             status.label = _("Downloading and preparing wallpaper pack…");
             update_controls();
             try {
-                var provider = provider_registry.lookup(card.item.provider_id == "pling" || card.item.provider_id == "kde-look" || card.item.provider_id == "gnome-look" ? "ocs" : card.item.provider_id);
+                string owner = card.item.owner_id != "" ? card.item.owner_id : card.item.provider_id;
+                var provider = provider_registry.lookup(owner);
                 if (provider == null) throw new IOError.NOT_SUPPORTED("Wallpaper provider is not active.");
-                string data = yield provider.import_item(card.item, null);
-                imports.complete(card.item.key, data, collection_roots);
+                yield provider.import_item(card.item, null);
+                imported_keys.add(card.item.key);
                 card.button.label = _("Added");
                 status.label = _("Theme pack updated. Choose it in Wallpaper Source.");
                 imported();
             } catch (Error e) {
-                imports.fail(card.item.key);
                 card.button.label = _("Retry import");
                 status.label = _("Import failed: %s").printf(e.message);
             }
+            active_import_key = "";
             update_controls();
         }
     }

@@ -462,6 +462,13 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             Singularity.VpnProviderRegistry.get_default().add(p));
         context.vpn_provider_removed.connect((p) =>
             Singularity.VpnProviderRegistry.get_default().remove(p));
+        context.wallpaper_provider_added.connect((p) =>
+            Singularity.WallpaperProviderRegistry.get_default().add(p));
+        context.wallpaper_provider_removed.connect((p) =>
+            Singularity.WallpaperProviderRegistry.get_default().remove(p));
+        // The local "singularity" wallpaper provider is core, not a plugin,
+        // and is the only provider active by default.
+        Singularity.WallpaperProviderRegistry.get_default().add(new Singularity.SingularityWallpaperProvider());
         context.shell_surface_provider_added.connect((p) =>
             Singularity.ShellSurfaceRegistry.get_default().add(p));
         context.shell_surface_provider_removed.connect((p) =>
