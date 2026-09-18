@@ -491,8 +491,6 @@ install_data('data/fan-control/dev.sinty.FanControl.conf',
 install_data('data/fan-control/dev.sinty.fan-control.policy',
   install_dir: get_option('datadir') / 'polkit-1' / 'actions')
 
-# Reference apt-based Artist Pack backend. ArtistPackManager resolves these
-# at fixed /usr/local/bin paths, never via PATH, so install there directly.
 install_data('data/artist-packs/singularity-artist-pack-inventory',
   install_dir: '/usr/local/bin', install_mode: 'rwxr-xr-x')
 install_data('data/artist-packs/singularity-artist-pack-install',
