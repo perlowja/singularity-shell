@@ -344,6 +344,9 @@ namespace Singularity {
         // bottom-left, matching this overlay's original fixed corner.
         private void update_attribution_position() {
             string position = settings.get_string("wallpaper-attribution-position");
+            bool at_top = position == "top-left" || position == "top-right";
+            attribution_label.margin_top = ATTRIBUTION_MARGIN
+                + (at_top ? AppSystem.get_default().shell_panel_height : 0);
             switch (position) {
                 case "top-left":
                     attribution_label.halign = Align.START;

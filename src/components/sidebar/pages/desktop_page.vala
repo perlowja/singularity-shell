@@ -279,6 +279,8 @@ namespace Singularity {
             if (!valid_position) attribution_position = "bottom-left";
             var attribution_position_row = new SelectionRow.with_options(
                 _("Wallpaper Info Position"), attribution_position_options, attribution_position);
+            settings.bind("show-wallpaper-attribution", attribution_position_row,
+                "sensitive", SettingsBindFlags.GET);
             attribution_position_row.selected.connect((id) => {
                 settings.set_string("wallpaper-attribution-position", id);
             });
