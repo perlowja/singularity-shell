@@ -913,7 +913,7 @@ install_data('data/icons/singularity-account-secure-mail.svg',
 
 wallpaper_collections_test = executable('wallpaper-collections-test',
   sources: ['src/core/wallpaper_collections.vala', 'src/core/dynamic_wallpaper.vala', 'tests/wallpaper_collections_test.vala'],
-  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep, json_dep],
+  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep, json_dep, cc.find_library('m')],
 )
 test('wallpaper-collections', wallpaper_collections_test)
 
@@ -925,20 +925,20 @@ test('wallpaper-rotation-state', wallpaper_rotation_state_test)
 
 wallpaper_gallery_test = executable('wallpaper-gallery-test',
   sources: ['src/core/wallpaper_gallery.vala', 'src/core/dynamic_wallpaper.vala', 'tests/wallpaper_gallery_test.vala'],
-  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep, json_dep],
+  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep, json_dep, cc.find_library('m')],
 )
 test('wallpaper-gallery', wallpaper_gallery_test)
 wallpaper_rotator_test = executable('wallpaper-rotator-test',
   sources: ['src/core/wallpaper_collections.vala', 'src/core/wallpaper_gallery.vala', 'src/core/dynamic_wallpaper.vala',
             'src/core/wallpaper_rotation_state.vala', 'src/core/wallpaper_rotator.vala',
             'tests/wallpaper_rotator_test.vala'],
-  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep, json_dep],
+  dependencies: [dependency('gobject-2.0'), dependency('glib-2.0'), dependency('gio-2.0'), gee_dep, json_dep, cc.find_library('m')],
 )
 test('wallpaper-rotator', wallpaper_rotator_test)
 
 wallpaper_ocs_test = executable('wallpaper-ocs-test',
   sources: ['src/core/wallpaper_ocs.vala', 'src/core/wallpaper_browse_cache.vala', 'src/core/wallpaper_thumbnail_cache.vala', 'src/core/wallpaper_provider.vala', 'src/core/wallpaper_collections.vala', 'src/core/wallpaper_gallery.vala', 'src/core/dynamic_wallpaper.vala', 'tests/wallpaper_ocs_test.vala'],
-  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep, json_dep, libsingularity_dep],
+  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), gee_dep, json_dep, libsingularity_dep, cc.find_library('m')],
 )
 test('wallpaper-ocs', wallpaper_ocs_test)
 
@@ -950,7 +950,7 @@ test('wallpaper-sidecar', wallpaper_sidecar_test)
 
 dynamic_wallpaper_test = executable('dynamic-wallpaper-test',
   sources: ['src/core/dynamic_wallpaper.vala', 'src/core/dynamic_wallpaper_heic.vala', 'tests/dynamic_wallpaper_test.vala'],
-  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), dependency('gdk-pixbuf-2.0'), json_dep, libsingularity_dep],
+  dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), dependency('gdk-pixbuf-2.0'), json_dep, libsingularity_dep, cc.find_library('m')],
 )
 test('dynamic-wallpaper', dynamic_wallpaper_test)
 
