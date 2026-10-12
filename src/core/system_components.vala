@@ -75,10 +75,15 @@ namespace Singularity {
                 var caps = caps_for(name, labwc_raw);
                 bool warn = false;
                 foreach (var c in caps) if (c.required && !c.ok) warn = true;
+                string version = resolve(LIST[i, 2], labwc_raw);
+                if (LIST[i, 2] == "gtk" && has_sit()) {
+                    name = "SIT";
+                    version = "GTK " + version;
+                }
                 list.add(Component() {
                     name = name,
                     license = LIST[i, 1],
-                    version = resolve(LIST[i, 2], labwc_raw),
+                    version = version,
                     caps = caps,
                     warn = warn
                 });
@@ -220,6 +225,12 @@ namespace Singularity {
             }
             if (probe.has_prefix("lib:")) return lib_version(probe.substring(4));
             return "Not installed";
+        }
+
+        private static bool has_sit() {
+            var self = Module.open(null, 0);
+            void* sym = null;
+            return self != null && self.symbol("sit_widget_set_visual_transform", out sym) && sym != null;
         }
 
         private static string? run(string[] argv) {
