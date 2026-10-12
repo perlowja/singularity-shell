@@ -220,15 +220,8 @@ namespace Singularity {
                 Graphene.Rect bounds;
                 if (main_box.compute_bounds(this, out bounds)) {
                     _blur_shift = (int) Math.round(_content_bin.translate_x);
-                    int x = (int) bounds.origin.x + _blur_shift;
-                    int width = int.min((int) bounds.size.width, get_width() - x);
-                    if (width < 1) {
-                        x = 0;
-                        width = 1;
-                    }
-                    Singularity.Style.BackgroundEffect.apply(this, mode,
-                        x, (int) bounds.origin.y,
-                        width, (int) bounds.size.height);
+                    Singularity.Style.BackgroundEffect.apply_shapes(this,
+                        new Gtk.Widget[] { main_box }, mode);
                     var surface = get_surface();
                     if (surface != null) {
                         var region = new Cairo.Region.rectangle(Cairo.RectangleInt() {

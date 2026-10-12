@@ -543,6 +543,9 @@ namespace Singularity {
                 id = "glass", label = _("Glass")
             });
             effect_options.add(new Singularity.Core.AppSettingOption() {
+                id = "liquid", label = _("Liquid Glass")
+            });
+            effect_options.add(new Singularity.Core.AppSettingOption() {
                 id = "blur", label = _("Classic Blur")
             });
             var effect_row = new SelectionRow.with_options(

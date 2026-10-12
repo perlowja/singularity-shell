@@ -919,8 +919,19 @@ namespace Singularity {
         private static Gtk.CssProvider? _flat_provider = null;
 
         private void update_background_effect() {
-            Singularity.Style.BackgroundEffect.apply(this,
+            Singularity.Style.BackgroundEffect.apply_shapes(this,
+                new Gtk.Widget[] { main_box },
                 Singularity.Style.BackgroundEffect.read(_settings));
+        }
+
+        public override void size_allocate(int width, int height, int baseline) {
+            base.size_allocate(width, height, baseline);
+            update_background_effect();
+        }
+
+        public override void snapshot(Gtk.Snapshot snapshot) {
+            update_background_effect();
+            base.snapshot(snapshot);
         }
 
         private static void apply_flat_opacity(GLib.Settings s) {

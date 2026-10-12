@@ -140,9 +140,8 @@ namespace Singularity {
             if (get_mapped()) {
                 Graphene.Rect bounds;
                 if (card.compute_bounds(this, out bounds)) {
-                    Singularity.Style.BackgroundEffect.apply(this, mode,
-                        (int) bounds.origin.x, (int) bounds.origin.y,
-                        (int) bounds.size.width, (int) bounds.size.height);
+                    Singularity.Style.BackgroundEffect.apply_shapes(this,
+                        new Gtk.Widget[] { card }, mode);
                     return;
                 }
             }

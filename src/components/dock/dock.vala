@@ -421,7 +421,10 @@ namespace Singularity {
         }
 
         private void update_background_effect() {
-            Singularity.Style.BackgroundEffect.apply(this,
+            Gtk.Widget[] shapes = dock_style == "panel"
+                ? new Gtk.Widget[] { main_container }
+                : new Gtk.Widget[] { start_viewport, center_viewport, end_viewport };
+            Singularity.Style.BackgroundEffect.apply_shapes(this, shapes,
                 Singularity.Style.BackgroundEffect.read(_settings));
         }
 
@@ -1098,6 +1101,7 @@ namespace Singularity {
         public override void snapshot(Gtk.Snapshot snapshot) {
             Gdk.RGBA clear = { 0.0f, 0.0f, 0.0f, 0.0f };
             snapshot.append_color(clear, Graphene.Rect() { origin = { 0.0f, 0.0f }, size = { 1.0f, 1.0f } });
+            update_background_effect();
             base.snapshot(snapshot);
         }
 
@@ -3177,6 +3181,7 @@ namespace Singularity {
 
             update_dock_reservation();
             update_input_region();
+            update_background_effect();
         }
 
         private Widget create_corner_hint(string corner_class) {
