@@ -155,6 +155,7 @@ namespace Singularity.SidebarPages {
                 case Capability.PHOTOS: return _("In Photos");
                 case Capability.MUSIC: return _("In Music");
                 case Capability.VIDEOS: return _("In Videos");
+                case Capability.CHAT: return _("In Messages");
                 default: return _("Kept for apps that support notes");
             }
         }

@@ -13,6 +13,7 @@ namespace Singularity.SidebarPages {
         private PreferencesGroup sessions_group;
         private PreferencesGroup history_group;
         private bool syncing = false;
+        private int generation = 0;
 
         public CollaborationPage(SettingsView view) {
             base(_("Collaboration"));
@@ -53,7 +54,10 @@ namespace Singularity.SidebarPages {
 
             client.people_changed.connect(() => refresh.begin());
             client.sessions_changed.connect(() => refresh.begin());
-            map.connect(() => refresh.begin());
+            map.connect(() => {
+                refresh.begin();
+                client.refresh_people.begin();
+            });
             add_search_action(_("Collaboration"), _("Work together with people nearby"), () => view.navigate_to("sharing-collab"));
         }
 
@@ -64,9 +68,14 @@ namespace Singularity.SidebarPages {
         }
 
         private async void refresh() {
+            int mine = ++generation;
             bool installed = Singularity.Collab.Client.installed();
-            unavailable.visible = !installed;
             bool on = installed && yield client.get_enabled();
+            var sessions = installed ? yield client.sessions() : new Gee.ArrayList<Singularity.Collab.SessionInfo>();
+            var providers = installed ? yield client.records("ListProviders") : new HashTable<string, Variant>[0];
+            var history = installed ? yield client.records("History") : new HashTable<string, Variant>[0];
+            if (mine != generation) return;
+            unavailable.visible = !installed;
             syncing = true;
             enabled_row.active = on;
             syncing = false;
@@ -78,10 +87,11 @@ namespace Singularity.SidebarPages {
             if (!installed) return;
 
             sessions_group.clear();
-            var sessions = yield client.sessions();
             foreach (var s in sessions) {
-                string who = s.people.length > 0 ? string.joinv(", ", s.people) : _("Waiting for people to join");
-                string subtitle = s.hosting ? _("Shared by you with %s").printf(who) : _("Shared by %s").printf(s.host_name);
+                string subtitle;
+                if (!s.hosting) subtitle = _("Shared by %s").printf(s.host_name);
+                else if (s.people.length > 0) subtitle = _("Shared by you with %s").printf(string.joinv(", ", s.people));
+                else subtitle = _("Shared by you, waiting for people to join");
                 var row = info_row(s.title, "%s · %s".printf(Singularity.Collab.Client.kind_label(s.kind), subtitle), "system-users-symbolic");
                 var stop = new Button.with_label(s.hosting ? _("Stop") : _("Leave"));
                 stop.add_css_class("pill");
@@ -103,7 +113,6 @@ namespace Singularity.SidebarPages {
             sessions_group.visible = on && sessions.size > 0;
 
             people_group.clear();
-            yield client.refresh_people();
             foreach (var p in client.people) {
                 string subtitle = p.can_join ? p.provider_name : _("%s, can receive only").printf(p.provider_name);
                 people_group.add_row(info_row(p.name, subtitle, p.icon_name));
@@ -121,7 +130,7 @@ namespace Singularity.SidebarPages {
             }
 
             providers_group.clear();
-            foreach (var p in yield client.records("ListProviders")) {
+            foreach (var p in providers) {
                 string name = p.contains("name") ? p["name"].get_string() : "";
                 bool builtin = p.contains("builtin") && p["builtin"].get_boolean();
                 int n = p.contains("people") ? p["people"].get_int32() : 0;
@@ -132,7 +141,7 @@ namespace Singularity.SidebarPages {
 
             history_group.clear();
             int shown = 0;
-            foreach (var h in yield client.records("History")) {
+            foreach (var h in history) {
                 if (shown++ >= 8) break;
                 string title = h["title"].get_string();
                 string name = h["name"].get_string();
