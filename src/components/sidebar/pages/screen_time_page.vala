@@ -220,8 +220,8 @@ namespace Singularity.SidebarPages {
                 apps = Parental.UsageReport.week_apps(store, last_day);
             } else {
                 var day = day_at(selected_day);
-                period_group.title = selected_day == 6 ? _("Today")
-                    : (selected_day == 5 ? _("Yesterday") : day.format("%A"));
+                if (selected_day == 6) period_group.title = _("Today");
+                else period_group.title = selected_day == 5 ? _("Yesterday") : day.format("%A");
                 apps = store.day(Parental.UsageReport.day_key(day));
                 hero.label = Parental.UsageReport.format_duration(week[selected_day]);
                 int64 avg = 0;
