@@ -171,9 +171,21 @@ namespace Singularity {
 
         public ScreenSaverService(IdleInhibitors registry) {
             this.registry = registry;
-            IdleManager.get_default().notify["blanked"].connect(() => {
-                active_changed(IdleManager.get_default().blanked);
-            });
+            IdleManager.get_default().notify["blanked"].connect(on_state_changed);
+            SessionManager.get_default().notify["locked"].connect(on_state_changed);
+        }
+
+        private bool last_active = false;
+
+        private bool is_active() {
+            return IdleManager.get_default().blanked || SessionManager.get_default().locked;
+        }
+
+        private void on_state_changed() {
+            bool active = is_active();
+            if (active == last_active) return;
+            last_active = active;
+            active_changed(active);
         }
 
         public uint32 inhibit(string application_name, string reason_for_inhibit, BusName sender) throws Error {
@@ -189,7 +201,7 @@ namespace Singularity {
         }
 
         public bool get_active() throws Error {
-            return IdleManager.get_default().blanked;
+            return is_active();
         }
 
         public bool set_active(bool active) throws Error {
