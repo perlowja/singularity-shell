@@ -663,9 +663,11 @@ namespace Singularity {
             xml.append_printf("    <keybind key=\"XF86MonBrightnessDown\"><action name=\"Execute\"><command>%s brightness_down</command></action></keybind>\n", dbus_shorts);
             xml.append_printf("    <keybind key=\"XF86PowerOff\" overrideInhibition=\"yes\"><action name=\"Execute\"><command>%s power_button</command></action></keybind>\n", dbus_shorts);
             xml.append_printf("    <keybind key=\"XF86Sleep\" overrideInhibition=\"yes\"><action name=\"Execute\"><command>%s sleep_button</command></action></keybind>\n", dbus_shorts);
-            xml.append("  </keyboard>\n</labwc_config>\n");
+            xml.append("  </keyboard>\n");
+            xml.append("  <shaders>\n    <liquid>shaders/liquid.frag</liquid>\n  </shaders>\n</labwc_config>\n");
 
             var labwc = Singularity.Compositor.LabwcBackend.get_default();
+            GLib.DirUtils.create_with_parents(labwc.config_path("shaders"), 0755);
             bool menu_changed = labwc.write_config("menu.xml", build_labwc_menu_xml(dbus_shorts));
             if (labwc.write_config("rc.xml", xml.str) || menu_changed) {
                 message("ShortcutManager: wrote rc.xml, reloading labwc");
