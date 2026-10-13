@@ -46,6 +46,12 @@ namespace Singularity {
         public signal void hidden();
         public signal void hiding();
 
+        private void update_background_effect() {
+            var mode = Singularity.Style.BackgroundEffect.read(desktop_settings);
+            if (mode == Singularity.Style.BackgroundEffectMode.LIQUID) mode = Singularity.Style.BackgroundEffectMode.BLUR;
+            Singularity.Style.BackgroundEffect.apply(this, mode);
+        }
+
         public Overview(Gtk.Application app, Gtk.Window? anchor = null) {
             Object(application: app);
             anchor_window = anchor;
@@ -143,6 +149,8 @@ namespace Singularity {
             stage = new Singularity.Animation.MotionBin(main_box);
             set_child(stage);
             desktop_settings = new GLib.Settings("dev.sinty.desktop");
+            desktop_settings.changed["background-effect"].connect(update_background_effect);
+            map.connect_after(update_background_effect);
 
             search_entry = new Singularity.Widgets.SearchEntry();
             search_entry.placeholder_text = _("Type to search");

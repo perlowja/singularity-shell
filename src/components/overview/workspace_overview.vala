@@ -6,12 +6,53 @@ using Math;
 
 namespace Singularity {
 
+    private class GlassStrip : Box {
+        private weak Picture backdrop;
+        public bool glass { get; set; default = false; }
+
+        public GlassStrip(Picture backdrop) {
+            Object(orientation: Orientation.VERTICAL, spacing: 0);
+            this.backdrop = backdrop;
+            notify["glass"].connect(() => {
+                if (glass) add_css_class("glass");
+                else remove_css_class("glass");
+                queue_draw();
+            });
+        }
+
+        public override void snapshot(Gtk.Snapshot snapshot) {
+            var paintable = backdrop != null ? backdrop.paintable : null;
+            if (glass && paintable != null) {
+                double pw = paintable.get_intrinsic_width(), ph = paintable.get_intrinsic_height();
+                double bw = backdrop.get_width(), bh = backdrop.get_height();
+                Graphene.Point origin = Graphene.Point();
+                if (pw > 0 && ph > 0 && bw > 0 && bh > 0
+                        && backdrop.compute_point(this, Graphene.Point().init(0, 0), out origin)) {
+                    double scale = double.max(bw / pw, bh / ph);
+                    double dw = pw * scale, dh = ph * scale;
+                    var bounds = Graphene.Rect().init(0, 0, get_width(), get_height());
+                    snapshot.push_clip(bounds);
+                    snapshot.push_blur(48);
+                    snapshot.save();
+                    snapshot.translate(Graphene.Point().init(
+                        (float) (origin.x + (bw - dw) / 2), (float) (origin.y + (bh - dh) / 2)));
+                    paintable.snapshot(snapshot, dw, dh);
+                    snapshot.restore();
+                    snapshot.pop();
+                    snapshot.append_color(Gdk.RGBA() { red = 0, green = 0, blue = 0, alpha = 0.22f }, bounds);
+                    snapshot.pop();
+                }
+            }
+            base.snapshot(snapshot);
+        }
+    }
+
     public class WorkspaceOverview : Gtk.Window {
         private AppSystem app_system;
         private Box ws_box;
         private Stack window_stack;
         private Picture background_picture;
-        private Box ws_strip_container;
+        private GlassStrip ws_strip_container;
         private Gtk.Widget anim_box;
         private Singularity.Animation.MotionBin stage;
         private Singularity.Animation.MotionBin spread_bin;
@@ -40,6 +81,11 @@ namespace Singularity {
         public signal void shown();
         public signal void hidden();
         public signal void hiding();
+
+        private void update_strip_glass() {
+            ws_strip_container.glass = Singularity.Style.BackgroundEffect.read(gesture_settings)
+                != Singularity.Style.BackgroundEffectMode.DISABLED;
+        }
 
         public WorkspaceOverview(Gtk.Application app, Gdk.Monitor? monitor = null) {
             Object(application: app);
@@ -117,8 +163,10 @@ namespace Singularity {
             overlay.add_overlay(main_box);
 
             // Workspace Strip (Top area)
-            ws_strip_container = new Box(Orientation.VERTICAL, 0);
+            ws_strip_container = new GlassStrip(background_picture);
             ws_strip_container.add_css_class("workspace-strip-container");
+            update_strip_glass();
+            gesture_settings.changed["background-effect"].connect(update_strip_glass);
             ws_strip_container.vexpand = false;
             ws_strip_container.set_size_request(-1, 162);
             main_box.append(ws_strip_container);
