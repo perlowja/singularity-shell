@@ -48,6 +48,7 @@ namespace Singularity {
                 if (picked == null || picked == stage) dismiss();
             });
             stage.add_controller(click);
+            Singularity.Style.BackgroundEffect.track(this, () => { return _zone_widgets; });
 
             var keys = new EventControllerKey();
             keys.key_pressed.connect((keyval, code, state) => {

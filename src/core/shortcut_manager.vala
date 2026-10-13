@@ -59,6 +59,7 @@ namespace Singularity {
         [DBus (visible = false)]
         public signal void custom_keybindings_changed();
         private GLib.Settings settings;
+        private uint material_write_id = 0;
         private string? last_synced_xkb_layout = null;
         private string? last_synced_xkb_variant = null;
         private GLib.Settings? wm_settings;
@@ -168,6 +169,17 @@ namespace Singularity {
             settings.changed["workspaces-per-monitor"].connect(() => {
                 write_labwc_rc_xml();
             });
+            foreach (string key in new string[] {"background-effect", "glass-vibrancy", "liquid-refraction",
+                    "liquid-highlight"}) {
+                settings.changed[key].connect(() => {
+                    if (material_write_id != 0) GLib.Source.remove(material_write_id);
+                    material_write_id = GLib.Timeout.add(300, () => {
+                        material_write_id = 0;
+                        write_labwc_rc_xml();
+                        return false;
+                    });
+                });
+            }
             foreach (string key in new string[] {"tablet-output", "tablet-keep-aspect", "tablet-left-handed",
                     "tablet-area-custom", "tablet-area", "tablet-pressure-curve", "tablet-mouse-mode",
                     "tablet-stylus-buttons", "tablet-pad-buttons"}) {
@@ -523,7 +535,23 @@ namespace Singularity {
 
             // Show the snap/tile preview overlay immediately instead of after
             // labwc's default 500ms, so the tiling rectangles appear instantly (#120).
-            xml.append("  <snapping>\n    <overlay>\n      <delay inner=\"0\" outer=\"0\" />\n    </overlay>\n  </snapping>\n");
+            string effect = settings.get_string("background-effect");
+            string overlay_material = effect == "liquid" ? "liquid"
+                : effect == "glass" || effect == "blur" ? "blur" : "none";
+            xml.append("  <snapping>\n    <overlay>\n      <delay inner=\"0\" outer=\"0\" />\n");
+            xml.append_printf("      <material>%s</material>\n", overlay_material);
+            xml.append("    </overlay>\n  </snapping>\n");
+            double vibrancy = settings.get_int("glass-vibrancy").clamp(0, 100) / 100.0;
+            xml.append_printf("  <blur>\n    <saturation>%s</saturation>\n  </blur>\n",
+                "%.2f".printf(0.8 + vibrancy * 0.6).replace(",", "."));
+            xml.append("  <liquid>\n");
+            xml.append_printf("    <refraction>%s</refraction>\n",
+                "%.2f".printf(1.0 + settings.get_int("liquid-refraction").clamp(0, 100) / 100.0).replace(",", "."));
+            xml.append_printf("    <saturation>%s</saturation>\n",
+                "%.2f".printf(1.0 + vibrancy * 1.4).replace(",", "."));
+            xml.append_printf("    <highlight>%s</highlight>\n",
+                "%.2f".printf(settings.get_int("liquid-highlight").clamp(0, 100) / 50.0).replace(",", "."));
+            xml.append("  </liquid>\n");
 
             bool gestures = settings.get_boolean("gestures-enabled");
             string gesture_fingers = settings.get_string("gesture-fingers");

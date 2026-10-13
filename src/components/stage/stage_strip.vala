@@ -52,6 +52,7 @@ namespace Singularity {
             add_css_class("singularity");
             add_css_class("singularity-shell");
             add_css_class("stage-strip-window");
+            Singularity.Style.BackgroundEffect.track(this, () => { return new Gtk.Widget[] { _current, _new_set }; });
             set_default_size(STRIP_WIDTH, -1);
 
             _column = new Box(Orientation.VERTICAL, SPACING);

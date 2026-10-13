@@ -84,6 +84,28 @@ namespace Singularity {
             return "dual";
         }
 
+        private ActionRow material_scale_row(string title, string subtitle, string key, int max) {
+            var row = new ActionRow(title, subtitle);
+            row.activatable = false;
+            var scale = new Scale.with_range(Orientation.HORIZONTAL, 0, max, 1);
+            scale.width_request = 170;
+            scale.draw_value = true;
+            scale.digits = 0;
+            scale.value_pos = PositionType.RIGHT;
+            scale.set_value(settings.get_int(key));
+            scale.value_changed.connect(() => {
+                settings.set_int(key, (int) scale.get_value());
+            });
+            row.add_suffix(scale);
+            return row;
+        }
+
+        private void update_material_rows(Gtk.Widget[] effect_rows, Gtk.Widget[] liquid_rows) {
+            string effect = settings.get_string("background-effect");
+            foreach (var row in effect_rows) row.visible = effect != "disabled";
+            foreach (var row in liquid_rows) row.visible = effect == "liquid";
+        }
+
         // Inline custom color picker state (class fields - never capture mutable locals)
         private ExpanderRow? custom_picker_row = null;
         private FlowBox? accent_colors_box = null;
@@ -594,13 +616,27 @@ namespace Singularity {
             blur_strength_row.add_suffix(blur_strength_scale);
             material_group.add_row(blur_strength_row);
 
-            bool effect_enabled = settings.get_string("background-effect") != "disabled";
-            transparency_row.visible = effect_enabled;
-            blur_strength_row.visible = effect_enabled;
+            var card_transparency_row = material_scale_row(_("Menu and Card Transparency"),
+                _("Amount of wallpaper visible through menus, notifications and dialogs"), "card-transparency", 90);
+            material_group.add_row(card_transparency_row);
+            var tint_row = material_scale_row(_("Tint"),
+                _("Amount of accent color in the material"), "glass-tint", 40);
+            material_group.add_row(tint_row);
+            var vibrancy_row = material_scale_row(_("Vibrancy"),
+                _("Color saturation of what shows through"), "glass-vibrancy", 100);
+            material_group.add_row(vibrancy_row);
+            var refraction_row = material_scale_row(_("Refraction"),
+                _("How much the edge of liquid glass bends the backdrop"), "liquid-refraction", 100);
+            material_group.add_row(refraction_row);
+            var highlight_row = material_scale_row(_("Edge Light"),
+                _("Light caught by the rim of liquid glass"), "liquid-highlight", 100);
+            material_group.add_row(highlight_row);
+
+            Gtk.Widget[] effect_rows = { transparency_row, card_transparency_row, blur_strength_row, tint_row, vibrancy_row };
+            Gtk.Widget[] liquid_rows = { refraction_row, highlight_row };
+            update_material_rows(effect_rows, liquid_rows);
             settings.changed["background-effect"].connect(() => {
-                bool enabled = settings.get_string("background-effect") != "disabled";
-                transparency_row.visible = enabled;
-                blur_strength_row.visible = enabled;
+                update_material_rows(effect_rows, liquid_rows);
             });
 
             // Adaptive: follow a daily schedule (dark at night, the chosen mode by
