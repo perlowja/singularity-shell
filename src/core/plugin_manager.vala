@@ -186,7 +186,9 @@ namespace Singularity {
                      } catch (Error e) {
                          warning("Failed to load plugin %s: %s", module_name, e.message);
                      }
-                 } else if (!should_be_active && is_loaded) {
+                 } else if (should_be_active) {
+                     load_extension(info);
+                 } else if (is_loaded) {
                      unload_extension(info);
                  }
             }
@@ -213,6 +215,8 @@ namespace Singularity {
         }
 
         public Gtk.Widget? get_plugin_settings_widget(string module_name) {
+            if (!loaded_extensions.has_key(module_name) && is_plugin_enabled(module_name))
+                update_plugin_state(module_name, true);
             if (loaded_extensions.has_key(module_name)) {
                 return loaded_extensions.get(module_name).get_settings_widget();
             }
