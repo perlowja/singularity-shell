@@ -40,6 +40,7 @@ namespace Singularity {
 
             card = new Box(Orientation.VERTICAL, 8);
             card.add_css_class("clipboard-popup");
+            Singularity.Style.BackgroundEffect.track(this, () => { return new Gtk.Widget[] { card }; });
             card.width_request = CARD_WIDTH;
 
             var header = new Box(Orientation.HORIZONTAL, 8);

@@ -37,6 +37,7 @@ namespace Singularity {
             var card = new Gtk.Box(Gtk.Orientation.VERTICAL, 8);
             card.add_css_class("dialog-card");
             card.add_css_class("screenshot-thumbnail-card");
+            Singularity.Style.BackgroundEffect.track(this, () => { return new Gtk.Widget[] { card }; });
 
             _picture = new Gtk.Picture();
             _picture.content_fit = Gtk.ContentFit.CONTAIN;

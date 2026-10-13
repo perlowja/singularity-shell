@@ -28,6 +28,11 @@ namespace Singularity {
         add_css_class("notification-display");
             main_box = new Box(Orientation.VERTICAL, 8);
             set_child(main_box);
+            Singularity.Style.BackgroundEffect.track(this, () => {
+                Gtk.Widget[] shapes = {};
+                foreach (var bubble in bubbles.get_values()) shapes += bubble;
+                return shapes;
+            });
             animator = new Singularity.Animation.ListAnimator(main_box);
             var manager = SystemMonitor.get_default().notifications;
             manager.new_notification.connect(on_new_notification);

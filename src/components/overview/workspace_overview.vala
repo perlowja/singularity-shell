@@ -20,6 +20,17 @@ namespace Singularity {
             });
         }
 
+        private static Graphene.Matrix saturation_matrix(float amount) {
+            float r = 0.2126f * (1 - amount), g = 0.7152f * (1 - amount), b = 0.0722f * (1 - amount);
+            float[] m = {
+                r + amount, r, r, 0,
+                g, g + amount, g, 0,
+                b, b, b + amount, 0,
+                0, 0, 0, 1
+            };
+            return Graphene.Matrix().init_from_float(m);
+        }
+
         public override void snapshot(Gtk.Snapshot snapshot) {
             var paintable = backdrop != null ? backdrop.paintable : null;
             if (glass && paintable != null) {
@@ -32,12 +43,14 @@ namespace Singularity {
                     double dw = pw * scale, dh = ph * scale;
                     var bounds = Graphene.Rect().init(0, 0, get_width(), get_height());
                     snapshot.push_clip(bounds);
-                    snapshot.push_blur(48);
+                    snapshot.push_color_matrix(saturation_matrix(1.7f), Graphene.Vec4.zero());
+                    snapshot.push_blur(28);
                     snapshot.save();
                     snapshot.translate(Graphene.Point().init(
                         (float) (origin.x + (bw - dw) / 2), (float) (origin.y + (bh - dh) / 2)));
                     paintable.snapshot(snapshot, dw, dh);
                     snapshot.restore();
+                    snapshot.pop();
                     snapshot.pop();
                     snapshot.append_color(Gdk.RGBA() { red = 0, green = 0, blue = 0, alpha = 0.22f }, bounds);
                     snapshot.pop();

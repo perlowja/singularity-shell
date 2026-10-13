@@ -47,9 +47,8 @@ namespace Singularity {
         public signal void hiding();
 
         private void update_background_effect() {
-            var mode = Singularity.Style.BackgroundEffect.read(desktop_settings);
-            if (mode == Singularity.Style.BackgroundEffectMode.LIQUID) mode = Singularity.Style.BackgroundEffectMode.BLUR;
-            Singularity.Style.BackgroundEffect.apply(this, mode);
+            Singularity.Style.BackgroundEffect.apply(this,
+                Singularity.Style.BackgroundEffect.read(desktop_settings));
         }
 
         public Overview(Gtk.Application app, Gtk.Window? anchor = null) {

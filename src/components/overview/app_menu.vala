@@ -69,6 +69,7 @@ namespace Singularity {
             main_box = new Box(Orientation.VERTICAL, 0);
             main_box.overflow = Overflow.HIDDEN;
             main_box.add_css_class("app-menu-card");
+            Singularity.Style.BackgroundEffect.track(this, () => { return new Gtk.Widget[] { main_box }; });
             main_box.hexpand = true;
             main_box.vexpand = true;
             outer.append(main_box);

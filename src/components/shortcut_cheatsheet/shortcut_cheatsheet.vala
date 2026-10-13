@@ -102,6 +102,7 @@ namespace Singularity {
 
             card = new Box(Orientation.VERTICAL, 12);
             card.add_css_class("shortcut-cheatsheet");
+            Singularity.Style.BackgroundEffect.track(this, () => { return new Gtk.Widget[] { card }; });
             card.halign = Align.CENTER;
             card.valign = Align.CENTER;
             card.vexpand = true;

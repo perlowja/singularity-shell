@@ -108,6 +108,7 @@ namespace Singularity {
 
             card = new Box(Orientation.HORIZONTAL, 0);
             card.add_css_class("workspace-switch-feedback");
+            Singularity.Style.BackgroundEffect.track(this, () => { return new Gtk.Widget[] { card }; });
             markers = new WorkspaceMarkers();
             markers.halign = Align.CENTER;
             markers.valign = Align.CENTER;

@@ -122,6 +122,7 @@ namespace Singularity {
 
             card = new Box(Orientation.VERTICAL, 8);
             card.add_css_class("snap-picker");
+            Singularity.Style.BackgroundEffect.track(this, () => { return new Gtk.Widget[] { card }; });
             var title = new Label(_("Snap Layouts"));
             title.add_css_class("snap-picker-title");
             title.halign = Align.START;
