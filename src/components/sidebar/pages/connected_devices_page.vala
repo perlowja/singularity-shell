@@ -209,6 +209,9 @@ namespace Singularity.SidebarPages {
             if (incoming != null) {
                 request_id = incoming.id;
                 request_title.label = _("%s wants to pair with this computer").printf(incoming.name);
+                request_group.description = incoming.full_icon_name == "computer"
+                    ? _("Pair only if both devices show the same code. Computers pair as equals: they can send each other files and messages. Clipboard, notifications and media control stay off until you turn them on.")
+                    : _("Pair only if both devices show the same code.");
                 code_label.label = incoming.verification;
                 if (shown_request != incoming.id + incoming.verification) {
                     shown_request = incoming.id + incoming.verification;
