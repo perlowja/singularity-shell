@@ -1140,6 +1140,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         if (overview != null && overview.showing) {
             overview.toggle();
         }
+        if (app_menu != null && app_menu.visible) app_menu.toggle();
         if (!ensure_workspace_overview()) return;
         if (workspace_overviews_visible()) {
             close_workspace_overviews();
