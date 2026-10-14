@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="dev.sinty.desktop" path="/dev/sinty/desktop/">
+    <key name="wallpaper-favorites" type="as"><default>[]</default></key>
+  </schema>
+</schemalist>
