@@ -31,7 +31,7 @@ namespace Singularity {
             settings = new GLib.Settings("dev.sinty.desktop");
 
             init_for_window(this);
-            set_layer(this, GtkLayerShell.Layer.TOP);
+            set_layer(this, GtkLayerShell.Layer.OVERLAY);
             set_keyboard_mode(this, GtkLayerShell.KeyboardMode.ON_DEMAND);
 
             // The window itself carries the visual style (rounded box with blur),

@@ -58,7 +58,7 @@ namespace Singularity {
             search_manager = SearchManager.get_default();
 
             init_for_window(this);
-            set_layer(this, GtkLayerShell.Layer.TOP);
+            set_layer(this, GtkLayerShell.Layer.OVERLAY);
             set_anchor(this, GtkLayerShell.Edge.TOP, true);
             set_anchor(this, GtkLayerShell.Edge.BOTTOM, true);
             set_anchor(this, GtkLayerShell.Edge.LEFT, true);
@@ -357,7 +357,7 @@ namespace Singularity {
                 }
                 update_grid_columns();
 
-                set_layer(this, GtkLayerShell.Layer.TOP);
+                set_layer(this, GtkLayerShell.Layer.OVERLAY);
                 present();
                 // Populate AFTER present so the empty overview (background +
                 // search bar) paints immediately; the grid then streams in
