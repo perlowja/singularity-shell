@@ -343,6 +343,7 @@ namespace Singularity {
                     break;
             }
             attribution_label.queue_allocate();
+            if (wp_overlay != null) wp_overlay.queue_allocate();
         }
 
         private void update_wallpaper(WallpaperManager manager) {
