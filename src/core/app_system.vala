@@ -65,7 +65,7 @@ namespace Singularity {
         public static bool activate_next_created_workspace = false;
         public static Window? window_to_move_to_new_workspace = null;
         // Updated by Panel/Dock on allocation so screenshot geometry is accurate
-        public int shell_panel_height = 32;
+        public int shell_panel_height { get; set; default = 32; }
         public int shell_dock_height = 56;
 
         public List<string> get_running_apps() {

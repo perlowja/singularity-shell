@@ -44,10 +44,6 @@ namespace Singularity {
         // but the manager owns that decision). Bottom-left, 40% width x
         // 30% height, with a small margin from the very edge so the
         // sample doesn't include the empty space around the label.
-        // Sample rect fraction per quadrant, mirrored top<->bottom and
-        // left<->right from the original bottom-left values (x=0, y=0.65,
-        // w=0.40, h=0.30) so every quadrant samples the same fraction of
-        // wallpaper area the label actually sits over.
         private const double CORNER_SAMPLE_W_FRAC = 0.40;
         private const double CORNER_SAMPLE_H_FRAC = 0.30;
         private const double CORNER_SAMPLE_X_LEFT = 0.0;
@@ -71,6 +67,16 @@ namespace Singularity {
 
         public signal void first_painted();
         private bool _first_painted_done = false;
+
+        private ulong panel_handler = 0;
+
+        public override void dispose() {
+            if (panel_handler != 0) {
+                AppSystem.get_default().disconnect(panel_handler);
+                panel_handler = 0;
+            }
+            base.dispose();
+        }
 
         public Background(Gtk.Application app, Gdk.Monitor? monitor = null) {
             Object(application: app);
@@ -100,10 +106,6 @@ namespace Singularity {
             picture_b.can_target = false;
             wp_stack.add_overlay(picture_b);
 
-            // Attribution overlay. The label sits in a user-selected
-            // screen quadrant (halign/valign driven by GSettings,
-            // ATTRIBUTION_MARGIN gutter) and click-through so it never
-            // intercepts desktop mouse
             // events. can_target=false is GTK4's correct way to make a
             // widget hit-test-transparent; setting can_focus=false
             // prevents the label from grabbing Tab focus out of the
@@ -144,6 +146,7 @@ namespace Singularity {
                 }
             });
             update_attribution_position();
+            panel_handler = AppSystem.get_default().notify["shell-panel-height"].connect(() => update_attribution_position());
             // First load: set both pictures to avoid flash, no animation needed
             if (manager.display_texture != null) {
                 picture_a.set_paintable(manager.display_texture);
@@ -204,7 +207,6 @@ namespace Singularity {
 
         // Wallpaper attribution overlay (Background.vala).
         //
-        // Sits in a user-selected screen quadrant of the live desktop background
         // as a single Gtk.Label over the wallpaper cross-fade. The scrim
         // is a semi-transparent rounded rectangle so the text reads
         // against both bright and dark wallpapers without an aggressive
@@ -317,11 +319,6 @@ namespace Singularity {
             attribution_label.set_markup(markup);
             attribution_label.visible = true;
 
-            // Sample the active quadrant. The pixbuf aspect matches the
-            // screen aspect so a fractional corner maps 1:1 to a fractional
-            // corner of the screen at the same proportional position --
-            // must track wallpaper-attribution-position or a right/top
-            // placed label reads contrast sampled from the opposite corner.
             string sample_position = settings.get_string("wallpaper-attribution-position");
             double sample_x = (sample_position == "top-right" || sample_position == "bottom-right")
                 ? CORNER_SAMPLE_X_RIGHT : CORNER_SAMPLE_X_LEFT;
@@ -339,9 +336,6 @@ namespace Singularity {
             }
         }
 
-        // Valid values: "top-left", "top-right", "bottom-left" (default),
-        // "bottom-right" -- an unrecognized value safely falls back to
-        // bottom-left, matching this overlay's original fixed corner.
         private void update_attribution_position() {
             string position = settings.get_string("wallpaper-attribution-position");
             bool at_top = position == "top-left" || position == "top-right";
@@ -373,9 +367,6 @@ namespace Singularity {
                     attribution_label.yalign = 1.0f;
                     break;
             }
-            // Gtk.Overlay keeps its current child allocation when only the
-            // alignment changes, so explicitly request a fresh allocation
-            // for live GSettings changes to move the label immediately.
             attribution_label.queue_allocate();
         }
 
