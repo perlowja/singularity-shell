@@ -205,43 +205,18 @@ namespace Singularity {
                 Singularity.Motion.Duration.SCENE, Singularity.Motion.Curve.EMPHASIZED);
         }
 
-        // Wallpaper attribution overlay (Background.vala).
-        //
-        // as a single Gtk.Label over the wallpaper cross-fade. The scrim
-        // is a semi-transparent rounded rectangle so the text reads
-        // against both bright and dark wallpapers without an aggressive
-        // box, and the light-bg / non-light-bg pair matches the
-        // convention panel.vala already uses for the top band -- same
-        // colour tokens, same threshold (ATTRIBUTION_LUM_THRESHOLD = 0.72,
-        // defined above).
-        //
-        // The luminance class selects an opposing scrim/text pair
-        // independently of the active application theme, since wallpaper
-        // contrast cannot be inferred from the theme's text colour.
-        //
-        // Moved here from libsingularity's style.css (review on
-        // libsingularity#13: that stylesheet should stay limited to
-        // reusable widget styling, and this rule only exists for the
-        // wallpaper attribution overlay singularity-shell owns) -- rules
-        // and rationale unchanged, just relocated to the actual consumer.
         private const string ATTRIBUTION_CSS = """
 .background-window .attribution-label {
-    border-radius: 8px;
-    padding: 6px 12px;
     font-size: 13px;
     font-weight: 400;
 }
 .background-window.light-bg .attribution-label {
-    /* Bright wallpaper: dark scrim with light foreground. */
-    background-color: alpha(black, 0.65);
-    color: white;
-    text-shadow: 0 1px 2px alpha(black, 0.45);
+    color: black;
+    text-shadow: 0 1px 3px alpha(white, 0.55), 0 1px 1px alpha(white, 0.75);
 }
 .background-window:not(.light-bg) .attribution-label {
-    /* Dark wallpaper: light scrim with dark foreground. */
-    background-color: alpha(white, 0.72);
-    color: black;
-    text-shadow: 0 1px 2px alpha(white, 0.35);
+    color: white;
+    text-shadow: 0 1px 3px alpha(black, 0.55), 0 1px 1px alpha(black, 0.75);
 }
 """;
 
