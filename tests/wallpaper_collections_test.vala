@@ -122,8 +122,8 @@ private void test_protected_requires_origin_and_home_path() {
     DirUtils.create_with_parents(user_dir, 0700);
     string registry = Path.build_filename(root, "user-pack.collection");
     write_collection(root, "user-pack.collection", "registry\n");
-    var no_origin = new WallpaperCollectionInfo("ncz", "NCZ", "", user_dir, "static", "", registry, root);
-    var system_path = new WallpaperCollectionInfo("bing", "Bing", "", "/var/cache/ncz-wallpapers/bing", "static", "bing", registry, root);
+    var no_origin = new WallpaperCollectionInfo("pack", "Pack", "", user_dir, "static", "", registry, root);
+    var system_path = new WallpaperCollectionInfo("bing", "Bing", "", "/var/cache/singularity-wallpapers/bing", "static", "bing", registry, root);
     var user = new WallpaperCollectionInfo("ocs-x", "OCS", "", user_dir, "static", "ocs", registry, root);
     assert(!no_origin.deletable);
     assert(!system_path.deletable);

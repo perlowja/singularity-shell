@@ -85,9 +85,6 @@ private void remove_tree(string path) {
     try { var dir = Dir.open(path); string? name; while ((name = dir.read_name()) != null) { string child = Path.build_filename(path, name); if (FileUtils.test(child, FileTest.IS_DIR)) remove_tree(child); else FileUtils.unlink(child); } DirUtils.remove(path); } catch (Error e) { error("cleanup: %s", e.message); }
 }
 
-// Build the per-image sidecar JSON shape that the ncz-wallpaper-ocs helper
-// now writes: schema=1, origin="ocs", pack_id="imported-ocs", with provider
-// + source.ocs_id encoded in the same fields discover()/complete() parse.
 private string make_sidecar(string provider, string ocs_id, string image_filename) {
     return "{\"schema\":1,\"origin\":\"ocs\",\"pack_id\":\"imported-ocs\",\"image\":{\"file\":\"" + image_filename + "\"}," +
            "\"provider\":\"" + provider + "\"," +
@@ -298,28 +295,22 @@ private void test_import_complete_rejects_payload_without_sidecar_path() {
     remove_tree(root);
 }
 
-// Sample TSV emitted by `ncz-wallpaper-bing markets`. One "<id>\t<name>"
-// per line; the real helper hardcodes eight markets. We use a representative
-// four here so the parser is exercised on realistic input.
 private const string BING_MARKETS_TSV =
     "en-US\tUnited States\n" +
     "en-GB\tUnited Kingdom\n" +
     "en-AU\tAustralia\n" +
     "ja-JP\tJapan\n";
-// Sample list JSON emitted by `ncz-wallpaper-bing list <market>`. The shape
-// is a bare JSON array (no schema/items wrapper). Includes both pinned:true
-// and pinned:false so the bool parser is exercised on both branches.
 private const string BING_LIST_JSON =
     "[{\"provider\":\"bing\",\"date\":\"20260818\",\"market\":\"en-US\"," +
     "\"image_id\":\"OHR.Palmanova_EN-US0340289339\"," +
-    "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260818.jpg\"," +
+    "\"path\":\"/var/cache/singularity-wallpapers/bing/en-US/20260818.jpg\"," +
     "\"caption\":\"Palmanova\",\"copyright\":\"Marco Zoccheddu/Getty Images\"," +
-    "\"thumbnail_path\":\"/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg\"," +
+    "\"thumbnail_path\":\"/home/u/.cache/singularity-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg\"," +
     "\"pinned\":true}," +
     "{\"provider\":\"bing\",\"date\":\"20260817\",\"market\":\"en-US\"," +
-    "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260817.jpg\"," +
+    "\"path\":\"/var/cache/singularity-wallpapers/bing/en-US/20260817.jpg\"," +
     "\"caption\":\"Cliffside path\",\"copyright\":\"Sample Author\"," +
-    "\"thumbnail_path\":\"/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260817_400x240.jpg\"," +
+    "\"thumbnail_path\":\"/home/u/.cache/singularity-wallpapers/thumbs/bing/en-US/20260817_400x240.jpg\"," +
     "\"pinned\":false}]";
 
 private void test_bing_markets_parses_tsv() {
@@ -402,7 +393,7 @@ private void test_bing_items_parses_list_array() {
         assert(rows[0].key == "bing:en-US:OHR.Palmanova_EN-US0340289339");
         assert(rows[0].archive_date == "20260818");
         assert(rows[0].bing_image_id == "OHR.Palmanova_EN-US0340289339");
-        assert(rows[0].thumbnail_path == "/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg");
+        assert(rows[0].thumbnail_path == "/home/u/.cache/singularity-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg");
         // Unpinned item: pinned=false, different date.
         assert(rows[1].pinned == false);
         assert(rows[1].id == "en-US:20260817");
@@ -440,14 +431,14 @@ private void test_bing_items_rejects_bad_pinned_field() {
     // pinned must be a JSON bool; an int/string/null is a parse error so
     // a malformed helper cannot silently drop the toggle state.
     string bad = "[{\"provider\":\"bing\",\"date\":\"20260818\",\"market\":\"en-US\"," +
-                 "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260818.jpg\"," +
+                 "\"path\":\"/var/cache/singularity-wallpapers/bing/en-US/20260818.jpg\"," +
                  "\"caption\":\"x\",\"copyright\":\"y\",\"pinned\":\"yes\"}]";
     bool rejected = false;
     try { WallpaperBing.items(bad); } catch (Error e) { rejected = true; }
     assert(rejected);
     // Missing pinned is also a parse error -- the field is load-bearing.
     string missing = "[{\"provider\":\"bing\",\"date\":\"20260818\",\"market\":\"en-US\"," +
-                     "\"path\":\"/var/cache/ncz-wallpapers/bing/en-US/20260818.jpg\"," +
+                     "\"path\":\"/var/cache/singularity-wallpapers/bing/en-US/20260818.jpg\"," +
                      "\"caption\":\"x\",\"copyright\":\"y\"}]";
     rejected = false;
     try { WallpaperBing.items(missing); } catch (Error e) { rejected = true; }
@@ -476,7 +467,7 @@ private Gee.ArrayList<WallpaperBrowseCacheEntry> cache_fixture() {
     bing.market = "en-US";
     bing.archive_date = "20260818";
     bing.bing_image_id = "OHR.Example";
-    bing.thumbnail_path = "/home/u/.cache/ncz-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg";
+    bing.thumbnail_path = "/home/u/.cache/singularity-wallpapers/thumbs/bing/en-US/20260818_400x240.jpg";
     bing.pinned = true;
     entries.add(new WallpaperBrowseCacheEntry(bing, "en-US"));
     return entries;

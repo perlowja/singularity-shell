@@ -23,7 +23,6 @@ private string make_ocs_sidecar(string image_filename, string title, string arti
            "\"provider\":\"pling\",\"source\":{\"ocs_id\":\"123\"}}";
 }
 
-// Bing sidecar as written by ncz-wallpaper-bing.
 private string make_bing_sidecar(string image_filename, string caption, string copyright) {
     return "{\"provider\":\"bing\",\"image\":{\"file\":\"" + image_filename + "\"}," +
            "\"caption\":\"" + caption + "\",\"copyright\":\"" + copyright + "\"}";
