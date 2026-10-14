@@ -1,15 +1,16 @@
 using GLib;
 using Singularity;
 
-private GLib.Settings make_settings(GLib.SettingsBackend? backend = null) {
-    var schema = SettingsSchemaSource.get_default().lookup("dev.sinty.desktop", true);
-    assert(schema != null);
-    return new GLib.Settings.full(schema,
-        backend ?? SettingsBackend.memory_settings_backend_new(), null);
+private string history_path() {
+    try {
+        return Path.build_filename(DirUtils.make_tmp("wallpaper-history-XXXXXX"), "history.ini");
+    } catch (Error e) {
+        error("temporary directory: %s", e.message);
+    }
 }
 
 private void test_back_forward_semantics() {
-    var history = new WallpaperHistory(make_settings());
+    var history = new WallpaperHistory(history_path());
     history.record("/a");
     history.record("/b");
     history.record("/c");
@@ -22,7 +23,7 @@ private void test_back_forward_semantics() {
 }
 
 private void test_bounded_size() {
-    var history = new WallpaperHistory(make_settings(), 3);
+    var history = new WallpaperHistory(history_path(), 3);
     history.record("/a");
     history.record("/b");
     history.record("/c");
@@ -34,14 +35,14 @@ private void test_bounded_size() {
 }
 
 private void test_persistence_roundtrip() {
-    var backend = SettingsBackend.memory_settings_backend_new();
-    var first = new WallpaperHistory(make_settings(backend));
+    string path = history_path();
+    var first = new WallpaperHistory(path);
     first.record("/a");
     first.record("/b");
     first.record("/c");
     assert(first.go_back() == "/b");
 
-    var restored = new WallpaperHistory(make_settings(backend));
+    var restored = new WallpaperHistory(path);
     assert(restored.current_path == "/b");
     assert(restored.go_back() == "/a");
     assert(restored.go_forward() == "/b");

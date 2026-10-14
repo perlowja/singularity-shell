@@ -31,7 +31,6 @@ namespace Singularity {
         public string attribution_author { get; private set; default = ""; }
 
         public signal void wallpaper_changed();
-        // Emitted only after a different image becomes the displayed wallpaper.
         public signal void wallpaper_path_changed(string new_path);
 
         public static WallpaperManager get_default() {

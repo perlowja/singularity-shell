@@ -5,57 +5,64 @@ namespace Singularity {
 
     public class WallpaperHistory : Object {
         public const int MAX_ENTRIES = 200;
-        private const string BACK_KEY = "wallpaper-history-back";
-        private const string FORWARD_KEY = "wallpaper-history-forward";
-        private const string CURRENT_KEY = "wallpaper-history-current";
+        private const string GROUP = "History";
 
-        private GLib.Settings settings;
+        private string path;
         private ArrayList<string> back = new ArrayList<string>();
         private ArrayList<string> forward = new ArrayList<string>();
         private int max_entries;
         public string? current_path { get; private set; default = null; }
         public int size { get { return back.size + forward.size + (current_path != null ? 1 : 0); } }
 
-        public WallpaperHistory(GLib.Settings? settings = null, int max_entries = MAX_ENTRIES) {
-            this.settings = settings ?? new GLib.Settings("dev.sinty.desktop");
+        public WallpaperHistory(string path, int max_entries = MAX_ENTRIES) {
+            this.path = path;
             this.max_entries = int.max(1, max_entries);
             load();
         }
 
-        private bool has_key(string key) {
-            SettingsSchema? schema = settings.settings_schema;
-            return schema != null && schema.has_key(key);
-        }
-
-        private void load_stack(ArrayList<string> destination, string key) {
-            if (!has_key(key)) return;
-            foreach (string path in settings.get_strv(key)) {
-                if (path != "") destination.add(path);
+        private void load_stack(KeyFile file, ArrayList<string> destination, string key) {
+            try {
+                foreach (string entry in file.get_string_list(GROUP, key)) {
+                    if (entry != "") destination.add(entry);
+                }
+            } catch (Error e) {
             }
         }
 
         private void load() {
-            load_stack(back, BACK_KEY);
-            load_stack(forward, FORWARD_KEY);
-            if (has_key(CURRENT_KEY)) {
-                string saved = settings.get_string(CURRENT_KEY);
+            var file = new KeyFile();
+            try {
+                file.load_from_file(path, KeyFileFlags.NONE);
+            } catch (Error e) {
+                return;
+            }
+            load_stack(file, back, "back");
+            load_stack(file, forward, "forward");
+            try {
+                string saved = file.get_string(GROUP, "current");
                 if (saved != "") current_path = saved;
+            } catch (Error e) {
             }
             trim_to_limit();
         }
 
         private string[] stack_to_array(ArrayList<string> stack) {
             string[] result = {};
-            foreach (string path in stack) result += path;
+            foreach (string entry in stack) result += entry;
             return result;
         }
 
         private void save() {
-            settings.delay();
-            if (has_key(BACK_KEY)) settings.set_strv(BACK_KEY, stack_to_array(back));
-            if (has_key(FORWARD_KEY)) settings.set_strv(FORWARD_KEY, stack_to_array(forward));
-            if (has_key(CURRENT_KEY)) settings.set_string(CURRENT_KEY, current_path ?? "");
-            settings.apply();
+            var file = new KeyFile();
+            file.set_string_list(GROUP, "back", stack_to_array(back));
+            file.set_string_list(GROUP, "forward", stack_to_array(forward));
+            file.set_string(GROUP, "current", current_path ?? "");
+            try {
+                DirUtils.create_with_parents(Path.get_dirname(path), 0700);
+                FileUtils.set_contents(path, file.to_data());
+            } catch (Error e) {
+                warning("Wallpaper history could not be saved: %s", e.message);
+            }
         }
 
         private void trim_to_limit() {
@@ -66,10 +73,10 @@ namespace Singularity {
             }
         }
 
-        public void record(string path) {
-            if (path == "" || path == current_path) return;
+        public void record(string entry) {
+            if (entry == "" || entry == current_path) return;
             if (current_path != null) back.add(current_path);
-            current_path = path;
+            current_path = entry;
             forward.clear();
             trim_to_limit();
             save();

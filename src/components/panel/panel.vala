@@ -20,7 +20,8 @@ namespace Singularity {
             Object(orientation: Orientation.HORIZONTAL, spacing: 0);
             valign = Align.CENTER;
             this.settings = settings;
-            history = new WallpaperHistory(settings);
+            history = new WallpaperHistory(Path.build_filename(
+                WallpaperRotationState.default_config_dir(), "history.ini"));
             favorites = new WallpaperFavorites(settings);
             rotation_state = new WallpaperRotationState(
                 WallpaperRotationState.default_config_dir());
@@ -1232,7 +1233,7 @@ namespace Singularity {
                 item_ids,
                 { "overview", "workspaces", "app-title", "global-menu" },
                 { "tiling-position" },
-                { "system", "notifications", "clock", "wallpaper" },
+                { "system", "notifications", "clock" },
                 _settings.get_strv("panel-layout-left"),
                 _settings.get_strv("panel-layout-center"),
                 _settings.get_strv("panel-layout-right")

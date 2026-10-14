@@ -940,9 +940,7 @@ wallpaper_history_test = executable('wallpaper-history-test',
   sources: ['src/core/wallpaper_history.vala', 'tests/wallpaper_history_test.vala'],
   dependencies: [dependency('gobject-2.0'), dependency('gio-2.0'), dependency('gio-unix-2.0'), gee_dep],
 )
-test('wallpaper-history', wallpaper_history_test,
-  depends: wallpaper_test_schema,
-  env: wallpaper_test_env)
+test('wallpaper-history', wallpaper_history_test)
 
 wallpaper_favorites_test = executable('wallpaper-favorites-test',
   sources: ['src/core/wallpaper_favorites.vala', 'tests/wallpaper_favorites_test.vala'],
