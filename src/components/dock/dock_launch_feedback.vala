@@ -148,15 +148,6 @@ namespace Singularity {
                 bin.scale_x = 1.0;
                 Singularity.Motion.spring_to(bin, "scale-x", STRETCH, Singularity.Motion.Spring.SNAPPY);
             }
-            // The give-up timer can outlive the dock item it was armed for: a
-            // dock rebuild, an app-grid change or session teardown frees
-            // `wrapper` well inside GIVE_UP_SECONDS (10 s). The captures MUST
-            // therefore be owned references. With `unowned` captures the
-            // callback later called g_object_get_data() on a freed GtkWidget
-            // and the shell died with SIGSEGV in
-            // g_type_check_instance_is_fundamentally_a (O6N, 2026-10-11).
-            // Owning both objects keeps them valid until the source is
-            // removed; the closure drops the references when it is finalized.
             Gtk.Widget wrapper_ref = wrapper;
             Singularity.Animation.MotionBin bin_ref = bin;
             GLib.Timeout.add_seconds(GIVE_UP_SECONDS, () => {
