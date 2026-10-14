@@ -322,6 +322,14 @@ namespace Singularity {
             });
             grid_group.add_row(attribution_position_row);
 
+            if (settings.settings_schema.has_key("show-wallpaper-controls")) {
+                var controls_row = new SwitchRow(_("Wallpaper Controls in the Top Bar"),
+                    _("Previous, next, pause and favorite buttons for the wallpaper"),
+                    settings.get_boolean("show-wallpaper-controls"));
+                settings.bind("show-wallpaper-controls", controls_row.switch_btn, "active", SettingsBindFlags.DEFAULT);
+                grid_group.add_row(controls_row);
+            }
+
             var wallpaper_effect_options = new Gee.ArrayList<Singularity.Core.AppSettingOption>();
             wallpaper_effect_options.add(new Singularity.Core.AppSettingOption() { id = "none", label = _("None") });
             wallpaper_effect_options.add(new Singularity.Core.AppSettingOption() { id = "grayscale", label = _("Grayscale") });

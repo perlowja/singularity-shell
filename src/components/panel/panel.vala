@@ -867,6 +867,9 @@ namespace Singularity {
             _settings.changed["panel-layout-right"].connect(() => {
                 if (!saving_bar_layout) reload_bar_layout();
             });
+            if (_settings.settings_schema.has_key("show-wallpaper-controls")) {
+                _settings.changed["show-wallpaper-controls"].connect(() => reload_bar_layout());
+            }
             if (!is_greeter_mode) {
                 layout_editor = new BarLayoutEditController(
                     _settings,
@@ -1224,16 +1227,27 @@ namespace Singularity {
             update_flat_mode();
         }
 
+        private bool wallpaper_controls_enabled() {
+            return layout_items.has_key("wallpaper")
+                && _settings.settings_schema.has_key("show-wallpaper-controls")
+                && _settings.get_boolean("show-wallpaper-controls");
+        }
+
         private void reload_bar_layout() {
             string[] item_ids = {
                 "overview", "workspaces", "tiling-position", "app-title", "global-menu",
-                "system", "notifications", "clock", "wallpaper"
+                "system", "notifications", "clock"
             };
+            string[] right_defaults = { "system", "notifications", "clock" };
+            if (wallpaper_controls_enabled()) {
+                item_ids += "wallpaper";
+                right_defaults += "wallpaper";
+            }
             bar_layout = new BarLayout(
                 item_ids,
                 { "overview", "workspaces", "app-title", "global-menu" },
                 { "tiling-position" },
-                { "system", "notifications", "clock" },
+                right_defaults,
                 _settings.get_strv("panel-layout-left"),
                 _settings.get_strv("panel-layout-center"),
                 _settings.get_strv("panel-layout-right")
