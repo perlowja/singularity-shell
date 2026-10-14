@@ -148,13 +148,13 @@ namespace Singularity {
                 bin.scale_x = 1.0;
                 Singularity.Motion.spring_to(bin, "scale-x", STRETCH, Singularity.Motion.Spring.SNAPPY);
             }
-            unowned Gtk.Widget wrapper_weak = wrapper;
-            unowned Singularity.Animation.MotionBin bin_weak = bin;
+            Gtk.Widget wrapper_ref = wrapper;
+            Singularity.Animation.MotionBin bin_ref = bin;
             GLib.Timeout.add_seconds(GIVE_UP_SECONDS, () => {
-                if (wrapper_weak.get_data<Singularity.Animation.MotionBin>("launch_dot") == bin_weak) {
-                    wrapper_weak.set_data<Singularity.Animation.MotionBin?>("launch_dot", null);
-                    var parent = bin_weak.get_parent() as Gtk.Box;
-                    if (parent != null) parent.remove(bin_weak);
+                if (wrapper_ref.get_data<Singularity.Animation.MotionBin>("launch_dot") == bin_ref) {
+                    wrapper_ref.set_data<Singularity.Animation.MotionBin?>("launch_dot", null);
+                    var parent = bin_ref.get_parent() as Gtk.Box;
+                    if (parent != null) parent.remove(bin_ref);
                 }
                 return GLib.Source.REMOVE;
             });
