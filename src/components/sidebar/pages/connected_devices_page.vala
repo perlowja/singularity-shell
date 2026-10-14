@@ -10,6 +10,7 @@ namespace Singularity.SidebarPages {
         private WelcomePage welcome;
         private PreferencesGroup request_group;
         private PreferencesGroup mine_group;
+        private PreferencesGroup people_group;
         private PreferencesGroup available_group;
         private PreferencesGroup computer_group;
         private SwitchRow visible_row;
@@ -109,6 +110,11 @@ namespace Singularity.SidebarPages {
             mine_group.visible = false;
             add_group(mine_group);
 
+            people_group = new PreferencesGroup(_("People"),
+                _("Computers paired as equals: chat, shared files and documents."));
+            people_group.visible = false;
+            add_group(people_group);
+
             available_group = new PreferencesGroup(_("Available Devices"),
                 _("Devices on this network with KDE Connect or GSConnect open."));
             add_group(available_group);
@@ -185,6 +191,7 @@ namespace Singularity.SidebarPages {
             if (!ok) {
                 welcome.visible = false;
                 mine_group.visible = false;
+                people_group.visible = false;
                 available_group.visible = false;
                 request_group.visible = false;
                 return;
@@ -223,16 +230,26 @@ namespace Singularity.SidebarPages {
 
             Widget[] fresh = {};
             mine_group.clear();
-            mine_group.visible = mine.size > 0;
+            people_group.clear();
+            int own_count = 0;
+            int people_count = 0;
             foreach (var d in mine) {
-                var row = new ActionRow(d.name, d.status_text(), d.icon_name);
+                var row = new ActionRow(d.name, d.status_text(), d.is_computer ? "avatar-default-symbolic" : d.icon_name);
                 row.activatable = true;
                 row.add_suffix(chevron());
                 string id = d.id;
                 row.activated.connect(() => open_device(id));
-                mine_group.add_row(row);
+                if (d.is_computer) {
+                    people_group.add_row(row);
+                    people_count++;
+                } else {
+                    mine_group.add_row(row);
+                    own_count++;
+                }
                 if (!shown.contains(d.id)) fresh += row;
             }
+            mine_group.visible = own_count > 0;
+            people_group.visible = people_count > 0;
 
             available_group.clear();
             if (others.size == 0) {

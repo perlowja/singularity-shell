@@ -30,7 +30,7 @@ namespace Singularity {
 
             var client = NearbyClient.get_default();
             clicked.connect(() => {
-                var usable = client.usable_devices();
+                var usable = own_devices(client);
                 NearbyClient.open_app(usable.size == 1 ? usable[0].id : null);
             });
             changed_id = client.changed.connect(() => sync(client));
@@ -45,8 +45,14 @@ namespace Singularity {
             base.dispose();
         }
 
+        private static Gee.List<NearbyDevice> own_devices(NearbyClient client) {
+            var result = new Gee.ArrayList<NearbyDevice>();
+            foreach (var d in client.usable_devices()) if (!d.is_computer) result.add(d);
+            return result;
+        }
+
         private void sync(NearbyClient client) {
-            var usable = client.usable_devices();
+            var usable = own_devices(client);
             bool show = usable.size > 0;
             if (show) {
                 var d = usable[0];
