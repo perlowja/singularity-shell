@@ -2,5 +2,17 @@
 <schemalist>
   <schema id="dev.sinty.desktop" path="/dev/sinty/desktop/">
     <key name="wallpaper-favorites" type="as"><default>[]</default></key>
+    <key name="wallpaper-effect" type="s">
+      <choices>
+        <choice value="none"/>
+        <choice value="grayscale"/>
+        <choice value="blur"/>
+      </choices>
+      <default>'none'</default>
+    </key>
+    <key name="wallpaper-effect-blur-radius" type="i">
+      <range min="1" max="64"/>
+      <default>8</default>
+    </key>
   </schema>
 </schemalist>

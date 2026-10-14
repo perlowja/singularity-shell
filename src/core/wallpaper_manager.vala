@@ -16,6 +16,7 @@ namespace Singularity {
         private int _load_serial = 0;
         private Mutex _mutex = Mutex ();
         private WallpaperRotator? rotator = null;
+        private string _cached_effect_signature = "";
 
         // Attribution metadata for the current wallpaper. Mirrors the
         // dev.sinty.desktop gschema keys background-attribution-title
@@ -93,6 +94,10 @@ namespace Singularity {
                     settings.changed["background-attribution-title"].connect(() => schedule_reload());
                 if (schema.has_key("background-attribution-author"))
                     settings.changed["background-attribution-author"].connect(() => schedule_reload());
+                if (schema.has_key("wallpaper-effect"))
+                    settings.changed["wallpaper-effect"].connect(() => schedule_reload());
+                if (schema.has_key("wallpaper-effect-blur-radius"))
+                    settings.changed["wallpaper-effect-blur-radius"].connect(() => schedule_reload());
             }
             DynamicWallpaperController.get_default();
             reload();
@@ -148,6 +153,11 @@ namespace Singularity {
             string custom_uri = settings.get_string("background-picture-uri");
             string? path = resolve_path(custom_uri);
             if (path != null && DynamicWallpaper.is_dynamic_path(path)) return;
+            string effect = schema != null && schema.has_key("wallpaper-effect")
+                ? settings.get_string("wallpaper-effect") : "none";
+            int blur_radius = schema != null && schema.has_key("wallpaper-effect-blur-radius")
+                ? settings.get_int("wallpaper-effect-blur-radius") : 8;
+            string effect_signature = "%s|%d".printf(effect, blur_radius);
             if (path == null) {
                 string[] fallbacks = {};
                 foreach (unowned string d in GLib.Environment.get_system_data_dirs()) {
@@ -178,7 +188,7 @@ namespace Singularity {
                 }
             }
             if (path != null) {
-                if (path == _cached_path) {
+                if (path == _cached_path && effect_signature == _cached_effect_signature) {
                     // Wallpaper file unchanged; if only the attribution
                     // metadata moved (URI stays the same but the keys
                     // were updated), the overlay widget still needs to
@@ -189,6 +199,7 @@ namespace Singularity {
                     return;
                 }
                 _cached_path = path;
+                _cached_effect_signature = effect_signature;
                 wallpaper_path = path;
 
                 int serial;
@@ -229,6 +240,9 @@ namespace Singularity {
                     pb_display = ensure_alpha(pb_display);
                     pb_medium = ensure_alpha(pb_medium);
                     pb_small = ensure_alpha(pb_small);
+
+                    if (pb_display != null) pb_display = WallpaperEffects.apply(pb_display, effect, blur_radius);
+                    if (pb_medium != null) pb_medium = WallpaperEffects.apply(pb_medium, effect, int.max(1, blur_radius / 4));
 
                     _mutex.lock();
                     bool stale = (serial != _load_serial);
