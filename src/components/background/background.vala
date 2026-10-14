@@ -125,6 +125,11 @@ namespace Singularity {
             attribution_label.visible = false;
             attribution_label.can_focus = false;
             attribution_label.can_target = false;
+            attribution_label.wrap = true;
+            attribution_label.wrap_mode = Pango.WrapMode.WORD_CHAR;
+            attribution_label.lines = 2;
+            attribution_label.ellipsize = Pango.EllipsizeMode.END;
+            attribution_label.max_width_chars = 40;
             wp_overlay = new Gtk.Overlay();
             wp_motion = new Singularity.Animation.MotionBin(wp_stack);
             wp_overlay.set_child(wp_motion);
@@ -322,24 +327,28 @@ namespace Singularity {
                     attribution_label.valign = Align.START;
                     attribution_label.xalign = 0.0f;
                     attribution_label.yalign = 0.0f;
+                    attribution_label.justify = Justification.LEFT;
                     break;
                 case "top-right":
                     attribution_label.halign = Align.END;
                     attribution_label.valign = Align.START;
                     attribution_label.xalign = 1.0f;
                     attribution_label.yalign = 0.0f;
+                    attribution_label.justify = Justification.RIGHT;
                     break;
                 case "bottom-right":
                     attribution_label.halign = Align.END;
                     attribution_label.valign = Align.END;
                     attribution_label.xalign = 1.0f;
                     attribution_label.yalign = 1.0f;
+                    attribution_label.justify = Justification.RIGHT;
                     break;
                 default:
                     attribution_label.halign = Align.START;
                     attribution_label.valign = Align.END;
                     attribution_label.xalign = 0.0f;
                     attribution_label.yalign = 1.0f;
+                    attribution_label.justify = Justification.LEFT;
                     break;
             }
             attribution_label.queue_allocate();
