@@ -2,6 +2,7 @@ namespace Singularity.Shell {
 
     [DBus (name = "io.github.singularityos_lab.ush.Portal1")]
     public class UshPortalService : Object {
+        private const uint PROMPT_TIMEOUT_SECONDS = 290;
 
         public async string show_permission(string category, string resource, string reason) throws Error {
             var app = GLib.Application.get_default() as Gtk.Application;
@@ -27,7 +28,10 @@ namespace Singularity.Shell {
             scope_box.append(always);
             dlg.custom_area.append(scope_box);
 
+            bool answered = false;
             dlg.response.connect((r) => {
+                if (answered) return;
+                answered = true;
                 if (r == Singularity.Widgets.ConfirmDialog.Response.PRIMARY) {
                     if (always.active) decision = "allow_always";
                     else if (session.active) decision = "allow_session";
@@ -36,7 +40,18 @@ namespace Singularity.Shell {
                 show_permission.callback();
             });
             dlg.present();
+            uint guard = 0;
+            guard = Timeout.add_seconds(PROMPT_TIMEOUT_SECONDS, () => {
+                guard = 0;
+                if (!answered) {
+                    answered = true;
+                    dlg.close();
+                    show_permission.callback();
+                }
+                return Source.REMOVE;
+            });
             yield;
+            if (guard != 0) Source.remove(guard);
             return decision;
         }
 
@@ -48,12 +63,26 @@ namespace Singularity.Shell {
             var dlg = new Singularity.Widgets.ConfirmDialog(app,
                 title, "dialog-question-symbolic", body,
                 _("Confirm"), Singularity.Widgets.ConfirmDialog.ActionStyle.SUGGESTED);
+            bool answered = false;
             dlg.response.connect((r) => {
+                if (answered) return;
+                answered = true;
                 granted = (r == Singularity.Widgets.ConfirmDialog.Response.PRIMARY);
                 show_confirm.callback();
             });
             dlg.present();
+            uint guard = 0;
+            guard = Timeout.add_seconds(PROMPT_TIMEOUT_SECONDS, () => {
+                guard = 0;
+                if (!answered) {
+                    answered = true;
+                    dlg.close();
+                    show_confirm.callback();
+                }
+                return Source.REMOVE;
+            });
             yield;
+            if (guard != 0) Source.remove(guard);
             return granted;
         }
     }

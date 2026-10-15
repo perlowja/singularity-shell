@@ -1594,11 +1594,29 @@ window.inactive.shadow.color: %s
         });
     }
 
-    public string show_permission(string category, string resource, string reason) throws IOError {
+    private const uint PROMPT_TIMEOUT_SECONDS = 290;
+
+    public async string show_permission(string category, string resource, string reason) throws IOError {
         string decision = "deny";
         bool done = false;
+        uint guard = 0;
+        SourceFunc resume = show_permission.callback;
 
         var dialog = new Singularity.Shell.ShellDialog.anchored(this, true, true, true, true);
+        GLib.Func<string> finish = (d) => {
+            if (done) return;
+            decision = d;
+            done = true;
+            if (guard != 0) {
+                Source.remove(guard);
+                guard = 0;
+            }
+            dialog.close_dialog();
+            Idle.add(() => {
+                resume();
+                return Source.REMOVE;
+            });
+        };
         dialog.add_css_class("permission-dialog");
 
         var card = new Gtk.Box(Gtk.Orientation.VERTICAL, 16);
@@ -1658,16 +1676,16 @@ window.inactive.shadow.color: %s
 
         var group = new Singularity.Widgets.PreferencesGroup();
         var allow_row = new Singularity.Widgets.ActionRow(_("Allow"), _("Grant this time only"));
-        allow_row.activated.connect(() => { decision = "allow"; done = true; dialog.close_dialog(); });
+        allow_row.activated.connect(() => finish("allow"));
         group.add_row(allow_row);
 
         var session_row = new Singularity.Widgets.ActionRow(_("This Session"), _("Grant until you log out"));
-        session_row.activated.connect(() => { decision = "allow_session"; done = true; dialog.close_dialog(); });
+        session_row.activated.connect(() => finish("allow_session"));
         group.add_row(session_row);
 
         var always_row = new Singularity.Widgets.ActionRow(_("Always"),
             is_capability ? _("Always allow this app") : _("Remember and never ask again"));
-        always_row.activated.connect(() => { decision = "allow_always"; done = true; dialog.close_dialog(); });
+        always_row.activated.connect(() => finish("allow_always"));
         group.add_row(always_row);
 
         card.append(group);
@@ -1678,29 +1696,48 @@ window.inactive.shadow.color: %s
         deny_btn.width_request = 128;
         deny_btn.halign = Gtk.Align.CENTER;
         deny_btn.margin_top = 4;
-        deny_btn.clicked.connect(() => { decision = "deny"; done = true; dialog.close_dialog(); });
+        deny_btn.clicked.connect(() => finish("deny"));
         card.append(deny_btn);
 
         dialog.content_box.append(card);
 
         dialog.close_request.connect(() => {
-            if (!done) { decision = "deny"; done = true; }
+            finish("deny");
             return false;
         });
 
         dialog.open_dialog();
-
-        var ctx = MainContext.default();
-        while (!done) { ctx.iteration(true); }
+        guard = Timeout.add_seconds(PROMPT_TIMEOUT_SECONDS, () => {
+            guard = 0;
+            finish("deny");
+            return Source.REMOVE;
+        });
+        yield;
 
         return decision;
     }
 
-    public bool show_confirm(string title, string body) throws IOError {
+    public async bool show_confirm(string title, string body) throws IOError {
         bool confirmed = false;
         bool done = false;
+        uint guard = 0;
+        SourceFunc resume = show_confirm.callback;
 
         var dialog = new Singularity.Shell.ShellDialog.anchored(this, true, true, true, true);
+        GLib.Func<bool> finish = (answer) => {
+            if (done) return;
+            confirmed = answer;
+            done = true;
+            if (guard != 0) {
+                Source.remove(guard);
+                guard = 0;
+            }
+            dialog.close_dialog();
+            Idle.add(() => {
+                resume();
+                return Source.REMOVE;
+            });
+        };
         dialog.add_css_class("permission-dialog");
 
         var card = new Gtk.Box(Gtk.Orientation.VERTICAL, 16);
@@ -1736,28 +1773,31 @@ window.inactive.shadow.color: %s
         var cancel_btn = new Gtk.Button.with_label(_("Cancel"));
         cancel_btn.add_css_class("pill");
         cancel_btn.width_request = 128;
-        cancel_btn.clicked.connect(() => { confirmed = false; done = true; dialog.close_dialog(); });
+        cancel_btn.clicked.connect(() => finish(false));
         buttons.append(cancel_btn);
 
         var confirm_btn = new Gtk.Button.with_label(_("Confirm"));
         confirm_btn.add_css_class("pill");
         confirm_btn.add_css_class("suggested-action");
         confirm_btn.width_request = 128;
-        confirm_btn.clicked.connect(() => { confirmed = true; done = true; dialog.close_dialog(); });
+        confirm_btn.clicked.connect(() => finish(true));
         buttons.append(confirm_btn);
 
         card.append(buttons);
         dialog.content_box.append(card);
 
         dialog.close_request.connect(() => {
-            if (!done) { confirmed = false; done = true; }
+            finish(false);
             return false;
         });
 
         dialog.open_dialog();
-
-        var ctx = MainContext.default();
-        while (!done) { ctx.iteration(true); }
+        guard = Timeout.add_seconds(PROMPT_TIMEOUT_SECONDS, () => {
+            guard = 0;
+            finish(false);
+            return Source.REMOVE;
+        });
+        yield;
 
         return confirmed;
     }
