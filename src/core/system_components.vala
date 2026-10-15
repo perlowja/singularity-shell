@@ -34,7 +34,7 @@ namespace Singularity {
 
         // name, SPDX license, version probe.
         // probe: "gtk"|"glib"|"pango"|"cairo"|"json" | "wlroots" |
-        //        "bin:<argv...>" | "lib:<soname-prefix>"
+        //        "bin:<argv...>" | "lib:<soname-prefix>" | "fn:<soname>:<prefix>" | "var:<soname>:<symbol>"
         private const string[,] LIST = {
             { "labwc",              "GPL-2.0-only",        "bin:labwc --version" },
             { "wlroots",            "MIT",                 "wlroots" },
@@ -51,13 +51,13 @@ namespace Singularity {
             { "GLib",               "LGPL-2.1-or-later",   "glib" },
             { "Pango",              "LGPL-2.1-or-later",   "pango" },
             { "Cairo",              "LGPL-2.1-or-later",   "cairo" },
-            { "gdk-pixbuf",         "LGPL-2.1-or-later",   "lib:libgdk_pixbuf-2.0.so" },
-            { "VTE",                "LGPL-3.0-or-later",   "lib:libvte-2.91-gtk4.so" },
-            { "GtkSourceView",      "LGPL-2.1-or-later",   "lib:libgtksourceview-5.so" },
+            { "gdk-pixbuf",         "LGPL-2.1-or-later",   "var:libgdk_pixbuf-2.0.so.0:gdk_pixbuf_version" },
+            { "VTE",                "LGPL-3.0-or-later",   "fn:libvte-2.91-gtk4.so.0:vte_get_" },
+            { "GtkSourceView",      "LGPL-2.1-or-later",   "fn:libgtksourceview-5.so.0:gtk_source_get_" },
             { "libpeas",            "LGPL-2.1-or-later",   "lib:libpeas-2.so" },
             { "json-glib",          "LGPL-2.1-or-later",   "json" },
             { "libgee",             "LGPL-2.1-or-later",   "lib:libgee-0.8.so" },
-            { "libsoup",            "LGPL-2.0-or-later",   "lib:libsoup-3.0.so" },
+            { "libsoup",            "LGPL-2.0-or-later",   "fn:libsoup-3.0.so.0:soup_get_" },
             { "D-Bus",              "AFL-2.1 OR GPL-2.0+", "bin:dbus-daemon --version" },
             { "PipeWire",           "MIT",                 "bin:pipewire --version" },
             { "WirePlumber",        "MIT",                 "bin:wireplumber --version" },
@@ -224,7 +224,39 @@ namespace Singularity {
                 return (raw != null) ? extract_version(raw) : "Not installed";
             }
             if (probe.has_prefix("lib:")) return lib_version(probe.substring(4));
+            if (probe.has_prefix("fn:")) return fn_version(probe.substring(3));
+            if (probe.has_prefix("var:")) return var_version(probe.substring(4));
             return "Not installed";
+        }
+
+        [CCode (has_target = false)]
+        private delegate uint VersionPart();
+
+        private static string fn_version(string spec) {
+            string[] parts = spec.split(":", 2);
+            var module = Module.open(parts[0], ModuleFlags.LAZY | ModuleFlags.LOCAL);
+            if (module == null) return "Not installed";
+            string[] names = { "major_version", "minor_version", "micro_version" };
+            uint[] values = {};
+            foreach (string n in names) {
+                void* sym;
+                if (!module.symbol(parts[1] + n, out sym) || sym == null) return "Installed";
+                VersionPart part = (VersionPart) sym;
+                values += part();
+            }
+            return "%u.%u.%u".printf(values[0], values[1], values[2]);
+        }
+
+        private static string var_version(string spec) {
+            string[] parts = spec.split(":", 2);
+            var module = Module.open(parts[0], ModuleFlags.LAZY | ModuleFlags.LOCAL);
+            if (module == null) return "Not installed";
+            void* sym;
+            if (!module.symbol(parts[1], out sym) || sym == null) return "Installed";
+            char** p = (char**) sym;
+            if (*p == null) return "Installed";
+            unowned string v = (string) (*p);
+            return v != "" ? v : "Installed";
         }
 
         private static bool has_sit() {
@@ -260,12 +292,7 @@ namespace Singularity {
                         if (n.has_prefix(prefix) && n.length > best.length) best = n;
                 } catch (FileError e) { continue; }
                 if (best == "") continue;
-                int idx = best.index_of(".so.");
-                if (idx >= 0) {
-                    string v = best.substring(idx + 4);
-                    if (v.contains(".") && v[0].isdigit()) return v;
-                }
-                return "installed";
+                return "Installed";
             }
             return "Not installed";
         }
