@@ -815,7 +815,8 @@ namespace Singularity {
                     if (color != "wallpaper") {
                          try {
                             var interface_settings = new GLib.Settings("org.gnome.desktop.interface");
-                            interface_settings.set_string("accent-color", color);
+                            if (interface_settings.settings_schema.has_key("accent-color"))
+                                interface_settings.set_string("accent-color", color);
                          } catch (Error e) {
                          }
                     }

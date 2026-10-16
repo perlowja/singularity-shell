@@ -1342,7 +1342,8 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         if (color_name != "wallpaper" && !color_name.has_prefix("#")) {
             try {
                 var iface = new GLib.Settings("org.gnome.desktop.interface");
-                iface.set_string("accent-color", color_name);
+                if (iface.settings_schema.has_key("accent-color"))
+                    iface.set_string("accent-color", color_name);
             } catch (GLib.Error e) {
                 warning("Failed to sync accent-color to org.gnome.desktop.interface: %s", e.message);
             }
