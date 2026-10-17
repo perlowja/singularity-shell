@@ -145,7 +145,9 @@ namespace Singularity.LockScreen {
             card.halign = Align.CENTER;
             card.width_request = 320;
 
-            var username_label = new Label(GLib.Environment.get_user_name());
+            string display_name = GLib.Environment.get_real_name();
+            if (display_name == "" || display_name == "Unknown") display_name = GLib.Environment.get_user_name();
+            var username_label = new Label(display_name);
             username_label.add_css_class("greeter-username");
             username_label.halign = Align.CENTER;
             card.append(username_label);
