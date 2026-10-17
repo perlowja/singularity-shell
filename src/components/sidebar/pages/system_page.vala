@@ -44,9 +44,10 @@ namespace Singularity.SidebarPages {
             logo.add_css_class("accent-color");
             logo_box.append(logo);
             add_widget(logo_box);
-            var device_group = new PreferencesGroup(_("Device Name"));
-            hostname_row = new EntryRow("Device Name");
+            var device_group = new PreferencesGroup();
+            hostname_row = new EntryRow(_("Device Name"));
             hostname_row.text = GLib.Environment.get_host_name();
+            load_hostname.begin();
             var apply_btn = new Button.from_icon_name("object-select-symbolic");
             apply_btn.add_css_class("flat");
             apply_btn.tooltip_text = _("Apply Hostname");
@@ -212,28 +213,28 @@ namespace Singularity.SidebarPages {
             return row;
         }
 
+        private async void load_hostname() {
+            var manager = HostnameManager.get_default();
+            yield manager.load();
+            hostname_row.text = HostnameManager.display_name(manager.pretty_name, manager.hostname);
+            hostname_row.sensitive = manager.can_change;
+        }
+
         private void apply_hostname() {
             string new_name = hostname_row.text.strip();
-            if (new_name != "" && new_name != GLib.Environment.get_host_name())
+            if (new_name != "")
                 set_hostname_async.begin(new_name);
         }
 
-        // Set the static hostname through systemd-hostnamed over the system bus.
-        // interactive=true lets the polkit agent prompt for authorization, which
-        // hostnamed handles itself; setting the static name also updates the
-        // transient (kernel) hostname.
         private async void set_hostname_async(string new_name) {
+            hostname_row.remove_css_class("error");
+            hostname_row.tooltip_text = null;
             try {
-                var conn = yield Bus.get(BusType.SYSTEM);
-                yield conn.call(
-                    "org.freedesktop.hostname1",
-                    "/org/freedesktop/hostname1",
-                    "org.freedesktop.hostname1",
-                    "SetStaticHostname",
-                    new Variant("(sb)", new_name, true),
-                    null, DBusCallFlags.NONE, -1, null);
+                yield HostnameManager.get_default().set_name(new_name);
+                yield load_hostname();
             } catch (Error e) {
-                warning("Failed to set hostname: %s", e.message);
+                hostname_row.add_css_class("error");
+                hostname_row.tooltip_text = e.message;
             }
         }
 
