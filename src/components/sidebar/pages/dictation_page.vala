@@ -208,6 +208,7 @@ namespace Singularity.SidebarPages {
         private Gee.HashMap<string, ModelDownloader> downloads = new Gee.HashMap<string, ModelDownloader>();
         private Gee.HashMap<string, Label> progress_labels = new Gee.HashMap<string, Label>();
         private Gee.HashMap<string, int> percents = new Gee.HashMap<string, int>();
+        private bool vosk_usable = false;
 
         public DictationModelsPage(SettingsView view) {
             base(_("Speech Models"));
@@ -217,6 +218,10 @@ namespace Singularity.SidebarPages {
             groups_box = new Box(Orientation.VERTICAL, 0);
             add_widget(groups_box);
             build();
+            EngineLocator.vosk_ready.begin((obj, res) => {
+                vosk_usable = EngineLocator.vosk_ready.end(res);
+                if (vosk_usable) build();
+            });
         }
 
         public override void dispose() {
@@ -245,7 +250,7 @@ namespace Singularity.SidebarPages {
                 return;
             }
             bool whisper = EngineLocator.whisper_binary() != null;
-            bool vosk = EngineLocator.vosk_helper() != null;
+            bool vosk = vosk_usable;
             string[] engines = { "whisper", "vosk" };
             foreach (string engine in engines) {
                 bool usable = engine == "whisper" ? whisper : vosk;
