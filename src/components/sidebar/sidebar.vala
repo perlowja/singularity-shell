@@ -487,6 +487,7 @@ namespace Singularity {
                 settings_view.go_home();
                 main_stack.visible_child_name = "settings";
                 present();
+                settings_view.focus_search();
             }
         }
 

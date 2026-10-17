@@ -681,6 +681,10 @@ namespace Singularity {
             if (folded) main_stack.visible_child_name = "content";
         }
 
+        public void focus_search() {
+            if (search_entry != null) search_entry.grab_focus();
+        }
+
         public void go_home() {
             if (search_entry != null) search_entry.text = "";
             if (split_mode) {
