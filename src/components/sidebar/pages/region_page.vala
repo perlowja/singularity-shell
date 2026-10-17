@@ -38,22 +38,20 @@ namespace Singularity.SidebarPages {
         }
 
         private void build_ui() {
-            var group = new PreferencesGroup(_("Language"));
+            var group = new PreferencesGroup();
             language_row = new SearchableExpanderRow(_("Language"));
             language_label = new Label("");
             language_label.add_css_class("dim-label");
             language_row.add_suffix(language_label);
             setup_expander((SearchableExpanderRow)language_row, true);
             group.add_row(language_row);
-            add_group(group);
-            var formats_group = new PreferencesGroup(_("Formats"));
             formats_row = new SearchableExpanderRow(_("Formats"));
             formats_label = new Label("");
             formats_label.add_css_class("dim-label");
             formats_row.add_suffix(formats_label);
             setup_expander((SearchableExpanderRow)formats_row, false);
-            formats_group.add_row(formats_row);
-            add_group(formats_group);
+            group.add_row(formats_row);
+            add_group(group);
             var note_box = new Box(Orientation.HORIZONTAL, 12);
             note_box.margin_top = 12;
             note_box.margin_bottom = 12;
