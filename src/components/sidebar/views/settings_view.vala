@@ -294,6 +294,12 @@ namespace Singularity {
             search_entry.placeholder_text = _("Search Settings");
             search_entry.margin_bottom = 8;
             search_entry.search_changed.connect(update_search_results);
+            search_entry.changed.connect(() => {
+                if (search_entry.text != "" && (search_entry.get_state_flags() & StateFlags.FOCUS_WITHIN) == 0) {
+                    search_entry.grab_focus();
+                    search_entry.set_position(-1);
+                }
+            });
             nav_box.append(search_entry);
 
             search_results_box = new Box(Orientation.VERTICAL, 4);
@@ -521,9 +527,8 @@ namespace Singularity {
 
             var gesture = new GestureClick();
             gesture.released.connect(() => {
-                navigate_to(item.page_name);
                 search_entry.text = "";
-                if (item.action != null) item.action.callback();
+                reveal(item, item.kind == SettingsEntryKind.LAUNCH);
             });
             row.add_controller(gesture);
             return row;
