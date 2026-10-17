@@ -451,6 +451,14 @@ namespace Singularity {
             return entry;
         }
 
+        private int search_rank(SettingsEntry item, string query) {
+            string title = item.title.down();
+            if (title.has_prefix(query)) return 0;
+            if (title.contains(query)) return 1;
+            if (item.page_title.down().contains(query)) return 2;
+            return 3;
+        }
+
         private bool search_matches(SettingsEntry item, string query) {
             string haystack = "%s %s %s %s".printf(item.title, item.subtitle, item.group, item.page_title).down();
             return haystack.contains(query);
@@ -474,8 +482,17 @@ namespace Singularity {
             ensure_search_index();
             int count = 0;
             var seen = new Gee.HashSet<string>();
+            var matches = new Gee.ArrayList<SettingsEntry>();
             foreach (var item in _search_items) {
-                if (!search_matches(item, query)) continue;
+                if (search_matches(item, query)) matches.add(item);
+            }
+            var ranked = new Gee.ArrayList<SettingsEntry>();
+            for (int rank = 0; rank < 4; rank++) {
+                foreach (var item in matches) {
+                    if (search_rank(item, query) == rank) ranked.add(item);
+                }
+            }
+            foreach (var item in ranked) {
                 string key = "%s|%s|%s|%s".printf(item.page_name, item.title.down(), item.subtitle.down(), item.group.down());
                 if (seen.contains(key)) continue;
                 seen.add(key);
