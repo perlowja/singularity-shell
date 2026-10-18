@@ -96,6 +96,7 @@ static size_t password_len = 0;
 static char status_text[128] = "";
 static bool status_error = false;
 static char username[256] = "";
+static char display_name[256] = "";
 
 static void render_output(struct lock_output *o);
 
@@ -442,7 +443,7 @@ static void render_output(struct lock_output *o) {
     LoginUiState st = {0};
     st.width = (int)o->width;
     st.height = (int)o->height;
-    st.username = username[0] ? username : NULL;
+    st.username = display_name[0] ? display_name : (username[0] ? username : NULL);
     st.time_str = tbuf;
     st.date_str = dbuf;
     st.avatar = avatar_surface;
@@ -778,6 +779,8 @@ int main(int argc, char **argv) {
     struct passwd *pw = getpwuid(getuid());
     if (pw && pw->pw_name) snprintf(username, sizeof username, "%s", pw->pw_name);
     else { const char *u = getenv("USER"); if (u) snprintf(username, sizeof username, "%s", u); }
+    if (pw && pw->pw_gecos && pw->pw_gecos[0] && pw->pw_gecos[0] != ',')
+        snprintf(display_name, sizeof display_name, "%.*s", (int)strcspn(pw->pw_gecos, ","), pw->pw_gecos);
 
     load_assets();
     load_motion();
