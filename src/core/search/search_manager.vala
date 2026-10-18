@@ -36,6 +36,7 @@ namespace Singularity {
         private void load_providers() {
             providers.append(new AppSearchProvider());
             providers.append(new MathSearchProvider());
+            providers.append(new SettingsSearchProvider());
             // Create the file provider eagerly so its Tracker connection is
             // established at startup rather than on the first search keystroke.
             file_provider = new FileSearchProvider();

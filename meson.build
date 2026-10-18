@@ -602,6 +602,7 @@ singularity_core_sources = files(
     'src/core/search/providers/file_search_provider.vala',
     'src/core/search/providers/remote_search_provider.vala',
     'src/core/search/providers/math_provider.vala',
+    'src/core/search/providers/settings_provider.vala',
     'src/wayland/wayland_integration.c',
     'src/wayland/wayland_integration.vapi',
     'src/wayland/blur_surface.c',
