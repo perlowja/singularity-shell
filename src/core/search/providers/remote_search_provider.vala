@@ -138,7 +138,7 @@ namespace Singularity {
 
             var result = new RemoteSearchResult(this, result_id, title, description, icon, terms);
             double score;
-            result.score = dict.lookup("score", "d", out score) ? score : 19.0 - index * 0.01;
+            result.score = dict.lookup("score", "d", out score) ? double.min(score, 60.0) : 19.0 - index * 0.01;
             bool keeps_open = false;
             if (dict.lookup("keeps-open", "b", out keeps_open)) result.keeps_open = keeps_open;
             result.preview = build_preview(dict);

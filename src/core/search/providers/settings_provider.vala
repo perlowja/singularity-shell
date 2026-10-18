@@ -19,7 +19,7 @@ namespace Singularity {
 
             if (_("Settings").down().has_prefix(q) || "settings".has_prefix(q)) {
                 var home = new SearchResult(this, _("Settings"), _("System settings"), "preferences-system-symbolic");
-                home.score = 90.0;
+                home.score = q == "settings" || q == _("Settings").down() ? 100.0 : 90.0;
                 home.activated.connect(() => app.open_settings_page("home"));
                 results.append(home);
             }
