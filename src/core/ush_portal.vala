@@ -85,5 +85,39 @@ namespace Singularity.Shell {
             if (guard != 0) Source.remove(guard);
             return granted;
         }
+
+        public async bool show_choice(string title, string body, string allow_label, string block_label) throws Error {
+            var app = GLib.Application.get_default() as Gtk.Application;
+            if (app == null) return false;
+
+            bool allowed = false;
+            var dlg = new Singularity.Widgets.ConfirmDialog(app,
+                title, "dialog-warning", body,
+                block_label, Singularity.Widgets.ConfirmDialog.ActionStyle.SUGGESTED);
+            dlg.set_secondary(allow_label);
+            dlg.has_cancel = false;
+            bool answered = false;
+            dlg.response.connect((r) => {
+                if (answered) return;
+                answered = true;
+                allowed = (r == Singularity.Widgets.ConfirmDialog.Response.SECONDARY);
+                show_choice.callback();
+            });
+            dlg.present();
+            dlg.focus_primary();
+            uint guard = 0;
+            guard = Timeout.add_seconds(PROMPT_TIMEOUT_SECONDS, () => {
+                guard = 0;
+                if (!answered) {
+                    answered = true;
+                    dlg.close();
+                    show_choice.callback();
+                }
+                return Source.REMOVE;
+            });
+            yield;
+            if (guard != 0) Source.remove(guard);
+            return allowed;
+        }
     }
 }
