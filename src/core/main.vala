@@ -482,6 +482,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
             try {
                 conn.register_object<Singularity.Shell.ShellService>("/dev/sinty/Shell", this);
                 conn.register_object<Singularity.StageService>("/dev/sinty/Shell/Stage", new Singularity.StageService());
+                conn.register_object<Singularity.Shell.ShellChoiceService>("/dev/sinty/Shell/Choice", new Singularity.Shell.ShellChoiceService(this));
             } catch (IOError e) {
                 warning("Failed to register Shell Service: %s", e.message);
             }
@@ -1719,13 +1720,21 @@ window.inactive.shadow.color: %s
     }
 
     public async bool show_confirm(string title, string body) throws IOError {
-        bool confirmed = false;
+        return (yield run_confirm(title, body, "dialog-question-symbolic", _("Cancel"), _("Confirm"))) == 1;
+    }
+
+    public async bool show_choice(string title, string body, string allow_label, string block_label) {
+        return (yield run_confirm(title, body, "dialog-warning-symbolic", allow_label, block_label)) == 0;
+    }
+
+    private async int run_confirm(string title, string body, string icon_name, string left_label, string right_label) {
+        int confirmed = -1;
         bool done = false;
         uint guard = 0;
-        SourceFunc resume = show_confirm.callback;
+        SourceFunc resume = run_confirm.callback;
 
         var dialog = new Singularity.Shell.ShellDialog.anchored(this, true, true, true, true);
-        GLib.Func<bool> finish = (answer) => {
+        GLib.Func<int> finish = (answer) => {
             if (done) return;
             confirmed = answer;
             done = true;
@@ -1750,7 +1759,7 @@ window.inactive.shadow.color: %s
         card.margin_start = 40;
         card.margin_end = 40;
 
-        var icon = new Gtk.Image.from_icon_name("dialog-question-symbolic");
+        var icon = new Gtk.Image.from_icon_name(icon_name);
         icon.pixel_size = 56;
         card.append(icon);
 
@@ -1771,31 +1780,31 @@ window.inactive.shadow.color: %s
         buttons.halign = Gtk.Align.CENTER;
         buttons.margin_top = 8;
 
-        var cancel_btn = new Gtk.Button.with_label(_("Cancel"));
+        var cancel_btn = new Gtk.Button.with_label(left_label);
         cancel_btn.add_css_class("pill");
         cancel_btn.width_request = 128;
-        cancel_btn.clicked.connect(() => finish(false));
+        cancel_btn.clicked.connect(() => finish(0));
         buttons.append(cancel_btn);
 
-        var confirm_btn = new Gtk.Button.with_label(_("Confirm"));
+        var confirm_btn = new Gtk.Button.with_label(right_label);
         confirm_btn.add_css_class("pill");
         confirm_btn.add_css_class("suggested-action");
         confirm_btn.width_request = 128;
-        confirm_btn.clicked.connect(() => finish(true));
+        confirm_btn.clicked.connect(() => finish(1));
         buttons.append(confirm_btn);
 
         card.append(buttons);
         dialog.content_box.append(card);
 
         dialog.close_request.connect(() => {
-            finish(false);
+            finish(-1);
             return false;
         });
 
         dialog.open_dialog();
         guard = Timeout.add_seconds(PROMPT_TIMEOUT_SECONDS, () => {
             guard = 0;
-            finish(false);
+            finish(-1);
             return Source.REMOVE;
         });
         yield;
