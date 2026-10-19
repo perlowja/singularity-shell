@@ -82,6 +82,7 @@ namespace Singularity.SidebarPages {
             sw_group.add_row(create_info_row("Windowing System", "Wayland"));
             sw_group.add_row(create_info_row("Kernel Version", get_kernel_version()));
             software_page.add_group(sw_group);
+            if (BootChainGroup.available()) software_page.add_group(new BootChainGroup());
 
             var details_group = new PreferencesGroup(_("Details"));
             details_group.add_row(subpages.link(_("Hardware"), get_hardware_model(),
