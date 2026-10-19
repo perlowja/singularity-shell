@@ -95,7 +95,7 @@ namespace Singularity.SidebarPages {
 
         private void show_value(ActionRow row, Label label, string value) {
             row.visible = value != "";
-            label.label = value;
+            label.label = value == "present" ? _("Installed") : value;
         }
 
         private void apply(Json.Object status) {
