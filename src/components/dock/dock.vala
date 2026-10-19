@@ -2329,7 +2329,45 @@ namespace Singularity {
                     });
                 }
             }
+            if (dock_matches(app_id, "dev.sinty.leafs") && FileUtils.test("/usr/bin/ush", FileTest.IS_EXECUTABLE)) {
+                var host_separator = new Gtk.Separator(Gtk.Orientation.HORIZONTAL);
+                var host_row = new Singularity.Widgets.MenuRow(_("Host Shell"), "utilities-terminal-symbolic");
+                host_row.halign = Gtk.Align.FILL;
+                host_row.add_css_class("destructive-action");
+                host_separator.visible = shift_held;
+                host_row.visible = shift_held;
+                unowned var host_menu = menu;
+                host_row.clicked.connect(() => {
+                    host_menu.popdown();
+                    launch_host_shell(app_info);
+                });
+                menu.add_widget(host_separator);
+                menu.add_widget(host_row);
+                var host_seat = parent.get_display().get_default_seat();
+                var host_keyboard = host_seat != null ? host_seat.get_keyboard() : null;
+                if (host_keyboard != null) {
+                    ulong host_watch = host_keyboard.notify["modifier-state"].connect(() => {
+                        bool shift = (host_keyboard.modifier_state & Gdk.ModifierType.SHIFT_MASK) != 0;
+                        host_separator.visible = shift;
+                        host_row.visible = shift;
+                    });
+                    menu.unmap.connect(() => {
+                        if (host_watch != 0) host_keyboard.disconnect(host_watch);
+                        host_watch = 0;
+                    });
+                }
+            }
             menu.popup();
+        }
+
+        private void launch_host_shell(GLib.AppInfo? app_info) {
+            string exe = app_info != null && app_info.get_executable() != null ? app_info.get_executable() : "singularity-leafs";
+            try {
+                var host = GLib.AppInfo.create_from_commandline(GLib.Shell.quote(exe) + " --host-shell", _("Host Shell"), AppInfoCreateFlags.NONE);
+                host.launch(null, Gdk.Display.get_default().get_app_launch_context());
+            } catch (Error e) {
+                warning("dock: cannot open the host shell: %s", e.message);
+            }
         }
 
         private async void activate_action_reply(DesktopAppInfo dai, string action_id) {
