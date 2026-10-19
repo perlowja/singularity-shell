@@ -1479,6 +1479,7 @@ void singularity_wayland_create_workspace(const char *name) {
         if (ctx.workspace_manager) {
             ext_workspace_manager_v1_commit(ctx.workspace_manager);
         }
+        wl_display_flush(ctx.display);
     }
 }
 void singularity_wayland_remove_workspace(void *handle) {
