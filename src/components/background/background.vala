@@ -162,17 +162,16 @@ namespace Singularity {
             update_attribution(manager);
             map.connect_after(() => {
                 if (_first_painted_done) return;
-                var clock = get_frame_clock();
-                if (clock == null) {
-                    GLib.Timeout.add(50, () => { emit_first_painted(); return GLib.Source.REMOVE; });
+                if (manager.display_texture != null) {
+                    emit_after_next_paint();
                     return;
                 }
-                ulong handler = 0;
-                handler = clock.after_paint.connect(() => {
-                    clock.disconnect(handler);
-                    emit_first_painted();
+                ulong loaded = 0;
+                loaded = manager.wallpaper_changed.connect(() => {
+                    if (manager.display_texture == null) return;
+                    manager.disconnect(loaded);
+                    emit_after_next_paint();
                 });
-                queue_draw();
             });
 
             present();
@@ -190,6 +189,20 @@ namespace Singularity {
                 AppSystem.get_default().notify_desktop_focused();
             });
             ((Gtk.Widget)this).add_controller(left_click);
+        }
+
+        private void emit_after_next_paint() {
+            var clock = get_frame_clock();
+            if (clock == null) {
+                GLib.Timeout.add(50, () => { emit_first_painted(); return GLib.Source.REMOVE; });
+                return;
+            }
+            ulong handler = 0;
+            handler = clock.after_paint.connect(() => {
+                clock.disconnect(handler);
+                emit_first_painted();
+            });
+            queue_draw();
         }
 
         private void emit_first_painted() {

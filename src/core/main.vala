@@ -1267,7 +1267,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         foreach (var bg in backgrounds) {
             bg.first_painted.connect(trigger_entrance);
         }
-        GLib.Timeout.add(2500, () => { trigger_entrance(); return GLib.Source.REMOVE; });
+        GLib.Timeout.add(8000, () => { trigger_entrance(); return GLib.Source.REMOVE; });
     }
 
     private void trigger_entrance() {
@@ -1277,6 +1277,10 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
         var rt = GLib.Environment.get_variable("XDG_RUNTIME_DIR");
         if (rt != null && rt != "") {
             try { GLib.FileUtils.set_contents(rt + "/singularity-shell-ready", ""); }
+            catch (GLib.Error e) {}
+        }
+        if (GLib.FileUtils.test("/run/singularity", GLib.FileTest.IS_DIR)) {
+            try { GLib.FileUtils.set_contents("/run/singularity/shell-ready", ""); }
             catch (GLib.Error e) {}
         }
 
@@ -1663,6 +1667,7 @@ window.inactive.shadow.color: %s
         reason_lbl.add_css_class("dim-label");
         reason_lbl.add_css_class("body");
         reason_lbl.wrap = true;
+        reason_lbl.max_width_chars = 52;
         reason_lbl.justify = Gtk.Justification.CENTER;
         card.append(reason_lbl);
 
@@ -1672,6 +1677,7 @@ window.inactive.shadow.color: %s
             var detail_lbl = new Gtk.Label(_("%s: %s").printf(cat_display, resource));
             detail_lbl.add_css_class("dim-label");
             detail_lbl.wrap = true;
+            detail_lbl.max_width_chars = 52;
             detail_lbl.justify = Gtk.Justification.CENTER;
             card.append(detail_lbl);
         }
@@ -1766,6 +1772,7 @@ window.inactive.shadow.color: %s
         var title_lbl = new Gtk.Label(title);
         title_lbl.add_css_class("title-1");
         title_lbl.wrap = true;
+        title_lbl.max_width_chars = 52;
         title_lbl.justify = Gtk.Justification.CENTER;
         card.append(title_lbl);
 
@@ -1773,6 +1780,7 @@ window.inactive.shadow.color: %s
         body_lbl.add_css_class("dim-label");
         body_lbl.add_css_class("body");
         body_lbl.wrap = true;
+        body_lbl.max_width_chars = 52;
         body_lbl.justify = Gtk.Justification.CENTER;
         card.append(body_lbl);
 

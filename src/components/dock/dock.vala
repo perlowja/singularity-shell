@@ -1606,6 +1606,7 @@ namespace Singularity {
                         : app_has_window_on_monitor(_aid);
                 bool has_running = false;
                 foreach (var app_id in running) {
+                    if (hidden_from_dock(app_id)) continue;
                     if (is_primary) {
                         if (!app_system.is_pinned(app_id) && !is_covered_by_pinned(app_id, pinned)
                             && monitor_cache[app_id])
@@ -1618,6 +1619,7 @@ namespace Singularity {
                 if (is_primary && has_running)
                     desired_keys.add("sep");
                 foreach (var app_id in running) {
+                    if (hidden_from_dock(app_id)) continue;
                     if (is_primary) {
                         if (!app_system.is_pinned(app_id) && !is_covered_by_pinned(app_id, pinned)
                             && monitor_cache[app_id])
@@ -2132,6 +2134,20 @@ namespace Singularity {
         }
 
         // True if running_id is already represented by any pinned app
+
+        private HashMap<string, bool> no_dock_cache = new HashMap<string, bool>();
+
+        private bool hidden_from_dock(string app_id) {
+            if (no_dock_cache.has_key(app_id)) return no_dock_cache[app_id];
+            bool hidden = false;
+            string id = app_id.has_suffix(".desktop") ? app_id : app_id + ".desktop";
+            var info = new GLib.DesktopAppInfo(id);
+            if (info != null && info.has_key("X-Singularity-NoDock")) {
+                hidden = info.get_boolean("X-Singularity-NoDock");
+            }
+            no_dock_cache[app_id] = hidden;
+            return hidden;
+        }
 
         private bool is_covered_by_pinned(string running_id, string[] pinned) {
             foreach (var pinned_id in pinned) {
