@@ -117,7 +117,7 @@ public class SingularityApp : Singularity.ShellApplication, Singularity.Shell.Sh
 
         // Qt exports its global menu through the X11 registrar path.
         if (settings.get_boolean("global-menu-enabled")) {
-            Environment.set_variable("QT_QPA_PLATFORM", "xcb", true);
+            Environment.set_variable("QT_QPA_PLATFORM", "xcb;wayland", true);
         } else {
             Environment.set_variable("QT_QPA_PLATFORM", "wayland", false);
         }
