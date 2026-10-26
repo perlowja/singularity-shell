@@ -1,6 +1,6 @@
 namespace Singularity.Shell {
 
-    [DBus (name = "io.github.singularityos_lab.ush.Portal1")]
+    [DBus (name = "dev.sinty.ush.Portal1")]
     public class UshPortalService : Object {
         private const uint PROMPT_TIMEOUT_SECONDS = 290;
 

@@ -4,7 +4,7 @@ using Singularity.Widgets;
 
 namespace Singularity {
 
-    [DBus (name = "io.github.singularityos_lab.ush.Broker1")]
+    [DBus (name = "dev.sinty.ush.Broker1")]
     interface UshBroker : Object {
         public abstract async void dev_shell_status (out string policy, out bool enabled) throws GLib.Error;
         public abstract async void set_dev_shell_enabled (bool enabled) throws GLib.Error;
@@ -855,8 +855,8 @@ namespace Singularity {
         private async void setup_dev_shell () {
             try {
                 UshBroker broker = yield Bus.get_proxy (BusType.SESSION,
-                    "io.github.singularityos_lab.ush.Broker",
-                    "/io/github/singularityos_lab/ush/Broker");
+                    "dev.sinty.ush.Broker",
+                    "/dev/sinty/ush/Broker");
                 string policy;
                 bool enabled;
                 yield broker.dev_shell_status (out policy, out enabled);
@@ -1407,8 +1407,8 @@ namespace Singularity {
     }
 
     class SdbService {
-        private const string BUS_NAME = "io.github.singularityos_lab.ush.Broker";
-        private const string OBJ_PATH = "/io/github/singularityos_lab/ush/Broker";
+        private const string BUS_NAME = "dev.sinty.ush.Broker";
+        private const string OBJ_PATH = "/dev/sinty/ush/Broker";
 
         public static async bool status (out bool available, out bool active,
                                          out string message) {
@@ -1668,8 +1668,8 @@ namespace Singularity {
     // verifies the PIN and performs the arming on our behalf. Keeping the PIN gate
     // inside the broker means it cannot be bypassed by reaching the socket directly.
     class BootloaderConsent {
-        private const string BUS_NAME = "io.github.singularityos_lab.ush.Broker";
-        private const string OBJ_PATH = "/io/github/singularityos_lab/ush/Broker";
+        private const string BUS_NAME = "dev.sinty.ush.Broker";
+        private const string OBJ_PATH = "/dev/sinty/ush/Broker";
 
         public static async bool arm (bool armed, string pin, out string message) {
             message = "";
